@@ -1,0 +1,659 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Управление</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/ui.css">
+<style>
+  .stats { display: grid; grid-template-columns: 1fr 1fr; }
+  .stats > div { padding: 12px 16px 13px; position: relative; }
+  .stats > div:nth-child(odd)::after { content: ""; position: absolute; right: 0; top: 12px; bottom: 12px; width: .5px; background: var(--sep); }
+  .stats > div:nth-child(n+3)::before { content: ""; position: absolute; top: 0; left: 16px; right: 0; height: .5px; background: var(--sep); }
+  .stats > div:nth-child(even)::before { left: 0; right: 16px; }
+  .stats b { display: block; font-size: 22px; line-height: 28px; font-weight: 700; letter-spacing: .35px; font-variant-numeric: tabular-nums; }
+  .stats span { font-size: 13px; color: var(--hint); }
+  .stats .lead b { color: var(--ok); }
+  .search { display: flex; align-items: center; gap: 6px; background: var(--fill); border-radius: 10px; padding: 0 10px; margin: 0 var(--gutter) 16px; }
+  .search svg { width: 17px; height: 17px; color: var(--hint); flex: none; }
+  .search input { flex: 1; border: 0; background: none; outline: none; padding: 8px 0; font-size: 17px; min-width: 0; }
+  .status-line { font-size: 13px; line-height: 18px; padding: 0 16px; margin: 7px 0 0; }
+  .status-line.ok { color: var(--ok); } .status-line.bad { color: var(--danger); }
+  .margin { font-size: 13px; }
+  .margin.pos { color: var(--ok); } .margin.neg { color: var(--danger); }
+  .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; letter-spacing: 0; word-break: break-all; }
+  .actions { display: flex; gap: 10px; margin: 0 var(--gutter) 30px; }
+  .actions .btn { flex: 1; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<div class="bottom-bar" id="savebar">
+  <div class="hint" id="savehint">Есть несохранённые изменения</div>
+  <div class="two"><button class="btn tinted" id="discard" type="button">Отменить</button><button class="btn" id="save" type="button">Сохранить</button></div>
+</div>
+<script src="/static/ui.js"></script>
+<script src="/static/fx.js"></script>
+<script>
+UI.init();
+const { h, row, group, icon, rub } = UI;
+const api = UI.api('/api/admin/');
+let S = null, SAVED = null, CAT = null, INT = null;
+let dirty = {};
+let tariffLoc = null;
+// подписки на изменение настроек живут, пока элемент на экране
+const hooks = [];
+function onSettings(el, fn) { hooks.push({ el, fn }); }
+function fireSettings() { for (let i = hooks.length - 1; i >= 0; i--) { if (hooks[i].el.isConnected) hooks[i].fn(); else hooks.splice(i, 1); } }
+
+// ───────── сохранение ─────────
+function setVal(k, v) {
+  S.settings[k] = v;
+  if (JSON.stringify(v) === JSON.stringify(SAVED[k])) delete dirty[k]; else dirty[k] = v;
+  const n = Object.keys(dirty).length;
+  document.getElementById('savebar').classList.toggle('show', n > 0);
+  document.getElementById('savehint').textContent = n === 1 ? 'Изменена 1 настройка' : `Изменено настроек: ${n}`;
+  fireSettings();
+}
+document.getElementById('save').onclick = UI.busy(document.getElementById('save'), async () => {
+  const r = await UI.run(() => api('settings', 'POST', { values: dirty }), 'Сохранено');
+  if (r === undefined) return;
+  S.settings = r; SAVED = JSON.parse(JSON.stringify(r)); dirty = {};
+  document.getElementById('savebar').classList.remove('show');
+  UI.nav.refresh();
+});
+document.getElementById('discard').onclick = () => {
+  S.settings = JSON.parse(JSON.stringify(SAVED)); dirty = {};
+  document.getElementById('savebar').classList.remove('show'); UI.nav.refresh();
+};
+
+// ───────── цены ─────────
+function sellPrice(cost) {
+  const c = S.settings, raw = cost * (1 + c.markup_pct / 100) + c.markup_fixed_rub, st = Math.max(1, Math.round(c.round_to_rub));
+  return Math.ceil(Math.round(raw * 1e6) / 1e6 / st) * st;
+}
+
+// ───────── поля ─────────
+function numField(label, key, unit, opts = {}) {
+  const i = h('input', { type: 'number', inputmode: opts.decimal ? 'decimal' : 'numeric', step: opts.step || '1', 'aria-label': label });
+  i.value = S.settings[key];
+  i.addEventListener('input', () => { if (i.value === '') return; setVal(key, opts.decimal ? Number(i.value) : Math.round(Number(i.value))); });
+  i.addEventListener('blur', () => { if (i.value === '') i.value = S.settings[key]; });
+  return h('label', { class: 'field' }, h('span', {}, label), i, unit ? h('span', { class: 'unit' }, unit) : null);
+}
+function toggleRow(title, key, sub, invert) {
+  return row({ title, sub, right: UI.toggle(invert ? !S.settings[key] : S.settings[key], v => setVal(key, invert ? !v : v), title) });
+}
+
+// ───────── главная ─────────
+function rootView() {
+  if (!S) return h('div', {}, h('h1', { class: 'large-title' }, 'Управление'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  const st = S.stats, ab = S.astra || {};
+  const v = h('div', {},
+    h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Управление'),
+      h('button', { class: 'pill', type: 'button', style: 'margin-bottom:6px', onclick: () => location.href = '/app' }, 'Кабинет')));
+
+  // сводка
+  const stat = (val, lbl, cls) => h('div', { class: cls || '' }, h('b', {}, val), h('span', {}, lbl));
+  v.append(group('Сводка', [h('div', { class: 'stats' },
+    stat(rub(st.monthly_margin_rub), 'маржа в месяц', 'lead'), stat(rub(st.monthly_revenue_rub), 'оборот в месяц'),
+    stat(String(st.servers), UI.plural(st.servers, 'сервер', 'сервера', 'серверов')), stat(String(st.users), UI.plural(st.users, 'клиент', 'клиента', 'клиентов')),
+    stat(rub(st.topups_30d_rub), 'пополнено за 30 дней'), stat(rub(st.client_balances_rub), 'на балансах клиентов'))]));
+
+  const low = ab.balance_rub !== undefined && ab.balance_rub < S.settings.low_balance_rub;
+  v.append(group(null, [row({
+    icon: 'stack', tile: low ? '#FF3B30' : '#5856D6', title: 'Баланс Astra',
+    sub: ab.error ? 'Не удалось получить' : `Скидка ${ab.discount_pct ?? '?'}%` + (ab.reseller && ab.reseller.next ? `, ${ab.reseller.next.discount_pct}% от ${ab.reseller.next.at_servers} серверов` : ''),
+    detail: ab.error ? '—' : h('span', { style: low ? 'color:var(--danger);font-weight:600' : '' }, rub(ab.balance_rub)),
+    onClick: () => { try { UI.tg ? UI.tg.openTelegramLink('https://t.me/astravpsbot') : UI.openLink('https://t.me/astravpsbot'); } catch (e) { UI.openLink('https://t.me/astravpsbot'); } },
+  })], low ? 'Баланс ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot.' : 'Пополняется в @astravpsbot. Скидка растёт автоматически.'));
+
+  // клиенты и промокоды — самое частое
+  const tunread = S.tickets ? S.tickets.unread : 0;
+  const topen = S.tickets ? (S.tickets.counts.open || 0) + (S.tickets.counts.provider || 0) : 0;
+  v.append(group(null, [
+    row({ icon: 'chat', tile: '#34C759', title: 'Обращения', detail: tunread ? null : (topen ? String(topen) : ''), right: tunread ? h('span', { class: 'count' }, String(tunread)) : null, onClick: () => UI.nav.push(ticketsView) }),
+    row({ icon: 'users', tile: '#30B0C7', title: 'Клиенты', detail: String(st.users), onClick: () => UI.nav.push(usersView) }),
+    row({ icon: 'gift', tile: '#FF2D55', title: 'Промокоды', onClick: () => UI.nav.push(promosView) }),
+    row({ icon: 'wallet', tile: '#AF52DE', title: 'Платежи и чеки', onClick: () => UI.nav.push(paymentsView) }),
+  ]));
+
+  // документы
+  const legalOk = ['seller_name', 'seller_inn', 'seller_email'].every(k => String(S.settings[k] || '').trim()) && S.settings.docs_date;
+  v.append(group('Документы', [row({ icon: 'shield', tile: legalOk ? '#34C759' : '#FF3B30', title: 'Реквизиты и документы',
+    right: h('span', { class: 'badge ' + (legalOk ? 'ok' : 'bad') }, legalOk ? 'Ред. ' + S.settings.docs_date : 'Не заполнено'), onClick: () => UI.nav.push(legalView) })],
+    legalOk ? null : 'Укажите ФИО, ИНН и почту — без них документы для клиентов неполные.'));
+
+  // подключения
+  const badge = ok => h('span', { class: 'badge ' + (ok ? 'ok' : 'bad') }, ok ? 'Подключено' : 'Не настроено');
+  v.append(group('Подключения', [
+    row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
+    row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
+  ]));
+
+  // цены
+  const example = h('span');
+  const paintExample = () => {
+    const p = CAT && CAT.presets.find(x => x.cost_rub[tariffLoc || 'nl'] !== undefined) || (CAT && CAT.presets[0]);
+    if (!p) { example.textContent = 'Цена = себестоимость × (1 + наценка) + добавка, с округлением вверх.'; return; }
+    const loc = Object.keys(p.cost_rub).includes(tariffLoc) ? tariffLoc : Object.keys(p.cost_rub)[0];
+    const cost = p.cost_rub[loc], price = sellPrice(cost);
+    example.textContent = `Например, ${p.cpu} vCPU, ${p.ram} ГБ: себестоимость ${rub(cost)} → цена ${rub(price)}, маржа ${rub(price - cost)}.`;
+  };
+  paintExample(); onSettings(example, paintExample);
+  const roundSeg = UI.segmented([1, 5, 10, 50, 100].map(n => ({ value: n, label: n + ' ₽' })), S.settings.round_to_rub, n => setVal('round_to_rub', n));
+  v.append(group('Цены', [
+    numField('Наценка', 'markup_pct', '%', { decimal: true, step: '0.5' }),
+    numField('Добавка к цене', 'markup_fixed_rub', '₽ в мес.'),
+    h('div', { class: 'field stack', style: 'padding-bottom:12px' }, h('label', { style: 'margin-bottom:8px' }, 'Округлять цену вверх до'), roundSeg),
+  ], example));
+  const shown = CAT ? CAT.presets.filter(p => !S.settings.hidden_presets.includes(p.idx)).length : null;
+  v.append(group(null, [row({ icon: 'tag', tile: '#34C759', title: 'Тарифы и маржа', detail: shown == null ? '' : `${shown} из ${CAT.presets.length}`, onClick: () => UI.nav.push(tariffsView) })]));
+
+  // продажи
+  v.append(group('Продажи', [
+    toggleRow('Принимать заказы', 'maintenance', null, true),
+    toggleRow('Автопродление по умолчанию', 'auto_renew_default'),
+    toggleRow('Чеки после пополнения', 'receipts_enabled', INT && !INT.nalog.configured ? 'Сначала подключите «Мой налог»' : null),
+    toggleRow('Автоплатежи', 'autopay_available', 'Включайте, когда ЮKassa подключит рекуррентные платежи'),
+  ], S.settings.maintenance ? 'Заказы закрыты: клиенты видят сообщение о паузе. Текущие серверы работают.' : 'Раздел «Способы оплаты» с удалением карт и переключателем автоплатежа клиенты видят всегда — это нужно для проверки ЮKassa.'));
+
+  v.append(group('Реферальная программа', [
+    toggleRow('Включена', 'ref_enabled'),
+    numField('Бонус пригласившему', 'ref_pct', '% с оплат'),
+    numField('Срок начисления', 'ref_months', 'мес.'),
+    numField('Бонус приглашённому', 'ref_welcome_rub', '₽'),
+  ], 'Пригласивший получает процент с каждого пополнения друга через ЮKassa, срок 0 — без ограничения. Приглашённый получает бонус после первой оплаты. Всё начисляется только на баланс. После изменения условий опубликуйте новую редакцию документов.'));
+
+  v.append(group('Пополнение и услуги', [
+    numField('Минимум пополнения', 'min_topup_rub', '₽'),
+    numField('Максимум пополнения', 'max_topup_rub', '₽'),
+    numField('Смена IP для клиента', 'change_ip_price_rub', '₽'),
+    numField('Возврат при удалении', 'refund_pct', '%'),
+    numField('Порог баланса Astra', 'low_balance_rub', '₽'),
+  ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽. Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
+
+  v.append(group(null, [
+    row({ icon: 'text', tile: '#8E8E93', title: 'Тексты', onClick: () => UI.nav.push(textsView) }),
+    row({ icon: 'gift', tile: '#FF9500', title: 'Оформление кабинета', detail: (FX.EFFECT_NAMES[S.settings.theme_effect] || ''), onClick: () => UI.nav.push(themeView) }),
+  ]));
+  return v;
+}
+
+// ───────── тарифы ─────────
+function tariffsView() {
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Тарифы'));
+  if (!CAT) { v.append(group(null, [row({ title: 'Каталог Astra недоступен', sub: 'Попробуйте открыть позже.' })])); return v; }
+  if (!tariffLoc) tariffLoc = (CAT.locations[0] || {}).code;
+  v.append(UI.chips(CAT.locations.map(l => ({ value: l.code, flag: l.flag || UI.flag(l.code), label: l.name })), tariffLoc, c => { tariffLoc = c; UI.nav.refresh(); }));
+  const list = h('div');
+  const paint = () => list.replaceChildren(group(null, CAT.presets.filter(p => p.cost_rub[tariffLoc] !== undefined).map(p => {
+    const cost = p.cost_rub[tariffLoc], price = sellPrice(cost), m = price - cost;
+    return row({
+      title: `${p.cpu} vCPU, ${p.ram} ГБ, ${p.disk} ГБ`,
+      sub: h('span', {}, `${rub(cost)} → ${rub(price)}  `, h('span', { class: 'margin ' + (m >= 0 ? 'pos' : 'neg') }, (m >= 0 ? '+' : '') + rub(m))),
+      right: UI.toggle(!S.settings.hidden_presets.includes(p.idx), on => {
+        const set = new Set(S.settings.hidden_presets); on ? set.delete(p.idx) : set.add(p.idx); setVal('hidden_presets', [...set].sort((a, b) => a - b));
+      }, 'Продавать'),
+    });
+  }), 'Выключенные тарифы не показываются клиентам ни в боте, ни в конструкторе. Изменения применятся после сохранения.'));
+  paint(); onSettings(list, paint);
+  v.append(list);
+  return v;
+}
+
+// ───────── тексты ─────────
+function textsView() {
+  const ta = (key, label, rows) => { const t = h('textarea', { rows: rows || 3, 'aria-label': label }); t.value = S.settings[key]; t.addEventListener('input', () => setVal(key, t.value)); return h('label', { class: 'field stack' }, h('label', {}, label), t); };
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Тексты'),
+    group(null, [ta('welcome_text', 'Приветствие в боте', 4)], 'Показывается над главным меню бота.'),
+    group(null, [ta('receipt_name', 'Название услуги в чеке', 2)], 'Так услуга будет названа в чеке «Мой налог».'),
+    group(null, [ta('provider_support', 'Поддержка провайдера (username без @)', 1)], 'Сюда кнопка «Передать в Astra» отправляет технические вопросы из обращений.'));
+}
+
+// ───────── ЮKassa ─────────
+function statusLine() { return h('div', { class: 'status-line', role: 'status' }); }
+function showStatus(el, r) { el.className = 'status-line ' + (r.ok ? 'ok' : 'bad'); el.textContent = r.message; UI.haptic(r.ok ? 'success' : 'error'); }
+
+function ykView() {
+  const y = INT ? INT.yookassa : { configured: false, shop_id: '', secret_hint: '' };
+  const shop = h('input', { type: 'text', inputmode: 'numeric', placeholder: '123456', autocomplete: 'off' }); shop.value = y.shop_id || '';
+  const sec = h('input', { type: 'password', placeholder: y.configured ? 'оставить ' + y.secret_hint : 'live_…', autocomplete: 'off' });
+  const status = statusLine();
+  const saveBtn = h('button', { class: 'btn', type: 'button' }, 'Сохранить');
+  saveBtn.onclick = UI.busy(saveBtn, async () => {
+    const r = await UI.run(() => api('integrations/yookassa', 'POST', { shop_id: shop.value, secret_key: sec.value }));
+    if (!r) return; showStatus(status, r); sec.value = ''; await loadInt();
+  });
+  const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить');
+  testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/yookassa/test', 'POST')); if (r) showStatus(status, r); });
+  const wh = INT ? INT.webhook_url : '';
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'ЮKassa'),
+    h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Ключи API'),
+      h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'shopId'), shop), h('label', { class: 'field' }, h('span', {}, 'Секретный ключ'), sec)),
+      h('div', { class: 'group-f' }, 'Кабинет ЮKassa → Интеграция → Ключи API. После сохранения ключи сразу проверяются.'), status),
+    h('div', { class: 'actions' }, testBtn, saveBtn),
+    group('Уведомления о платежах', [
+      row({ title: h('span', { class: 'mono' }, wh), right: h('button', { class: 'icon-btn', type: 'button', style: 'border:0;background:none;color:var(--accent-text);padding:8px;cursor:pointer', 'aria-label': 'Скопировать', onclick: () => UI.copy(wh, 'Адрес') }, icon('copy')) }),
+    ], 'Вставьте этот адрес в ЮKassa → Интеграция → HTTP-уведомления и отметьте события payment.succeeded и payment.canceled.'));
+}
+
+// ───────── Мой налог ─────────
+function nalogView() {
+  const n = INT ? INT.nalog : { configured: false, inn: '' };
+  const inn = h('input', { type: 'text', inputmode: 'numeric', maxlength: 12, placeholder: '12 цифр', autocomplete: 'off' }); inn.value = n.inn || '';
+  const pwd = h('input', { type: 'password', placeholder: n.configured ? 'оставить текущий' : 'пароль', autocomplete: 'off' });
+  const status = statusLine();
+  const saveBtn = h('button', { class: 'btn', type: 'button' }, 'Сохранить');
+  saveBtn.onclick = UI.busy(saveBtn, async () => {
+    const r = await UI.run(() => api('integrations/nalog', 'POST', { inn: inn.value, password: pwd.value }));
+    if (!r) return; showStatus(status, r); pwd.value = ''; await loadInt();
+  });
+  const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить вход');
+  testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/nalog/test', 'POST')); if (r) showStatus(status, r); });
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Мой налог'),
+    h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Данные входа'),
+      h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'ИНН'), inn), h('label', { class: 'field' }, h('span', {}, 'Пароль'), pwd)),
+      h('div', { class: 'group-f' }, 'ИНН и пароль от личного кабинета налогоплательщика (lkfl2.nalog.ru). После каждого пополнения бот создаст чек самозанятого и пришлёт его клиенту.'), status),
+    h('div', { class: 'actions' }, testBtn, saveBtn));
+  if (n.configured) v.append(group(null, [row({ title: 'Отключить чеки', cls: 'destructive', onClick: async () => {
+    const ok = await UI.ask({ title: 'Отключить чеки?', message: 'Сохранённые ИНН и пароль будут удалены. Новые чеки создаваться не будут.', buttons: [{ id: 'y', text: 'Отключить', type: 'destructive' }] });
+    if (!ok) return;
+    if (await UI.run(() => api('integrations/nalog', 'DELETE'), 'Чеки отключены') !== undefined) { await loadInt(); UI.nav.refresh(); }
+  } })]));
+  return v;
+}
+
+// ───────── клиенты ─────────
+let userQuery = '', userFilter = '';
+const avaSrc = id => () => UI.blobUrl('/api/admin/users/' + id + '/avatar').catch(() => null);
+const SRV = { provisioning: ['Создаётся', 'warn'], active: ['Работает', 'ok'], suspended: ['Приостановлен', 'bad'], expired: ['Истёк', 'bad'], deleted: ['Удалён', ''] };
+const CANCEL = { insufficient_funds: 'недостаточно средств', card_expired: 'карта просрочена', permission_revoked: 'разрешение отозвано', general_decline: 'отказ банка', expired_on_confirmation: 'не оплачен вовремя', canceled_by_merchant: 'отменён', api_error: 'ошибка API', payment_method_restricted: 'карта заблокирована' };
+const nameOf = u => u.first_name || (u.username ? '@' + u.username : 'ID ' + u.tg_id);
+
+function usersView() {
+  const list = h('div');
+  const q = h('input', { type: 'search', placeholder: 'ID, @username или имя', 'aria-label': 'Поиск клиента', enterkeyhint: 'search' }); q.value = userQuery;
+  let t; q.addEventListener('input', () => { userQuery = q.value; clearTimeout(t); t = setTimeout(load, 300); });
+  async function load() {
+    const rows = await UI.run(() => api('users?q=' + encodeURIComponent(userQuery) + '&filter=' + userFilter));
+    if (!rows) return;
+    list.replaceChildren(rows.length ? group(null, rows.map(u => {
+      const tags = [`${u.servers} ${UI.plural(u.servers, 'сервер', 'сервера', 'серверов')}`];
+      if (u.methods) tags.push('карта');
+      if (u.autopay) tags.push('автоплатёж');
+      if (u.no_markup) tags.push('без наценки');
+      if (u.banned) tags.push('заблокирован');
+      const r = row({ cls: 'wrap', title: nameOf(u), sub: (u.username ? '@' + u.username + '  ·  ' : '') + tags.join(', '), detail: rub(u.balance_rub), onClick: () => UI.nav.push(() => clientView(u.tg_id)) });
+      r.classList.add('has-icon'); r.prepend(UI.avatar({ id: u.tg_id, first_name: u.first_name, username: u.username }, 36, avaSrc(u.tg_id)));
+      return r;
+    })) : h('div', { class: 'empty' }, icon('users'), h('b', {}, 'Никого не нашли'), 'Измените запрос или фильтр.'));
+  }
+  load();
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Клиенты'),
+    h('label', { class: 'search' }, icon('users'), q),
+    UI.chips([{ value: '', label: 'Все' }, { value: 'active', label: 'С услугами' }, { value: 'balance', label: 'С балансом' }, { value: 'autopay', label: 'Автоплатёж' }, { value: 'banned', label: 'Заблокированы' }],
+      userFilter, v => { userFilter = v; UI.nav.refresh(); }),
+    list);
+}
+
+function clientView(id) {
+  const v = h('div', {}, UI.nav.backLink('Клиенты'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('users/' + id).then(c => v.replaceChildren(...clientBody(c))).catch(e => v.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть'), e.message)));
+  return v;
+}
+
+function clientBody(c) {
+  const out = [UI.nav.backLink('Клиенты')];
+  const reload = () => UI.nav.refresh();
+  out.push(h('div', { style: 'display:flex;gap:14px;align-items:center;margin:8px var(--gutter) 24px' },
+    UI.avatar({ id: c.tg_id, first_name: c.first_name, username: c.username }, 64, avaSrc(c.tg_id)),
+    h('div', { style: 'min-width:0' }, h('div', { style: 'font-size:22px;font-weight:700;letter-spacing:.35px;overflow:hidden;text-overflow:ellipsis' }, nameOf(c)),
+      h('div', { style: 'color:var(--hint);font-size:15px' }, (c.username ? '@' + c.username + '  ·  ' : '') + 'ID ' + c.tg_id),
+      c.banned ? h('span', { class: 'badge bad', style: 'margin-top:4px' }, 'Заблокирован') : null)));
+
+  const consentOk = c.consent_version >= c.docs_version;
+  out.push(group(null, [
+    row({ title: 'Баланс', detail: rub(c.balance_rub) }),
+    row({ title: 'Оплачено всего', detail: rub(c.paid_total_rub) }),
+    row({ title: 'Клиент с', detail: UI.date(c.created) }),
+    row({ title: 'Был в кабинете', detail: c.last_seen ? UI.date(c.last_seen) : '—' }),
+    row({ title: 'Документы', right: h('span', { class: 'badge ' + (consentOk ? 'ok' : 'warn') }, consentOk ? 'Приняты' : (c.consent_version ? 'Старая редакция' : 'Не приняты')) }),
+    c.promo_discount_pct ? row({ title: 'Скидка по промокоду', detail: `${c.promo_discount_pct}% (${c.promo_code})` }) : null,
+    row({ title: 'Наценка', sub: c.no_markup ? 'Выключена — по себестоимости' : `Включена, ${c.markup_pct}%`, right: UI.toggle(!c.no_markup, async (on, inp) => {
+      const ok = await UI.ask({ title: on ? 'Включить наценку?' : 'Выключить наценку?',
+        message: on ? 'Клиент снова будет платить обычные цены. Продление его серверов пересчитается.' : 'Клиент будет покупать и продлевать серверы по себестоимости Astra, без вашей наценки. Продление его текущих серверов тоже подешевеет.',
+        buttons: [{ id: 'y', text: on ? 'Включить' : 'Выключить' }] });
+      if (!ok) { inp.checked = !on; return; }
+      const r = await UI.run(() => api(`users/${c.tg_id}/markup`, 'POST', { no_markup: !on }));
+      if (r === undefined) { inp.checked = !on; return; }
+      UI.toast(r.repriced.length ? `Пересчитано серверов: ${r.repriced.length}` : (on ? 'Наценка включена' : 'Наценка выключена'));
+      reload();
+    }, 'Наценка') }),
+    row({ title: 'Открыть чат', cls: 'accent', onClick: () => { const url = c.username ? 'https://t.me/' + c.username : 'tg://user?id=' + c.tg_id; try { UI.tg ? UI.tg.openTelegramLink(url) : UI.openLink(url); } catch (e) { UI.openLink(url); } } }),
+  ].filter(Boolean)));
+
+  // рефералы
+  const rf = c.referral || { invited: [] };
+  if (rf.referrer || rf.invited.length) out.push(group('Рефералы', [
+    rf.referrer ? row({ icon: 'users', tile: '#34C759', title: 'Пригласил', detail: nameOf(rf.referrer), onClick: () => UI.nav.push(() => clientView(rf.referrer.tg_id)) }) : null,
+    rf.invited.length ? row({ title: 'Привёл клиентов', detail: String(rf.invited.length) }) : null,
+    rf.invited.length ? row({ title: 'Получил бонусов', detail: rub(rf.earned_rub) }) : null,
+    ...rf.invited.slice(0, 10).map(x => row({ title: nameOf(x), sub: 'ID ' + x.tg_id, onClick: () => UI.nav.push(() => clientView(x.tg_id)) })),
+  ].filter(Boolean)));
+
+  // услуги
+  const live = c.servers.filter(x => x.status !== 'deleted'), gone = c.servers.filter(x => x.status === 'deleted');
+  out.push(group('Услуги', live.length ? live.map(x => {
+    const [t, cl] = SRV[x.status] || [x.status, ''];
+    const left = x.expires_at ? Math.ceil((new Date(x.expires_at) - Date.now()) / 864e5) : null;
+    return row({ flag: UI.flag(x.location), title: x.name, cls: 'wrap',
+      sub: `${x.ip || '—'}, ${x.cpu} vCPU, ${x.ram} ГБ, ${x.disk} ГБ\n${rub(x.price_rub)} в месяц, ${left == null ? '' : left >= 0 ? 'ещё ' + left + ' дн.' : 'истёк'}${x.auto_renew ? ', автопродление' : ''}`,
+      right: h('span', { class: 'badge ' + cl }, t) });
+  }) : [row({ title: 'Нет активных услуг' })], gone.length ? `Удалённых серверов: ${gone.length}.` : null));
+
+  // способы оплаты и автоплатёж
+  const activeM = c.methods.filter(m => m.active), oldM = c.methods.filter(m => !m.active);
+  const by = { user: 'клиентом', admin: 'администратором', provider: 'банком/ЮKassa' };
+  out.push(group('Способы оплаты', [
+    ...(activeM.length ? activeM.map(m => row({ icon: 'card', tile: '#0A84FF', title: m.title, cls: 'wrap', sub: `${m.expiry ? 'до ' + m.expiry + ', ' : ''}сохранена ${UI.date(m.created).split(',')[0]}`, chevron: false,
+      right: h('button', { class: 'btn small', type: 'button', style: 'background:color-mix(in srgb,var(--danger) 14%,transparent);color:var(--danger)', onclick: async () => {
+        const ok = await UI.ask({ title: 'Отвязать карту клиента?', message: `${m.title} больше не будет использоваться для автоплатежей. Клиент получит возможность сохранить карту заново.`, buttons: [{ id: 'y', text: 'Отвязать', type: 'destructive' }] });
+        if (ok && await UI.run(() => api(`users/${c.tg_id}/methods/${m.id}`, 'DELETE'), 'Карта отвязана') !== undefined) reload();
+      } }, 'Отвязать') })) : [row({ title: 'Сохранённых карт нет' })]),
+    row({ title: 'Автоплатёж', right: c.autopay_enabled
+      ? h('button', { class: 'btn small tinted', type: 'button', onclick: async () => { if (await UI.run(() => api(`users/${c.tg_id}/autopay`, 'POST', { enabled: false }), 'Автоплатёж выключен') !== undefined) reload(); } }, 'Выключить')
+      : h('span', { class: 'badge' }, 'Выключен') }),
+  ], oldM.length ? 'Удалённые карты: ' + oldM.map(m => `${m.title} (удалена ${by[m.deleted_by] || ''} ${m.deleted_at ? UI.date(m.deleted_at).split(',')[0] : ''})`).join('; ') + '.' : 'Включить автоплатёж может только сам клиент.'));
+
+  // баланс и доступ
+  out.push(group('Действия', [
+    row({ icon: 'wallet', tile: '#34C759', title: 'Изменить баланс', onClick: () => balanceSheet(c, reload) }),
+    row({ title: c.banned ? 'Разблокировать' : 'Заблокировать', cls: c.banned ? 'accent' : 'destructive', onClick: async () => {
+      if (!c.banned) { const ok = await UI.ask({ title: 'Заблокировать клиента?', message: 'Он не сможет пользоваться ботом и кабинетом. Серверы продолжат работать.', buttons: [{ id: 'y', text: 'Заблокировать', type: 'destructive' }] }); if (!ok) return; }
+      if (await UI.run(() => api(`users/${c.tg_id}/ban`, 'POST', { banned: !c.banned }), c.banned ? 'Разблокирован' : 'Заблокирован') !== undefined) reload();
+    } }),
+  ]));
+
+  // платежи и операции
+  const PST = { succeeded: ['Оплачен', 'ok'], pending: ['Ожидает', 'warn'], canceled: ['Отменён', 'bad'] };
+  if (c.payments.length) out.push(group('Платежи', c.payments.slice(0, 10).map(p => {
+    const [t, cl] = PST[p.status] || [p.status, ''];
+    return row({ title: (p.autopay ? 'Автоплатёж ' : '') + rub(p.amount_rub), sub: UI.date(p.created) + (p.method ? '  ·  ' + p.method : '') + (p.cancel_reason ? '  ·  ' + (CANCEL[p.cancel_reason] || p.cancel_reason) : ''), cls: 'wrap',
+      right: p.receipt_url ? h('a', { href: p.receipt_url, onclick: e => { e.preventDefault(); UI.openLink(p.receipt_url); }, style: 'font-size:15px' }, 'Чек') : h('span', { class: 'badge ' + cl }, t) });
+  })));
+  if (c.history.length) out.push(group('Операции по балансу', c.history.slice(0, 15).map(x => row({ title: x.title, sub: [x.detail, UI.date(x.created)].filter(Boolean).join('  ·  '),
+    right: h('span', { class: 'num', style: 'font-weight:600;color:' + (x.amount_rub > 0 ? 'var(--ok)' : 'var(--text)') }, (x.amount_rub > 0 ? '+' : '−') + rub(Math.abs(x.amount_rub))) }))));
+  if (c.promos.length) out.push(group('Промокоды', c.promos.map(p => row({ title: p.code, sub: UI.date(p.created), detail: p.kind === 'bonus' ? '+' + rub(p.value) : '−' + p.value + '%' }))));
+  const DOCN = { terms: 'Соглашение', aup: 'Правила', privacy: 'Политика', pd: 'Согласие ПД', autopay: 'Автоплатежи' };
+  if (c.consents.length) out.push(group('Журнал согласий', c.consents.slice(0, 12).map(x => row({ title: (x.accepted ? '' : 'Отзыв: ') + (DOCN[x.doc] || x.doc), sub: `ред. ${x.version}  ·  ${x.source === 'bot' ? 'в боте' : 'в приложении'}`, detail: UI.date(x.created) })), 'Журнал подтверждает, когда и где клиент принял документы.'));
+  return out;
+}
+
+function balanceSheet(c, reload) {
+  UI.sheet('Баланс клиента', close => {
+    let sign = 1;
+    const amt = h('input', { type: 'number', inputmode: 'decimal', placeholder: '0', 'aria-label': 'Сумма' });
+    const seg = UI.segmented([{ value: 1, label: 'Начислить' }, { value: -1, label: 'Списать' }], 1, v => { sign = v; });
+    const apply = h('button', { class: 'btn', type: 'button' }, 'Применить');
+    apply.onclick = UI.busy(apply, async () => {
+      const val = Number(amt.value); if (!val) return;
+      const r = await UI.run(() => api(`users/${c.tg_id}/balance`, 'POST', { delta_rub: sign * Math.abs(val) }));
+      if (r === undefined) return; UI.toast('Баланс теперь ' + rub(r.balance_rub)); close(); reload();
+    });
+    return h('div', {}, group(null, [row({ title: 'Сейчас', detail: rub(c.balance_rub) })]),
+      h('div', { style: 'margin:0 var(--gutter) 10px' }, seg),
+      group(null, [h('label', { class: 'field' }, h('span', {}, 'Сумма'), amt, h('span', { class: 'unit' }, '₽'))], 'Операция попадёт в историю клиента как корректировка.'),
+      h('div', { style: 'margin:0 var(--gutter)' }, apply));
+  });
+}
+
+// ───────── обращения ─────────
+const TST = { open: ['Ждёт ответа', 'bad'], answered: ['Ответили', 'ok'], provider: ['У провайдера', 'warn'], closed: ['Решено', ''] };
+let ticketFilter = 'active';
+
+function ticketsView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('tickets?status=' + ticketFilter).then(r => {
+    if (!r.items.length) { list.replaceChildren(h('div', { class: 'empty' }, icon('chat'), h('b', {}, ticketFilter === 'active' ? 'Все вопросы закрыты' : 'Пусто'), 'Новые обращения придут уведомлением в бота.')); return; }
+    list.replaceChildren(group(null, r.items.map(t => {
+      const [st, c] = TST[t.status] || [t.status, ''];
+      const who = t.client.first_name || (t.client.username ? '@' + t.client.username : 'ID ' + t.tg_id);
+      const last = t.last ? (t.last.author === 'admin' ? 'Вы: ' : t.last.author === 'note' ? 'Заметка: ' : '') + t.last.text : '';
+      const rr = row({ cls: 'wrap', title: h('span', {}, h('b', { style: 'font-weight:600' }, who), ' · ' + t.subject), sub: last + '\n' + UI.date(t.updated) + ' · № ' + t.id,
+        right: h('span', { style: 'display:flex;flex-direction:column;align-items:flex-end;gap:6px' }, h('span', { class: 'badge ' + c }, st), t.unread ? h('i', { class: 'unread-dot', 'aria-label': 'Непрочитано' }) : null),
+        onClick: () => UI.nav.push(() => ticketView(t.id)) });
+      rr.classList.add('has-icon'); rr.prepend(UI.avatar({ id: t.tg_id, first_name: t.client.first_name, username: t.client.username }, 36, avaSrc(t.tg_id)));
+      return rr;
+    })));
+  }).catch(e => list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Обращения'),
+    UI.chips([{ value: 'active', label: 'В работе' }, { value: 'open', label: 'Ждут ответа' }, { value: 'provider', label: 'У провайдера' }, { value: 'answered', label: 'Ответили' }, { value: 'closed', label: 'Решённые' }, { value: '', label: 'Все' }],
+      ticketFilter, v => { ticketFilter = v; UI.nav.refresh(); }),
+    list);
+}
+
+function ticketView(id) {
+  const v = h('div', {}, UI.nav.backLink('Обращения'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  const reload = () => api('tickets/' + id).then(draw).catch(e => v.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть'), e.message)));
+  async function escalate(serverId) {
+    const r = await UI.run(() => api(`tickets/${id}/escalate`, 'POST', { server_id: serverId || null }));
+    if (!r) return;
+    UI.copy(r.text, 'Текст для провайдера');
+    if (r.url) { try { UI.tg ? UI.tg.openTelegramLink(r.url) : UI.openLink(r.url); } catch (e) { UI.openLink(r.url); } }
+    await reload();
+  }
+  function draw(t) {
+    const c = t.client, [st, cl] = TST[t.status] || [t.status, ''];
+    const who = c.first_name || (c.username ? '@' + c.username : 'ID ' + c.tg_id);
+    const srv = t.servers.find(x => x.id === t.server_id);
+    const clientRow = row({ title: who, sub: (c.username ? '@' + c.username + ' · ' : '') + 'ID ' + c.tg_id + ' · баланс ' + rub(c.balance_rub) + ' · обращений ' + c.tickets,
+      cls: 'wrap', onClick: () => UI.nav.push(() => clientView(c.tg_id)) });
+    clientRow.classList.add('has-icon'); clientRow.prepend(UI.avatar({ id: c.tg_id, first_name: c.first_name, username: c.username }, 40, avaSrc(c.tg_id)));
+    const srvRows = t.servers.length ? t.servers.map(x => row({ flag: x.flag, cls: 'wrap', title: x.name + (x.id === t.server_id ? '  ·  по этому серверу' : ''),
+      sub: `ID у провайдера ${x.astra_id}  ·  ${x.ip || '—'}\n${x.cpu} vCPU, ${x.ram} ГБ, ${x.disk} ГБ, ${x.os}  ·  ${(SRV[x.status] || [x.status])[0]}`,
+      right: h('button', { class: 'icon-btn', type: 'button', style: 'border:0;background:none;color:var(--accent-text);padding:8px;cursor:pointer', 'aria-label': 'Скопировать IP', onclick: e => { e.stopPropagation(); if (x.ip) UI.copy(x.ip, 'IP'); } }, icon('copy')) }))
+      : [row({ title: 'У клиента нет серверов' })];
+    const toProvider = h('button', { class: 'btn', type: 'button', style: 'background:var(--warn)' }, 'Передать в Astra');
+    toProvider.onclick = UI.busy(toProvider, async () => {
+      if (!t.server_id && t.servers.length > 1) {
+        UI.sheet('По какому серверу?', close => group(null, t.servers.map(x => row({ flag: x.flag, title: x.name, sub: (x.ip || '—') + ' · ID ' + x.astra_id, onClick: () => { close(); escalate(x.id); } }))));
+        return;
+      }
+      await escalate(t.server_id);
+    });
+    const done = h('button', { class: 'btn tinted', type: 'button' }, t.status === 'closed' ? 'Открыть снова' : 'Решено');
+    done.onclick = UI.busy(done, async () => {
+      const next = t.status === 'closed' ? 'open' : 'closed';
+      if (await UI.run(() => api(`tickets/${id}/status`, 'POST', { status: next }), next === 'closed' ? 'Отмечено как решённое' : 'Открыто снова') !== undefined) reload();
+    });
+    v.replaceChildren(
+      UI.nav.backLink('Обращения'),
+      h('div', { style: 'margin:4px var(--gutter) 16px' },
+        h('div', { style: 'font-size:22px;font-weight:700;letter-spacing:.35px;line-height:28px' }, t.subject),
+        h('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:6px;color:var(--hint);font-size:13px' }, h('span', { class: 'badge ' + cl }, st), '№ ' + t.id + ' · ' + UI.date(t.created))),
+      group('Клиент', [clientRow]),
+      group('Серверы клиента', srvRows),
+      h('div', { class: 'actions' }, done, toProvider),
+      h('div', { class: 'group-f', style: 'margin:-22px var(--gutter) 22px' }, `«Передать в Astra» скопирует технический запрос (ID сервера, IP, конфигурация и суть проблемы — без данных клиента) и откроет чат @${t.provider_support} с этим текстом. Останется нажать «Отправить».`),
+      UI.chat(t.messages, ['admin'], { client: who, note: 'Заметка (видите только вы)' }),
+      UI.composer('Ответ клиенту', async (txt, internal) => {
+        const r = await UI.run(() => api(`tickets/${id}/messages`, 'POST', { text: txt, internal }), internal ? 'Заметка сохранена' : 'Ответ отправлен');
+        if (r === undefined) return false;
+        await reload(); return true;
+      }, 'Заметка'));
+    requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+  }
+  reload();
+  return v;
+}
+
+// ───────── оформление ─────────
+function previewTheme() {
+  const t = S.settings;
+  FX.background(t.theme_bg, t.theme_bg === 'image' ? t.theme_bg_image : null);
+  return FX.effect(t.theme_effect);
+}
+document.addEventListener('navchange', () => { if (!document.querySelector('#root .theme-page')) { FX.stop(); FX.background('none'); } });
+
+function themeView() {
+  const t = S.settings;
+  const dark = document.documentElement.dataset.scheme ? document.documentElement.dataset.scheme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  const sw = k => k === 'image' ? (t.theme_bg_image ? `center / cover url("${t.theme_bg_image}")` : 'var(--fill)') : k === 'none' ? 'var(--bg)' : FX.BACKGROUNDS[k][dark ? 'dark' : 'light'];
+  const file = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', style: 'display:none' });
+  file.onchange = async () => {
+    const f = file.files[0]; if (!f) return;
+    if (f.size > 4 * 1024 * 1024) { await UI.alert('Картинка больше 4 МБ. Уменьшите её и загрузите снова.'); return; }
+    const r = await UI.run(async () => {
+      const res = await fetch('/api/admin/theme/background', { method: 'PUT', headers: { 'X-Init-Data': UI.initData(), 'Content-Type': f.type || 'application/octet-stream' }, body: f });
+      let j = null; try { j = await res.json(); } catch (e) {}
+      if (!res.ok) throw new Error(UI.errText(j, res.status));
+      return j;
+    }, 'Картинка загружена');
+    if (!r) return;
+    S.settings.theme_bg = SAVED.theme_bg = r.theme_bg; S.settings.theme_bg_image = SAVED.theme_bg_image = r.theme_bg_image;
+    UI.nav.refresh();
+  };
+  const tiles = [...Object.keys(FX.BACKGROUNDS), 'image'].map(k => {
+    const pressed = t.theme_bg === k;
+    const swEl = h('span', { class: 'sw', style: 'background:' + sw(k) }, k === 'image' && !t.theme_bg_image ? h('span', { class: 'plus' }, icon('plus')) : null);
+    return h('button', { class: 'tile', type: 'button', 'aria-pressed': String(pressed), onclick: () => {
+      if (k === 'image' && !t.theme_bg_image) { file.click(); return; }
+      setVal('theme_bg', k); previewTheme(); UI.haptic('select'); UI.nav.refresh();
+    } }, swEl, FX.BG_NAMES[k]);
+  });
+  const active = t.theme_effect === 'auto' ? FX.seasonal(new Date()) : t.theme_effect;
+  const effects = Object.keys(FX.EFFECT_NAMES).map(k => row({ title: FX.EFFECT_NAMES[k],
+    sub: k === 'auto' ? 'Новый год — 15.12–14.01, Хэллоуин — 24.10–01.11, 14 февраля, 8 марта, снег зимой, листопад осенью' : null, cls: 'wrap',
+    right: t.theme_effect === k ? icon('check', 'check') : null, chevron: false,
+    onClick: () => { setVal('theme_effect', k); previewTheme(); UI.haptic('select'); UI.nav.refresh(); } }));
+  const page = h('div', { class: 'theme-page' }, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Оформление'),
+    h('div', { class: 'group-h' }, 'Фон кабинета'), h('div', { class: 'tiles' }, tiles), file,
+    t.theme_bg_image ? group(null, [row({ title: 'Заменить картинку', cls: 'accent', onClick: () => file.click() }), row({ title: 'Удалить картинку', cls: 'destructive', onClick: async () => {
+      if (await UI.run(() => api('theme/background', 'DELETE'), 'Картинка удалена') === undefined) return;
+      S.settings.theme_bg_image = SAVED.theme_bg_image = ''; if (S.settings.theme_bg === 'image') S.settings.theme_bg = SAVED.theme_bg = 'none'; previewTheme(); UI.nav.refresh();
+    } })], 'JPG, PNG или WebP до 4 МБ. Поверх картинки добавляется лёгкое затемнение, чтобы текст читался.') : null,
+    group('Эффекты', effects, `Сейчас показывается: ${FX.EFFECT_NAMES[active]}. Эффекты не мешают нажатиям и отключаются у тех, кто включил «Уменьшение движения».`),
+    group(null, [toggleRow('Клиенты могут выбрать свой фон', 'theme_client_choice', 'Эффекты клиент может выключить всегда')]),
+    h('div', { class: 'group-f', style: 'margin:-22px var(--gutter) 30px' }, 'Здесь показан предварительный просмотр. Клиенты увидят изменения после сохранения.'));
+  setTimeout(previewTheme, 0);
+  return page;
+}
+
+// ───────── промокоды ─────────
+function promosView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' })]));
+  async function load() {
+    const rows = await UI.run(() => api('promos')); if (!rows) return;
+    list.replaceChildren(rows.length ? group(null, rows.map(p => {
+      const expired = p.expires_at && new Date(p.expires_at) < new Date();
+      const left = p.max_uses ? `${p.used} из ${p.max_uses}` : `${p.used} ${UI.plural(p.used, 'активация', 'активации', 'активаций')}`;
+      return row({ cls: 'wrap', title: h('span', { class: 'mono', style: 'font-size:16px;font-weight:600' }, p.code),
+        sub: [p.kind === 'bonus' ? `+${rub(p.value)} на баланс` : `скидка ${p.value}%`, left, p.expires_at ? (expired ? 'истёк' : 'до ' + UI.date(p.expires_at).split(',')[0]) : null, p.new_users_only ? 'новым' : null, p.note || null].filter(Boolean).join('  ·  '),
+        right: UI.toggle(p.active && !expired, async (on, inp) => { if (await UI.run(() => api('promos/' + p.id, 'PATCH', { active: on }), on ? 'Включён' : 'Выключен') === undefined) inp.checked = !on; }, 'Активен'),
+        onClick: async () => {
+          const id = await UI.ask({ title: p.code, message: p.used ? 'Код уже использовали — его можно только выключить, история сохранится.' : 'Удалить промокод?', buttons: [{ id: 'copy', text: 'Скопировать код' }, ...(p.used ? [] : [{ id: 'del', text: 'Удалить', type: 'destructive' }])] });
+          if (id === 'copy') UI.copy(p.code, 'Код');
+          if (id === 'del' && await UI.run(() => api('promos/' + p.id, 'DELETE'), 'Удалён') !== undefined) load();
+        } });
+    }), 'Переключатель включает и выключает код. Нажмите на код, чтобы скопировать или удалить.') : h('div', { class: 'empty' }, icon('gift'), h('b', {}, 'Промокодов пока нет'), 'Создайте бонус на баланс или скидку на первую покупку.'));
+  }
+  load();
+  const add = h('button', { class: 'btn', type: 'button', onclick: () => promoSheet(load) }, icon('plus'), 'Новый промокод');
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Промокоды'), h('div', { style: 'margin:0 var(--gutter) 24px' }, add), list);
+}
+
+function promoSheet(reload) {
+  UI.sheet('Новый промокод', close => {
+    const f = { kind: 'bonus', newOnly: false };
+    const gen = () => 'BOBR' + Math.random().toString(36).slice(2, 7).toUpperCase();
+    const code = h('input', { type: 'text', autocapitalize: 'characters', spellcheck: false, 'aria-label': 'Код' }); code.value = gen();
+    const val = h('input', { type: 'number', inputmode: 'numeric', placeholder: '100', 'aria-label': 'Значение' });
+    const unit = h('span', { class: 'unit' }, '₽');
+    const uses = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'без лимита', 'aria-label': 'Лимит активаций' });
+    const days = h('input', { type: 'number', inputmode: 'numeric', placeholder: 'бессрочно', 'aria-label': 'Срок, дней' });
+    const note = h('input', { type: 'text', placeholder: 'например, для канала', 'aria-label': 'Заметка' });
+    const seg = UI.segmented([{ value: 'bonus', label: 'Бонус на баланс' }, { value: 'discount', label: 'Скидка на покупку' }], 'bonus', v => { f.kind = v; unit.textContent = v === 'bonus' ? '₽' : '%'; val.placeholder = v === 'bonus' ? '100' : '20'; }, 'lg');
+    const create = h('button', { class: 'btn', type: 'button' }, 'Создать');
+    create.onclick = UI.busy(create, async () => {
+      const r = await UI.run(() => api('promos', 'POST', { code: code.value, kind: f.kind, value: Math.round(+val.value || 0), max_uses: Math.round(+uses.value || 0), days: +days.value ? Math.round(+days.value) : null, new_users_only: f.newOnly, note: note.value }));
+      if (!r) return; UI.toast('Промокод ' + r.code + ' создан'); UI.copy(r.code, 'Код'); close(); reload();
+    });
+    return h('div', {},
+      h('div', { style: 'margin:0 var(--gutter) 16px' }, seg),
+      group(null, [
+        h('label', { class: 'field' }, h('span', {}, 'Код'), code),
+        h('label', { class: 'field' }, h('span', {}, 'Размер'), val, unit),
+        h('label', { class: 'field' }, h('span', {}, 'Лимит активаций'), uses),
+        h('label', { class: 'field' }, h('span', {}, 'Действует, дней'), days),
+        h('label', { class: 'field' }, h('span', {}, 'Заметка'), note),
+        row({ title: 'Только для новых клиентов', right: UI.toggle(false, on => { f.newOnly = on; }, 'Только для новых') }),
+      ], 'Скидка действует на первый месяц следующей покупки сервера, продление — по обычной цене. Каждый клиент может активировать код один раз.'),
+      h('div', { style: 'margin:0 var(--gutter)' }, create));
+  });
+}
+
+// ───────── реквизиты и документы ─────────
+function legalView() {
+  const field = (label, key, ph, mode) => {
+    const i = h('input', { type: 'text', placeholder: ph || '', inputmode: mode || 'text', 'aria-label': label }); i.value = S.settings[key] || '';
+    i.addEventListener('input', () => setVal(key, i.value));
+    return h('label', { class: 'field' }, h('span', {}, label), i);
+  };
+  const docs = [['terms', 'Пользовательское соглашение'], ['aup', 'Правила использования'], ['privacy', 'Политика конфиденциальности'], ['pd', 'Согласие на обработку ПД'], ['autopay', 'Правила автоплатежей']];
+  const pub = h('button', { class: 'btn', type: 'button' }, 'Опубликовать новую редакцию');
+  pub.onclick = UI.busy(pub, async () => {
+    if (Object.keys(dirty).length) { await UI.alert('Сначала сохраните изменения реквизитов.'); return; }
+    const ok = await UI.ask({ title: 'Опубликовать редакцию?', message: 'Все клиенты при следующем входе снова примут документы. Делайте это после изменения реквизитов или текстов.', buttons: [{ id: 'y', text: 'Опубликовать' }] });
+    if (!ok) return;
+    const r = await UI.run(() => api('docs/publish', 'POST'), 'Опубликовано');
+    if (!r) return; S.settings.docs_version = SAVED.docs_version = r.docs_version; S.settings.docs_date = SAVED.docs_date = r.docs_date; UI.nav.refresh();
+  });
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Документы'),
+    group('Исполнитель', [
+      field('Название сервиса', 'service_name', 'Bobr Cloud'),
+      field('ФИО', 'seller_name', 'Иванов Иван Иванович'),
+      field('ИНН', 'seller_inn', '12 цифр', 'numeric'),
+      field('Почта', 'seller_email', 'support@example.com', 'email'),
+      field('Статус', 'seller_status', 'самозанятый'),
+    ], 'Эти данные подставляются во все документы. После изменения сохраните их кнопкой внизу.'),
+    group('Документы', docs.map(([k, t]) => row({ icon: 'doc', tile: '#8E8E93', title: t, onClick: () => UI.openLink(location.origin + '/legal/' + k) })),
+      `Действующая редакция № ${S.settings.docs_version}${S.settings.docs_date ? ' от ' + S.settings.docs_date : ' — ещё не опубликована'}. Тексты — шаблоны: перед запуском покажите их юристу.`),
+    h('div', { style: 'margin:0 var(--gutter) 30px' }, pub));
+}
+
+// ───────── платежи ─────────
+function paymentsView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  const ST = { succeeded: ['Оплачен', 'ok'], pending: ['Ожидает', 'warn'], canceled: ['Отменён', ''] };
+  const RC = { done: 'Чек', pending: 'Чек в очереди', failed: 'Чек не создан', none: '' };
+  async function load() {
+    const rows = await UI.run(() => api('payments')); if (!rows) return;
+    list.replaceChildren(rows.length ? group(null, rows.map(p => {
+      const [t, c] = ST[p.status] || [p.status, ''];
+      let right = null;
+      if (p.receipt === 'done' && p.receipt_url) right = h('a', { href: p.receipt_url, onclick: e => { e.preventDefault(); UI.openLink(p.receipt_url); }, style: 'display:flex;align-items:center;gap:4px;font-size:15px' }, icon('receipt'), 'Чек');
+      else if (p.status === 'succeeded' && (p.receipt === 'failed' || p.receipt === 'pending')) right = h('button', { class: 'btn small tinted', type: 'button', onclick: async () => { if (await UI.run(() => api(`payments/${p.id}/retry-receipt`, 'POST'), 'Чек отправлен в очередь') !== undefined) load(); } }, 'Повторить');
+      return row({ title: rub(p.amount_rub), sub: `${UI.date(p.created)}  ·  ID ${p.tg_id}  ·  ${t}${RC[p.receipt] && p.receipt !== 'done' ? '  ·  ' + RC[p.receipt] : ''}`, right: right || h('i', { class: 'dot ' + c }) });
+    })) : h('div', { class: 'empty' }, icon('wallet'), h('b', {}, 'Платежей пока нет'), 'Здесь появятся пополнения клиентов и чеки.'));
+  }
+  load();
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Платежи'), list);
+}
+
+// ───────── старт ─────────
+async function loadInt() { try { INT = await api('integrations'); } catch (e) {} }
+(async () => {
+  UI.nav.mount(document.getElementById('root'), rootView);
+  try { S = await api('state'); SAVED = JSON.parse(JSON.stringify(S.settings)); }
+  catch (e) { document.getElementById('root').replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Нет доступа к управлению'), e.message)); return; }
+  UI.nav.refresh();
+  const q = new URLSearchParams(location.search);
+  if (q.get('ticket')) { UI.nav.push(ticketsView); UI.nav.push(() => ticketView(+q.get('ticket'))); }
+  await Promise.all([loadInt(), api('catalog').then(c => { CAT = c; }).catch(() => {})]);
+  if (!UI.nav.stack.length) UI.nav.refresh();
+})();
+</script>
+</body>
+</html>

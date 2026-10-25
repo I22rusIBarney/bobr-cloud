@@ -1,0 +1,1029 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,minimum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>Cloud</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="/static/ui.css">
+<style>
+  :root { --tabbar-h: 60px; }
+  .tabbar { height: calc(var(--tabbar-h) + var(--sab)); }
+  .hidden-tabbar .tabbar { display: none; }
+  body.hidden-tabbar { padding-bottom: calc(24px + var(--sab)); }
+  .pill.bal svg { width: 16px; height: 16px; color: var(--accent-text); }
+
+  /* ── Профиль: пользователь и баланс ── */
+  .user-card { display: flex; align-items: center; gap: 14px; margin: 2px var(--gutter) 18px; min-width: 0; }
+  .user-card .who { min-width: 0; flex: 1; }
+  .user-card .who b { display: block; font: 700 21px/1.2 var(--font-display); letter-spacing: -0.4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-card .id { border: 0; background: none; padding: 2px 0; color: var(--hint); font-size: 13px; cursor: pointer; display: inline-flex; gap: 6px; align-items: center; max-width: 100%; }
+  .user-card .id span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .user-card .id svg { width: 13px; height: 13px; flex: none; opacity: .7; }
+
+  .hero-card {
+    position: relative; margin: 0 var(--gutter) 22px; padding: 20px 18px 18px; border-radius: var(--r-xl); overflow: hidden; isolation: isolate;
+    background:
+      radial-gradient(120% 95% at 100% 0%, rgba(67, 140, 255, .30), transparent 58%),
+      radial-gradient(80% 70% at 0% 110%, rgba(139, 140, 255, .14), transparent 60%),
+      linear-gradient(160deg, #272C36, #1E2128);
+    box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(120, 165, 255, .16);
+  }
+  .hero-card::before { /* тонкая сетка — технологичный акцент */
+    content: ""; position: absolute; inset: 0; z-index: -1; opacity: .5;
+    background: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px, linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px;
+    -webkit-mask: radial-gradient(90% 90% at 100% 0%, #000, transparent 70%); mask: radial-gradient(90% 90% at 100% 0%, #000, transparent 70%);
+  }
+  .hero-card .lbl { font-size: 13px; font-weight: 600; color: #AEB9CC; display: flex; align-items: center; gap: 8px; }
+  .hero-card .lbl svg { width: 16px; height: 16px; color: var(--accent-text); }
+  .hero-card .big { font: 700 44px/1.05 var(--font-display); letter-spacing: -1.6px; margin: 10px 0 6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .hero-card .meta { font-size: 14px; color: #A3ACBD; line-height: 1.4; }
+  .hero-card .meta b { color: var(--text); font-weight: 600; }
+  .hero-card .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 14px; }
+  .hero-card .tags:empty { display: none; }
+
+  /* ── Пригласить друга ── */
+  .ref-card {
+    position: relative; margin: 0 var(--gutter) 22px; padding: 16px 16px 16px; border-radius: var(--r-xl); overflow: hidden; isolation: isolate;
+    background:
+      radial-gradient(110% 90% at 100% 0%, rgba(52, 211, 153, .20), transparent 55%),
+      radial-gradient(80% 80% at 0% 110%, rgba(67, 140, 255, .10), transparent 60%),
+      linear-gradient(160deg, #222A2B, #1D2126);
+    box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(52, 211, 153, .16);
+  }
+  .ref-card .head { display: flex; gap: 12px; align-items: center; min-width: 0; }
+  .ref-card .head > div { flex: 1; min-width: 0; }
+  .ref-card .head b { display: block; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
+  .ref-card .head span { display: block; font-size: 13px; line-height: 1.35; color: #A1B0AC; margin-top: 1px; }
+  .ref-card .head .icon-btn { color: #A1B0AC; margin: -8px -8px -8px 0; }
+  .ref-card .earned { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 0; }
+  .ref-card .earned b { font: 700 32px/1.1 var(--font-display); letter-spacing: -1px; color: var(--ok); font-variant-numeric: tabular-nums; }
+  .ref-card .earned span { font-size: 13px; color: #A1B0AC; }
+  .ref-card .bar { margin-top: 12px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .07); }
+  .ref-card .bar i { background: linear-gradient(90deg, #1FAF7A, var(--ok)); box-shadow: 0 0 12px rgba(52, 211, 153, .55); }
+  .ref-card .cnt { font-size: 12px; color: #A1B0AC; margin-top: 7px; }
+  .ref-card .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
+  .ref-card .two .btn { min-height: 44px; font-size: 15px; background: rgba(255, 255, 255, .06); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); color: var(--text); }
+  .ref-card .two .btn svg { width: 18px; height: 18px; }
+  .ref-card .two .btn.primary { background: rgba(52, 211, 153, .16); box-shadow: inset 0 0 0 1px rgba(52, 211, 153, .35); color: #7BE8BF; }
+
+  /* ── Пополнение ── */
+  .save-card { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 14px; }
+  .save-card button { border: 0; background: none; padding: 0; cursor: pointer; }
+  .save-card span { font-size: 13px; line-height: 18px; color: var(--hint); }
+  .pay-note { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 12px; color: var(--hint); margin-top: 12px; }
+  .pay-note svg { width: 14px; height: 14px; color: var(--ok); }
+
+  /* ── Мини-история ── */
+  .tx { display: flex; align-items: center; gap: 12px; padding: 11px 16px; position: relative; }
+  .tx + .tx::before { content: ""; position: absolute; top: 0; left: 62px; right: 0; height: 1px; background: var(--sep); }
+  .tx .grow { flex: 1; min-width: 0; }
+  .tx .t { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tx .s { font-size: 13px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; }
+  .tx .amt { text-align: right; flex: none; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .tx .amt.in { color: var(--ok); }
+  .tx .amt a { display: block; font-size: 12px; font-weight: 500; margin-top: 2px; }
+
+  /* ── Серверы ── */
+  .server-card {
+    display: block; width: calc(100% - 2 * var(--gutter)); text-align: left; border: 0; color: inherit; cursor: pointer;
+    margin: 0 var(--gutter) 10px; padding: 14px 16px 14px; background: var(--cell); border-radius: var(--r-lg);
+    box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line); transition: transform var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+  }
+  .server-card:active { transform: scale(.985); background: #262A32; }
+  .server-card .top { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .server-card .flag-tile { width: 40px; height: 40px; font-size: 24px; border-radius: 13px; }
+  .server-card .name { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .server-card .ip { font: 13px/1.4 var(--mono); color: var(--hint); }
+  .specs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
+  .spec-chip { font-size: 12px; font-weight: 600; color: #B7BDC8; background: var(--surface-2); padding: 5px 9px; border-radius: 8px; display: inline-flex; gap: 5px; align-items: center; }
+  .spec-chip svg { width: 13px; height: 13px; color: var(--hint); }
+  .term { margin-top: 12px; }
+  .bar { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
+  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-lo), var(--accent-hi)); transition: width .5s var(--ease-out); }
+  .bar.warn i { background: var(--warn); } .bar.bad i { background: var(--danger); }
+  .term-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--hint); margin-top: 7px; }
+
+  .hero { margin: 4px var(--gutter) 20px; display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .hero .flag-tile { width: 58px; height: 58px; font-size: 32px; border-radius: 18px; background: var(--cell); box-shadow: inset 0 0 0 1px var(--line); }
+  .hero h1 { font: 700 24px/1.2 var(--font-display); letter-spacing: -0.5px; margin: 0 0 6px; word-break: break-all; }
+  .power { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 var(--gutter) 22px; }
+  .power button {
+    display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 14px 4px 12px; border: 0; border-radius: var(--r-lg);
+    background: var(--cell); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line); color: var(--text); font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: transform var(--t-fast) var(--ease), background var(--t-fast);
+  }
+  .power button span { width: 38px; height: 38px; border-radius: 12px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent-text); }
+  .power button:nth-child(3) span { background: var(--danger-soft); color: var(--danger); }
+  .power button:active { transform: scale(.96); background: #262A32; }
+  .power button svg { width: 20px; height: 20px; }
+  .power button[disabled] { color: var(--hint-2); pointer-events: none; }
+  .power button[disabled] span { opacity: .4; }
+
+  /* ── Конструктор ── */
+  .loc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .loc {
+    position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 14px 14px 13px; border: 0; text-align: left; cursor: pointer; color: inherit; min-width: 0;
+    background: var(--cell); border-radius: var(--r-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), background var(--t) var(--ease);
+  }
+  .loc:active { transform: scale(.96); }
+  .loc .f { font-size: 28px; line-height: 1; margin-bottom: 8px; }
+  .loc b { font-size: 15px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .loc .from { font-size: 13px; color: var(--hint); font-variant-numeric: tabular-nums; }
+  .loc[aria-pressed="true"] {
+    background: linear-gradient(160deg, rgba(67, 140, 255, .18), rgba(67, 140, 255, .04) 70%), var(--cell);
+    box-shadow: 0 12px 30px -14px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent);
+  }
+  .tick { position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; transform: scale(.3); opacity: 0; transition: transform var(--t) var(--ease-spring), opacity var(--t-fast); }
+  .tick svg { width: 13px; height: 13px; }
+  [aria-pressed="true"] > .tick { transform: none; opacity: 1; }
+
+  .preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .preset {
+    position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px; border: 0; text-align: left; cursor: pointer; color: inherit; min-width: 0;
+    background: var(--cell); border-radius: var(--r-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), background var(--t) var(--ease);
+  }
+  .preset:active { transform: scale(.96); }
+  .preset .pname { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 6px; }
+  .preset .pspec { font-size: 15px; font-weight: 600; white-space: nowrap; }
+  .preset .pdisk { font-size: 13px; color: var(--hint); }
+  .preset .pprice { font: 700 18px/1.2 var(--font-display); letter-spacing: -0.3px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .preset .pprice small { font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
+  .preset[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .16), rgba(67, 140, 255, .03) 70%), var(--cell); box-shadow: 0 12px 30px -16px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
+
+  details.all-plans { margin-top: 10px; }
+  details.all-plans summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--accent-text); padding: 8px; }
+  details.all-plans summary::-webkit-details-marker { display: none; }
+  details.all-plans summary svg { width: 7px; height: 12px; transform: rotate(90deg); transition: transform var(--t) var(--ease); }
+  details.all-plans[open] summary svg { transform: rotate(-90deg); }
+  details.all-plans .list { margin-top: 6px; animation: rise var(--t) var(--ease-out); }
+
+  .builder { padding: 14px 16px 6px; }
+  .readout { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 4px; }
+  .readout > div { background: var(--surface-2); border-radius: var(--r-md); padding: 11px 11px 10px; box-shadow: inset 0 0 0 1px var(--line); transition: box-shadow var(--t) var(--ease), background var(--t) var(--ease); min-width: 0; }
+  .readout svg { width: 16px; height: 16px; color: var(--accent-text); display: block; }
+  .readout b { display: block; font: 700 26px/1.1 var(--font-display); letter-spacing: -0.6px; margin-top: 8px; font-variant-numeric: tabular-nums; }
+  .readout span { font-size: 12px; color: var(--hint); white-space: nowrap; }
+  .readout .over { box-shadow: inset 0 0 0 1px var(--accent-ring); background: rgba(67, 140, 255, .08); }
+  .spec { padding: 12px 0 12px; position: relative; }
+  .spec + .spec::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--sep); }
+  .spec-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-weight: 500; }
+  .spec-h .v { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--hint-2); margin-top: 2px; padding: 0 4px; font-variant-numeric: tabular-nums; }
+  .match-note { font-size: 13px; color: var(--hint); text-align: center; padding: 10px 8px 6px; min-height: 18px; transition: color var(--t); }
+  .match-note.bad { color: var(--danger); }
+  .match-note.ok { color: var(--ok); }
+
+  .buybar {
+    position: fixed; left: 0; right: 0; z-index: 16; bottom: calc(var(--tabbar-h) + var(--sab));
+    padding: 12px var(--gutter); display: flex; align-items: center; gap: 14px;
+    background: color-mix(in srgb, #1B1E24 86%, transparent); backdrop-filter: saturate(160%) blur(22px); -webkit-backdrop-filter: saturate(160%) blur(22px);
+    border-top: 1px solid var(--line);
+  }
+  .buybar .price { flex: 0 1 auto; min-width: 0; line-height: 1.15; }
+  .buybar .price b { display: block; font: 700 24px/1.15 var(--font-display); letter-spacing: -0.6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .buybar .price b small { font-size: 13px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
+  .buybar .price > span { display: block; font-size: 12px; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44vw; }
+  .buybar .btn { flex: 1; min-width: 0; }
+  body.has-buybar { padding-bottom: calc(160px + var(--sab)); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<nav class="tabbar" role="tablist" id="tabbar"></nav>
+<script src="/static/ui.js"></script>
+<script src="/static/fx.js"></script>
+<script>
+UI.init();
+const { h, row, group, icon, rub } = UI;
+const api = UI.api('/api/me');
+
+const ST = {
+  provisioning: { t: 'Создаётся', c: 'warn' }, active: { t: 'Работает', c: 'ok' },
+  suspended: { t: 'Приостановлен', c: 'bad' }, expired: { t: 'Истёк', c: 'bad' },
+};
+let D = null, CAT = null, tab = 'servers';
+const revealed = new Set();
+const B = { loc: null, cpu: null, ram: null, disk: null, os: null, password: '' };
+const LIVE = {}; // id → { power_status, conn_info, at }
+const PW_RE = /^[\x21-\x7e]{8,64}$/;
+let topupPrefill = null;
+
+// ───────── оформление ─────────
+const pref = { get(k) { try { return localStorage.getItem('bc_' + k); } catch (e) { return null; } }, set(k, v) { try { v === null ? localStorage.removeItem('bc_' + k) : localStorage.setItem('bc_' + k, v); } catch (e) {} } };
+function applyTheme() {
+  if (!D || !D.theme || !window.FX) return;
+  const t = D.theme;
+  const own = t.client_choice ? pref.get('bg') : null;
+  const bg = own || t.bg;
+  FX.background(bg, bg === 'image' ? t.image : null);
+  FX.intensity(pref.get('fxlvl') || 'normal');
+  FX.effect(pref.get('fx') === 'off' ? 'none' : t.effect);
+}
+function bgSwatch(name, image) {
+  const dark = document.documentElement.dataset.scheme ? document.documentElement.dataset.scheme === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+  if (name === 'image') return image ? `center / cover url("${image}")` : 'var(--fill)';
+  const b = FX.BACKGROUNDS[name]; return b ? b[dark ? 'dark' : 'light'] : 'var(--bg)';
+}
+function appearanceView() {
+  const t = D.theme;
+  const cur = (t.client_choice && pref.get('bg')) || '';
+  const v = h('div', {}, UI.nav.backLink('Профиль'), h('h1', { class: 'large-title' }, 'Оформление'));
+  if (t.client_choice) {
+    const opts = [['', 'Как у сервиса'], ...Object.keys(FX.BACKGROUNDS).map(k => [k, FX.BG_NAMES[k]])];
+    if (t.image) opts.push(['image', 'Картинка сервиса']);
+    v.append(h('div', { class: 'group-h' }, 'Фон'), h('div', { class: 'tiles' }, opts.map(([k, name]) => h('button', { class: 'tile', type: 'button', 'aria-pressed': String(k === cur), onclick: () => {
+      pref.set('bg', k || null); applyTheme(); UI.haptic('select'); UI.nav.refresh();
+    } }, h('span', { class: 'sw', style: 'background:' + (k ? bgSwatch(k, t.image) : bgSwatch(t.bg, t.image)) }), name))));
+  }
+  const now = t.effect === 'auto' ? FX.seasonal(new Date()) : t.effect;
+  const on = pref.get('fx') !== 'off';
+  const lvl = h('div', { style: 'padding:4px 16px 14px' }, UI.segmented([{ value: 'low', label: 'Тихо' }, { value: 'normal', label: 'Обычно' }, { value: 'high', label: 'Ярко' }],
+    pref.get('fxlvl') || 'normal', val => { pref.set('fxlvl', val === 'normal' ? null : val); applyTheme(); }));
+  lvl.style.display = on ? '' : 'none';
+  v.append(group('Сезонные эффекты', [
+    row({ title: 'Показывать эффекты', sub: now === 'none' ? 'Сейчас эффектов нет' : 'Сейчас: ' + FX.EFFECT_NAMES[now], right: UI.toggle(on, val => { pref.set('fx', val ? null : 'off'); lvl.style.display = val ? '' : 'none'; applyTheme(); }, 'Сезонные эффекты') }),
+    lvl,
+  ], 'Частицы идут позади карточек и кнопок, а на экранах оплаты и создания сервера становятся тише. Выключите, если отвлекают или нужно сэкономить заряд.'));
+  return v;
+}
+
+// ───────── загрузка ─────────
+async function load() {
+  const first = !D;
+  D = await api('');
+  if (D.is_admin === undefined) D.is_admin = false;
+  if (D.service_name) document.title = D.service_name;
+  renderTabbar();
+  if (first) applyTheme();
+}
+async function loadCatalog() {
+  if (!CAT) CAT = await api('/catalog');
+  return CAT;
+}
+const osName = code => (CAT && CAT.os_labels && CAT.os_labels[code]) || code;
+
+// ───────── таб-бар ─────────
+const TABS = [
+  { id: 'servers', label: 'Серверы', icon: 'server' },
+  { id: 'new', label: 'Новый', icon: 'plusCircle' },
+  { id: 'profile', label: 'Профиль', icon: 'person' },
+];
+const goTab = t => { tab = t; renderTabbar(); UI.nav.reset(); window.scrollTo(0, 0); };
+function renderTabbar() {
+  const bar = document.getElementById('tabbar');
+  bar.replaceChildren(...TABS.map(t => h('button', {
+    type: 'button', role: 'tab', 'aria-selected': String(t.id === tab),
+    onclick: () => { if (tab === t.id) return; tab = t.id; UI.haptic('select'); renderTabbar(); UI.nav.reset(); },
+  }, icon(t.icon), t.label, t.id === 'profile' && D && D.tickets_unread ? h('span', { class: 'count' }, String(D.tickets_unread)) : null)));
+}
+document.addEventListener('navchange', e => {
+  document.body.classList.toggle('hidden-tabbar', e.detail.depth > 0 || !!(D && D.consent && D.consent.needed));
+  document.body.classList.toggle('has-buybar', e.detail.depth === 0 && tab === 'new');
+  if (window.FX) FX.calm(!!(D && D.consent && D.consent.needed) || (e.detail.depth === 0 ? (tab === 'new' || tab === 'profile') : false));
+});
+
+// аватар: сначала фото из initData, иначе через бота
+let AVA = null;
+const myAvatarSrc = () => {
+  if (AVA !== null) return AVA;
+  const u = UI.tg && UI.tg.initDataUnsafe && UI.tg.initDataUnsafe.user;
+  AVA = (u && u.photo_url) ? Promise.resolve(u.photo_url) : UI.blobUrl('/api/me/avatar').catch(() => null);
+  return AVA;
+};
+const displayName = u => u.first_name || (u.username ? '@' + u.username : 'ID ' + u.id);
+
+function header(title, opts = {}) {
+  const u = D.user;
+  const top = h('div', { class: 'topbar' },
+    h('button', { class: 'account', type: 'button', 'aria-label': 'Профиль', onclick: () => goTab('profile') },
+      UI.avatar(u, 36, myAvatarSrc), h('div', { class: 'who' }, h('b', {}, displayName(u)), h('span', {}, 'ID ' + u.id))),
+    h('div', { class: 'right' },
+      h('button', { class: 'pill bal num', type: 'button', 'aria-label': 'Баланс', onclick: () => goTab('profile') }, icon('wallet'), rub(D.balance_rub)),
+      adminBtn()));
+  return h('div', {}, top, h('h1', { class: 'large-title' }, title), opts.sub ? h('div', { class: 'subtitle' }, opts.sub) : null);
+}
+const adminBtn = () => D.is_admin ? h('button', { class: 'pill icon-only', type: 'button', 'aria-label': 'Управление', onclick: () => location.href = '/admin' }, icon('gear')) : null;
+const shortDate = iso => iso ? new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—';
+const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text);
+
+function root() {
+  if (!D) return h('div', {}, h('div', { class: 'large-title' }, ' '), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  if (D.consent && D.consent.needed) return consentView();
+  if (tab === 'servers') return serversView();
+  if (tab === 'new') return builderView();
+  return profileView();
+}
+
+// ───────── Серверы ─────────
+function serversView() {
+  const act = D.servers.filter(s => s.status === 'active');
+  const monthly = act.reduce((a, s) => a + (+s.price_rub || 0), 0);
+  const wrap = h('div', {}, header('Серверы', { sub: D.servers.length ? `${D.servers.length} ${UI.plural(D.servers.length, 'сервер', 'сервера', 'серверов')}` + (monthly ? ` · ${rub(monthly)} в месяц` : '') : null }));
+  if (!D.servers.length) {
+    wrap.append(h('div', { class: 'empty' }, icon('server'), h('b', {}, 'Пока нет серверов'),
+      'Соберите конфигурацию — сервер будет готов через 1–3 минуты.',
+      h('button', { class: 'btn', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Собрать сервер')));
+    return wrap;
+  }
+  D.servers.forEach(s => {
+    const st = ST[s.status] || { t: s.status, c: '' };
+    const days = s.days_left == null ? null : Math.max(0, Math.ceil(s.days_left));
+    const pct = days == null ? 0 : Math.max(3, Math.min(100, days / 30 * 100));
+    const bar = days == null ? '' : days < 3 ? 'bad' : days < 7 ? 'warn' : '';
+    wrap.append(h('button', { class: 'server-card', type: 'button', 'aria-label': s.name, onclick: () => UI.nav.push(() => serverView(s.id)) },
+      h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
+        h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name), h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—'))),
+        h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
+      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.auto_renew ? specChip('renew', 'Автопродление') : null),
+      days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
+        h('div', { class: 'term-row' }, h('span', {}, days > 0 ? `Осталось ${days} ${UI.plural(days, 'день', 'дня', 'дней')}` : 'Срок истёк'), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
+  });
+  const due = D.servers.filter(s => s.days_left != null && s.days_left < 3 && !s.auto_renew);
+  if (due.length) wrap.append(h('div', { class: 'group-f', style: 'margin:2px var(--gutter) 22px' }, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.'));
+  wrap.append(h('div', { style: 'margin:12px var(--gutter) 24px' }, h('button', { class: 'btn secondary', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Новый сервер')));
+  return wrap;
+}
+
+let curServer = null;
+async function fetchLive(id) {
+  try { LIVE[id] = { ...(await api(`/servers/${id}/live`)), at: Date.now() }; } catch (e) { return; }
+  if (curServer === id && UI.nav.stack.length) { await load().catch(() => {}); UI.nav.refresh(); }
+}
+function serverView(id) {
+  const s = D.servers.find(x => x.id === id);
+  if (!s) { setTimeout(() => UI.nav.back(), 0); return h('div'); }
+  curServer = id;
+  const L = LIVE[id];
+  if (s.status === 'active' && (!L || Date.now() - L.at > 15000)) setTimeout(() => fetchLive(id), 0);
+  const power = s.status === 'active' && L ? L.power_status : null;
+  const st = power === 'running' ? { t: 'Включён', c: 'ok' } : power === 'stopped' ? { t: 'Выключен', c: '' } : (ST[s.status] || { t: s.status, c: '' });
+  const live = s.status === 'active' || s.status === 'suspended';
+  const act = (action, opts = {}) => async () => {
+    if (opts.ask) { const ok = await UI.ask(opts.ask); if (!ok) return; }
+    const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action, os: opts.os }));
+    if (r === undefined) return;
+    if (r.link) UI.openLink(r.link); else UI.toast(opts.done || 'Готово');
+    if (['start', 'stop', 'reboot'].includes(action)) { setTimeout(() => fetchLive(s.id), 4000); setTimeout(() => fetchLive(s.id), 12000); }
+    await refresh();
+  };
+  const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
+  const v = h('div', {},
+    UI.nav.backLink('Серверы'),
+    h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
+      h('div', {}, h('h1', {}, s.name), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
+
+  if (s.status === 'provisioning') {
+    v.append(group(null, [row({ title: 'Сервер создаётся', sub: 'Обычно это 1–3 минуты. Адрес и пароль появятся здесь и придут в чат.' })]));
+    return v;
+  }
+  v.append(group('Подключение', [
+    row({ title: 'IP-адрес', detail: h('span', { class: 'mono' }, s.ip || '—'), right: s.ip ? h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать IP', onclick: () => UI.copy(s.ip, 'IP') }, icon('copy')) : null }),
+    row({ title: 'Пользователь', detail: h('span', { class: 'mono' }, 'root') }),
+    row({ title: 'Пароль', detail: h('span', { class: 'mono' }, pw), right: s.password ? h('span', { style: 'display:flex;gap:10px' },
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': revealed.has(s.id) ? 'Скрыть пароль' : 'Показать пароль', onclick: () => { revealed.has(s.id) ? revealed.delete(s.id) : revealed.add(s.id); UI.nav.refresh(); } }, icon(revealed.has(s.id) ? 'eyeOff' : 'eye')),
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать пароль', onclick: () => UI.copy(s.password, 'Пароль') }, icon('copy'))) : null }),
+    row({ title: 'Скопировать всё', cls: 'accent', onClick: () => UI.copy((L && L.conn_info) || `IP: ${s.ip || '—'}\nОС: ${s.os_label || s.os}\nЛогин: root\nПароль: ${s.password || '—'}`, 'Доступ') }),
+  ], s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
+
+  v.append(h('div', { class: 'power' },
+    h('button', { type: 'button', disabled: !live || power === 'running', onclick: act('start', { done: 'Сервер включается' }) }, h('span', {}, icon('power')), 'Включить'),
+    h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('reboot', { done: 'Сервер перезагружается', ask: { title: 'Перезагрузить сервер?', message: 'Соединения на несколько секунд прервутся.', buttons: [{ id: 'y', text: 'Перезагрузить' }] } }) }, h('span', {}, icon('restart')), 'Перезагрузить'),
+    h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('stop', { done: 'Сервер выключается', ask: { title: 'Выключить сервер?', message: 'Сайты и сервисы на нём станут недоступны, пока вы его не включите.', buttons: [{ id: 'y', text: 'Выключить', type: 'destructive' }] } }) }, h('span', {}, icon('stop')), 'Выключить')));
+
+  v.append(group('Оплата', [
+    row({ title: 'Оплачен до', detail: UI.date(s.expires_at) }),
+    row({ title: 'Стоимость', detail: rub(s.price_rub) + ' в месяц' }),
+    row({ title: 'Автопродление', right: UI.toggle(s.auto_renew, async (val, input) => {
+      const r = await UI.run(() => api(`/servers/${s.id}/autorenew`, 'POST', { value: val }), val ? 'Автопродление включено' : 'Автопродление выключено');
+      if (r === undefined) { input.checked = !val; return; }
+      s.auto_renew = val;
+    }, 'Автопродление') }),
+    row({ title: 'Продлить на 30 дней', cls: 'accent', onClick: async () => {
+      const ok = await UI.ask({ title: 'Продлить сервер?', message: `Спишем ${rub(s.price_rub)} с баланса. Сейчас на балансе ${rub(D.balance_rub)}.`, buttons: [{ id: 'y', text: 'Продлить' }] });
+      if (!ok) return;
+      if (await UI.run(() => api(`/servers/${s.id}/renew`, 'POST'), 'Продлено на 30 дней') !== undefined) await refresh();
+    } }),
+  ], s.auto_renew ? 'Продлим автоматически за сутки до окончания, если на балансе хватит денег.' : 'Без автопродления сервер остановится, когда закончится оплаченный срок.'));
+
+  v.append(group('Управление', [
+    row({ icon: 'stack', tile: '#34C759', title: 'Мощность', detail: `${s.cpu} vCPU, ${s.ram} ГБ`, onClick: () => upgradeSheet(s) }),
+    row({ icon: 'text', tile: '#8E8E93', title: 'Переименовать', onClick: () => renameSheet(s) }),
+    row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
+    row({ icon: 'globe', tile: '#34AADC', title: 'Сменить IP', detail: rub(D.cfg.change_ip_price_rub), onClick: act('change-ip', { done: 'IP-адрес меняется', ask: { title: 'Сменить IP?', message: `Сервер получит новый адрес, старый перестанет работать. Спишем ${rub(D.cfg.change_ip_price_rub)}.`, buttons: [{ id: 'y', text: 'Сменить' }] } }) }),
+    row({ icon: 'key', tile: '#FF9500', title: 'Сбросить пароль', onClick: act('password', { done: 'Пароль сбрасывается', ask: { title: 'Сбросить пароль?', message: 'Данные на диске будут стёрты, IP-адрес сохранится.', buttons: [{ id: 'y', text: 'Сбросить и стереть', type: 'destructive' }] } }) }),
+    row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Переустановка', async code => {
+      const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(code)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
+      if (!ok) return;
+      if (await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os: code }), 'Переустановка запущена') !== undefined) await refresh();
+    }) }),
+  ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
+
+  v.append(group(null, [row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', sub: 'Вопрос по этому серверу', onClick: () => UI.nav.push(() => newTicketView(s.id)) })]));
+
+  v.append(group(null, [row({ title: 'Удалить сервер', cls: 'destructive', onClick: async () => {
+    const ok = await UI.ask({ title: 'Удалить ' + s.name + '?', message: `Сервер и данные будут удалены безвозвратно. Вернём ${rub(s.refund_rub)} на баланс за неиспользованные дни.`, buttons: [{ id: 'y', text: 'Удалить', type: 'destructive' }] });
+    if (!ok) return;
+    const r = await UI.run(() => api(`/servers/${s.id}`, 'DELETE'));
+    if (r === undefined) return;
+    UI.toast('Сервер удалён, вернули ' + rub(r.refund_rub));
+    await load(); UI.nav.back();
+  } })], `Вернём ${rub(s.refund_rub)} за неиспользованные дни.`));
+  return v;
+}
+
+function renameSheet(s) {
+  UI.sheet('Название сервера', close => {
+    const inp = h('input', { type: 'text', maxlength: 60, 'aria-label': 'Название', autocomplete: 'off', enterkeyhint: 'done' }); inp.value = s.name;
+    const save = h('button', { class: 'btn', type: 'button' }, 'Сохранить');
+    save.onclick = UI.busy(save, async () => {
+      const r = await UI.run(() => api(`/servers/${s.id}/rename`, 'POST', { name: inp.value }), 'Название сохранено');
+      if (r === undefined) return; close(); await refresh();
+    });
+    setTimeout(() => { inp.focus(); inp.select(); }, 350);
+    return h('div', {}, h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field stack' }, h('label', {}, 'Название'), inp)),
+      h('div', { class: 'group-f' }, 'Видно только вам. От 2 до 60 символов, например «Сайт» или «VPN».')),
+      h('div', { style: 'margin:0 var(--gutter)' }, save));
+  });
+}
+
+async function upgradeSheet(s) {
+  const base = await UI.run(() => api(`/servers/${s.id}/upgrade`));
+  if (!base) return;
+  const o = base.options;
+  if (o.cpu.length < 2 && o.ram.length < 2) { await UI.alert('Сервер уже на максимальной конфигурации в этой локации.'); return; }
+  UI.sheet('Увеличить мощность', close => {
+    const sel = { cpu: base.current.cpu, ram: base.current.ram };
+    const est = h('div', { class: 'match-note', 'aria-live': 'polite' }, 'Выберите, что увеличить.');
+    const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Увеличить');
+    let quote = null, t = null, seq = 0;
+    const ask = () => {
+      clearTimeout(t); quote = null; go.disabled = true;
+      if (sel.cpu === base.current.cpu && sel.ram === base.current.ram) { est.className = 'match-note'; est.textContent = 'Выберите, что увеличить.'; go.textContent = 'Увеличить'; return; }
+      est.className = 'match-note'; est.textContent = 'Считаем стоимость…';
+      const my = ++seq;
+      t = setTimeout(async () => {
+        try {
+          const q = await api(`/servers/${s.id}/upgrade?cpu=${sel.cpu}&ram=${sel.ram}`);
+          if (my !== seq) return;
+          quote = q; go.disabled = false;
+          est.textContent = `Около ${rub(q.estimate_kop / 100)} за оставшиеся ${Math.ceil(q.days_left)} ${UI.plural(Math.ceil(q.days_left), 'день', 'дня', 'дней')}. Дальше — около ${rub(q.new_price_kop / 100)} в месяц.`;
+          go.textContent = 'Увеличить за ≈ ' + rub(q.estimate_kop / 100);
+        } catch (e) { if (my !== seq) return; est.className = 'match-note bad'; est.textContent = e.message; go.textContent = 'Увеличить'; }
+      }, 250);
+    };
+    const slider = (k, title, unit) => {
+      const vals = o[k], val = h('span', { class: 'v' });
+      const input = h('input', { type: 'range', class: 'ios', min: 0, max: Math.max(vals.length - 1, 0), step: 1, 'aria-label': title, disabled: vals.length < 2 });
+      input.value = String(Math.max(vals.indexOf(sel[k]), 0));
+      const paint = () => { const p = vals.length > 1 ? (input.value / (vals.length - 1)) * 100 : 0; input.style.setProperty('--p', p + '%'); val.textContent = vals[input.value] + ' ' + unit; };
+      input.addEventListener('input', () => { const nv = vals[+input.value]; if (nv !== sel[k]) { sel[k] = nv; UI.haptic('select'); ask(); } paint(); });
+      paint();
+      return h('div', { class: 'spec' }, h('div', { class: 'spec-h' }, h('span', {}, title), val), input,
+        h('div', { class: 'ticks' }, h('span', {}, vals[0]), h('span', {}, vals[vals.length - 1])));
+    };
+    go.onclick = UI.busy(go, async () => {
+      if (!quote) return;
+      const ok = await UI.ask({ title: 'Увеличить мощность?', message: `${quote.cpu} vCPU и ${quote.ram} ГБ памяти, диск без изменений. Спишем около ${rub(quote.estimate_kop / 100)}; точную сумму пересчитаем по ответу провайдера. Сервер может перезагрузиться.`, buttons: [{ id: 'y', text: 'Увеличить' }] });
+      if (!ok) return;
+      const r = await UI.run(() => api(`/servers/${s.id}/upgrade`, 'POST', { cpu: quote.cpu, ram: quote.ram }));
+      if (r === undefined) return;
+      UI.toast('Готово, списано ' + rub(r.charged_kop / 100));
+      close(); delete LIVE[s.id]; await refresh();
+    });
+    return h('div', {},
+      h('div', { class: 'builder', style: 'padding-top:6px' }, slider('cpu', 'Процессор', 'vCPU'), slider('ram', 'Память', 'ГБ'), est),
+      h('div', { class: 'group-f', style: 'margin:-22px var(--gutter) 16px' }, `Сейчас ${base.current.cpu} vCPU, ${base.current.ram} ГБ, диск ${base.current.disk} ГБ. Диск увеличить нельзя — для этого понадобится новый сервер.`),
+      h('div', { style: 'margin:0 var(--gutter)' }, go));
+  });
+}
+
+async function pickOS(current, title, onPick) {
+  await UI.run(loadCatalog);
+  if (!CAT) return;
+  UI.sheet(title || 'Система', close => group(null, CAT.os.map(code => row({
+    title: osName(code), right: code === current ? icon('check', 'check') : null, chevron: false,
+    onClick: () => { close(); onPick(code); },
+  }))));
+}
+
+// ───────── Конструктор ─────────
+function offersFor(loc) { const l = CAT && CAT.locations.find(x => x.code === loc); return l ? l.offers : []; }
+const uniq = a => [...new Set(a)].sort((x, y) => x - y);
+function axes(loc) { const o = offersFor(loc); return { cpu: uniq(o.map(x => x.cpu)), ram: uniq(o.map(x => x.ram)), disk: uniq(o.map(x => x.disk)) }; }
+function snap(vals, v) { if (!vals.length) return null; if (v == null) return vals[0]; return vals.find(x => x >= v) ?? vals[vals.length - 1]; }
+function match() {
+  const c = offersFor(B.loc).filter(o => o.cpu >= B.cpu && o.ram >= B.ram && o.disk >= B.disk);
+  c.sort((a, b) => a.price_kop - b.price_kop || (a.cpu + a.ram + a.disk) - (b.cpu + b.ram + b.disk));
+  return c[0] || null;
+}
+function nearestFix() { // что уменьшить, если такой конфигурации нет
+  const o = offersFor(B.loc);
+  for (const [k, name] of [['disk', 'диск'], ['ram', 'память'], ['cpu', 'процессоры']]) {
+    const alt = o.filter(x => ['cpu', 'ram', 'disk'].every(a => a === k || x[a] >= B[a]));
+    if (alt.length) return `Уменьшите ${name} — тарифа с таким сочетанием нет.`;
+  }
+  return 'Тарифа с таким сочетанием нет — уменьшите параметры.';
+}
+/* Готовые пресеты из тарифов локации: самый доступный, самый мощный и равномерно между ними. */
+const PRESET_NAMES = ['Starter', 'Basic', 'Standard', 'Performance'];
+function presetsFor(loc) {
+  const o = [...offersFor(loc)].sort((a, b) => a.price_kop - b.price_kop);
+  if (o.length <= 4) return o.map((x, i) => ({ ...x, pname: PRESET_NAMES[i] }));
+  const idx = [...new Set([0, 1, 2, 3].map(i => Math.round(i * (o.length - 1) / 3)))];
+  return idx.map((k, i) => ({ ...o[k], pname: PRESET_NAMES[i] }));
+}
+const discounted = full => D.discount ? Math.max(0, Math.ceil(full * (100 - D.discount.pct) / 100)) : full;
+let lastPrice = null;
+
+function builderView() {
+  const wrap = h('div', {}, header('Новый сервер'));
+  if (D.cfg.maintenance) {
+    wrap.append(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Продажи на паузе'), 'Новые серверы временно не выдаём. Текущие серверы работают как обычно.'));
+    return wrap;
+  }
+  if (!CAT) {
+    wrap.append(group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+    UI.run(loadCatalog).then(() => { if (CAT && tab === 'new' && !UI.nav.stack.length) UI.nav.refresh(); });
+    return wrap;
+  }
+  if (!CAT.locations.length) { wrap.append(h('div', { class: 'empty' }, icon('globe'), h('b', {}, 'Нет доступных локаций'), 'Загляните позже — мощности скоро освободятся.')); return wrap; }
+  if (!B.loc || !CAT.locations.some(l => l.code === B.loc)) B.loc = CAT.locations[0].code;
+  if (!B.os) B.os = CAT.os.includes('ubuntu2404') ? 'ubuntu2404' : CAT.os[0];
+  const ax = axes(B.loc);
+  B.cpu = snap(ax.cpu, B.cpu); B.ram = snap(ax.ram, B.ram); B.disk = snap(ax.disk, B.disk);
+  const loc = CAT.locations.find(l => l.code === B.loc);
+
+  // 1. локация — карточки
+  const locGrid = h('div', { class: 'loc-grid', role: 'group', 'aria-label': 'Локация' });
+  CAT.locations.forEach(l => {
+    const min = l.offers.length ? Math.min(...l.offers.map(o => o.price_kop)) / 100 : null;
+    const b = h('button', { class: 'loc', type: 'button', 'aria-pressed': String(l.code === B.loc), onclick: () => {
+      if (B.loc === l.code) return;
+      B.loc = l.code; UI.haptic('select');
+      [...locGrid.children].forEach(c => c.setAttribute('aria-pressed', String(c === b)));
+      setTimeout(() => { if (tab === 'new' && !UI.nav.stack.length) UI.nav.refresh(); }, 170);
+    } }, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')), h('span', { class: 'f', 'aria-hidden': 'true' }, l.flag), h('b', {}, l.name),
+      h('span', { class: 'from' }, min == null ? 'Нет мест' : 'от ' + rub(min) + ' / мес'));
+    locGrid.append(b);
+  });
+  wrap.append(UI.section('Локация', locGrid, loc && loc.channel ? `Канал в локации ${loc.name}: ${loc.channel}.` : null));
+
+  // 2. готовые тарифы
+  const presets = presetsFor(B.loc);
+  const presetBtns = presets.map(p => h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false', onclick: () => { setSpec(p); UI.haptic('select'); } },
+    h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
+    h('span', { class: 'pname' }, p.pname), h('span', { class: 'pspec' }, `${p.cpu} vCPU · ${p.ram} ГБ`), h('span', { class: 'pdisk' }, `${p.disk} ГБ NVMe`),
+    h('span', { class: 'pprice' }, rub(discounted(p.price_kop / 100)), h('small', {}, ' / мес'))));
+  presetBtns.forEach((b, i) => { b._idx = presets[i].idx; });
+  const all = [...offersFor(B.loc)].sort((a, b) => a.price_kop - b.price_kop);
+  const allPlans = all.length > presets.length ? h('details', { class: 'all-plans' },
+    h('summary', {}, `Все тарифы · ${all.length}`, icon('chevron')),
+    h('div', { class: 'list' }, all.map(o => row({ title: `${o.cpu} vCPU · ${o.ram} ГБ · ${o.disk} ГБ`, detail: rub(o.price_kop / 100), chevron: false, onClick: () => { setSpec(o); UI.haptic('select'); } })))) : null;
+  wrap.append(UI.section('Готовые тарифы', h('div', {}, h('div', { class: 'preset-grid' }, presetBtns), allPlans)));
+
+  // 3. конфигурация: сводка + ползунки
+  const nums = {}, tiles = {};
+  const readout = h('div', { class: 'readout', 'aria-live': 'polite' },
+    ...[['cpu', 'cpu', 'vCPU'], ['ram', 'ram', 'ГБ памяти'], ['disk', 'drive', 'ГБ NVMe']].map(([k, ic, u]) => { nums[k] = h('b'); tiles[k] = h('div', {}, icon(ic), nums[k], h('span', {}, u)); return tiles[k]; }));
+  const note = h('div', { class: 'match-note' });
+  const sliders = {};
+  const sliderEls = [['cpu', 'Процессор', 'vCPU'], ['ram', 'Память', 'ГБ'], ['disk', 'Диск NVMe', 'ГБ']].map(([k, title, unit]) => {
+    const vals = ax[k];
+    const val = h('span', { class: 'v' });
+    const input = h('input', { type: 'range', class: 'ios', min: 0, max: Math.max(vals.length - 1, 0), step: 1, 'aria-label': title, disabled: vals.length < 2 });
+    const paint = () => { const p = vals.length > 1 ? (input.value / (vals.length - 1)) * 100 : 0; input.style.setProperty('--p', p + '%'); val.textContent = 'от ' + vals[input.value] + ' ' + unit; };
+    const setTo = v => { input.value = String(Math.max(vals.indexOf(v), 0)); paint(); };
+    setTo(B[k]);
+    input.addEventListener('input', () => { const nv = vals[+input.value]; if (nv !== B[k]) { B[k] = nv; UI.haptic('select'); } paint(); update(); });
+    sliders[k] = { setTo };
+    return h('div', { class: 'spec' }, h('div', { class: 'spec-h' }, h('span', {}, title), val), input,
+      h('div', { class: 'ticks' }, h('span', {}, vals[0]), h('span', {}, vals[vals.length - 1])));
+  });
+  wrap.append(UI.section('Конфигурация', h('div', { class: 'card builder' }, readout, note, ...sliderEls)));
+  function setSpec(o) {
+    for (const k of ['cpu', 'ram', 'disk']) { B[k] = snap(ax[k], o[k]); sliders[k].setTo(B[k]); }
+    update();
+  }
+
+  // 4. система
+  const osRow = row({ icon: 'disc', tile: '#8B8CFF', title: 'Система', detail: osName(B.os), onClick: () => pickOS(B.os, 'Система', code => { B.os = code; osRow.querySelector('.d').textContent = osName(code); update(); }) });
+  const pwRow = row({ icon: 'key', tile: '#FBBF5B', title: 'Пароль root', detail: B.password ? 'Свой' : 'Сгенерируем', onClick: () => passwordSheet(pwRow) });
+  wrap.append(group('Система', [osRow, pwRow, row({ icon: 'clock', tile: '#34D399', title: 'Срок', detail: '30 дней' })]));
+
+  // 5. панель оплаты
+  const priceNum = h('span'), priceB = h('b', {}, priceNum, h('small', {}, ' / мес')), priceS = h('span');
+  const pay = h('button', { class: 'btn', type: 'button' });
+  wrap.append(h('div', { class: 'buybar' }, h('div', { class: 'price' }, priceB, priceS), pay));
+
+  let prev = {};
+  function update() {
+    const m = match();
+    for (const k of ['cpu', 'ram', 'disk']) {
+      const shown = m ? m[k] : B[k];
+      if (prev[k] !== undefined && prev[k] !== shown) UI.bump(nums[k]);
+      nums[k].textContent = shown; prev[k] = shown;
+      tiles[k].classList.toggle('over', !!m && m[k] > B[k]);
+    }
+    presetBtns.forEach(b => b.setAttribute('aria-pressed', String(!!m && b._idx === m.idx)));
+    if (!m) {
+      note.className = 'match-note bad'; note.textContent = nearestFix();
+      priceNum.textContent = '—'; lastPrice = null; priceS.textContent = 'нет такого тарифа'; pay.textContent = 'Нет такого тарифа'; pay.disabled = true; return;
+    }
+    const over = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
+    note.className = 'match-note' + (over.length ? '' : ' ok');
+    note.textContent = over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : 'Точно под ваши параметры.';
+    const full = m.price_kop / 100;
+    const price = discounted(full);
+    if (lastPrice !== null && lastPrice !== price) UI.bump(priceB);
+    UI.tween(priceNum, lastPrice, price, v => rub(v));
+    lastPrice = price;
+    priceS.replaceChildren(D.discount ? h('span', {}, h('s', {}, rub(full)), ` −${D.discount.pct}% · дальше ${rub(full)}`) : `${loc.flag} ${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
+    pay.disabled = false;
+    if (D.balance_rub >= price) {
+      pay.textContent = 'Оплатить';
+      pay.onclick = UI.busy(pay, () => buy(m, price));
+    } else {
+      const need = Math.max(Math.ceil(price - D.balance_rub), D.cfg.min_topup_rub);
+      pay.textContent = 'Пополнить на ' + rub(need);
+      pay.onclick = () => { topupPrefill = need; goTab('profile'); };
+    }
+  }
+  update();
+  return wrap;
+}
+
+function passwordSheet(pwRow) {
+  UI.sheet('Пароль root', close => {
+    let mode = B.password ? 'own' : 'gen';
+    const inp = h('input', { type: 'text', autocomplete: 'new-password', autocapitalize: 'off', spellcheck: false, placeholder: 'от 8 символов', 'aria-label': 'Свой пароль', maxlength: 64 });
+    inp.value = B.password;
+    const note = h('div', { class: 'group-f' });
+    const field = h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'Пароль'), inp)), note);
+    const done = h('button', { class: 'btn', type: 'button' }, 'Готово');
+    const paint = () => {
+      field.style.display = mode === 'own' ? '' : 'none';
+      const ok = PW_RE.test(inp.value);
+      note.style.color = inp.value && !ok ? 'var(--danger)' : '';
+      note.textContent = inp.value && !ok ? 'От 8 до 64 символов: латиница, цифры и знаки, без пробелов.' : 'Пароль увидите в карточке сервера. Его можно сменить в любой момент.';
+      done.disabled = mode === 'own' && !ok;
+    };
+    inp.addEventListener('input', paint);
+    done.onclick = () => { B.password = mode === 'own' ? inp.value : ''; pwRow.querySelector('.d').textContent = B.password ? 'Свой' : 'Сгенерируем'; close(); };
+    paint();
+    return h('div', {},
+      h('div', { style: 'margin:0 var(--gutter) 16px' }, UI.segmented([{ value: 'gen', label: 'Сгенерировать' }, { value: 'own', label: 'Задать свой' }], mode, v => { mode = v; paint(); if (v === 'own') setTimeout(() => inp.focus(), 50); }, 'lg')),
+      field, h('div', { style: 'margin:0 var(--gutter)' }, done));
+  });
+}
+
+async function buy(m, price) {
+  const loc = CAT.locations.find(l => l.code === B.loc);
+  const ok = await UI.ask({
+    title: 'Оплатить сервер?',
+    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.\n${rub(price)} за 30 дней спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% по промокоду).` : '.'),
+    buttons: [{ id: 'y', text: 'Оплатить ' + rub(price) }],
+  });
+  if (!ok) return;
+  const r = await UI.run(() => api('/servers', 'POST', { idx: m.idx, location: B.loc, os: B.os, password: B.password || null }));
+  if (r === undefined) return;
+  B.password = '';
+  UI.toast('Оплачено. Сервер создаётся');
+  await load();
+  tab = 'servers'; renderTabbar(); UI.nav.reset();
+  UI.nav.push(() => serverView(r.id));
+}
+
+// ───────── Согласие с документами ─────────
+function docView(key) {
+  const box = h('div', { class: 'doc' }, h('div', { class: 'skeleton', style: 'margin-top:12px' }));
+  const title = h('h1', { class: 'large-title', style: 'white-space:normal;font-size:28px;line-height:34px' }, (D.consent.docs.find(d => d.key === key) || {}).title || 'Документ');
+  api('/legal/' + key).then(r => { title.textContent = r.title; box.innerHTML = r.html; }).catch(e => { box.textContent = e.message; });
+  return h('div', {}, UI.nav.backLink('Назад'), title, box);
+}
+
+function consentView() {
+  const checked = new Set();
+  const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Продолжить');
+  const rows = D.consent.docs.map(d => {
+    const box = h('span', { class: 'cbox', role: 'checkbox', 'aria-checked': 'false' }, icon('check'));
+    const toggle = () => {
+      checked.has(d.key) ? checked.delete(d.key) : checked.add(d.key);
+      box.classList.toggle('on', checked.has(d.key)); box.setAttribute('aria-checked', String(checked.has(d.key)));
+      go.disabled = checked.size !== D.consent.docs.length; UI.haptic('select');
+    };
+    const r = h('div', { class: 'row' },
+      h('button', { type: 'button', style: 'display:flex;align-items:center;gap:12px;flex:1;border:0;background:none;padding:11px 0;text-align:left;cursor:pointer', onclick: toggle }, box, h('span', { style: 'font-size:15px;letter-spacing:-0.24px' }, d.check)),
+      h('button', { type: 'button', class: 'btn plain', style: 'width:auto;min-height:0;padding:6px 0 6px 8px;font-size:15px', onclick: () => UI.nav.push(() => docView(d.key)) }, 'Читать'));
+    r.style.setProperty('--inset', '52px');
+    return r;
+  });
+  go.onclick = UI.busy(go, async () => {
+    const r = await UI.run(() => api('/consent', 'POST', { docs: [...checked] }));
+    if (r === undefined) return;
+    UI.haptic('success'); await load(); goTab('servers'); loadCatalog().catch(() => {});
+  });
+  const name = D.service_name || 'сервис';
+  return h('div', {},
+    h('div', { style: 'text-align:center;padding:36px var(--gutter) 8px' },
+      h('div', { style: 'display:inline-grid;place-items:center;width:64px;height:64px;border-radius:16px;background:var(--accent);color:var(--on-accent);margin-bottom:14px' }, icon('shield')),
+      h('h1', { style: 'font-size:28px;line-height:34px;margin:0 0 8px;letter-spacing:.36px' }, 'Добро пожаловать в ' + name),
+      h('p', { style: 'margin:0;color:var(--hint);font-size:15px' }, 'Перед началом работы ознакомьтесь с документами и отметьте пункты ниже.')),
+    group(null, rows, D.consent.date ? `Редакция от ${D.consent.date}.` : null),
+    h('div', { style: 'margin:0 var(--gutter) 12px' }, go),
+    h('div', { class: 'group-f', style: 'text-align:center;margin:0 var(--gutter) 30px' }, 'Без согласия на обработку персональных данных мы не сможем оказывать услуги.'));
+}
+
+// ───────── Поддержка ─────────
+const TST = { open: ['Ждёт ответа', 'warn'], answered: ['Есть ответ', 'ok'], provider: ['Решаем', 'warn'], closed: ['Решено', ''] };
+
+function ticketsView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('/tickets').then(items => {
+    if (!items.length) { list.replaceChildren(h('div', { class: 'empty' }, icon('chat'), h('b', {}, 'Обращений пока нет'), 'Задайте вопрос — ответим здесь и в чате с ботом.')); return; }
+    list.replaceChildren(group(null, items.map(t => {
+      const [st, c] = TST[t.status] || [t.status, ''];
+      const r = row({ title: t.subject, cls: 'wrap', sub: (t.last ? (t.last.author === 'admin' ? 'Поддержка: ' : '') + t.last.text : '') + '\n' + UI.date(t.updated),
+        right: h('span', { style: 'display:flex;align-items:center;gap:8px' }, t.unread ? h('i', { class: 'unread-dot', 'aria-label': 'Новый ответ' }) : null, h('span', { class: 'badge ' + c }, st)),
+        onClick: () => UI.nav.push(() => ticketView(t.id)) });
+      return r;
+    })));
+  }).catch(e => list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return h('div', {}, UI.nav.backLink('Профиль'), h('h1', { class: 'large-title' }, 'Поддержка'),
+    h('div', { style: 'margin:0 var(--gutter) 24px' }, h('button', { class: 'btn', type: 'button', onclick: () => UI.nav.push(() => newTicketView(null)) }, icon('plus'), 'Новое обращение')),
+    list,
+    h('div', { class: 'group-f', style: 'margin:-18px var(--gutter) 30px' }, 'Можно писать и прямо в чат с ботом — сообщение попадёт в открытое обращение.'));
+}
+
+function newTicketView(serverId) {
+  let sid = serverId;
+  const subj = h('input', { type: 'text', maxlength: 120, placeholder: 'Коротко о проблеме', 'aria-label': 'Тема', style: 'text-align:left' });
+  const text = h('textarea', { rows: 5, maxlength: 4000, placeholder: 'Опишите, что случилось и что уже пробовали', 'aria-label': 'Сообщение' });
+  const go = h('button', { class: 'btn', type: 'button' }, 'Отправить');
+  go.onclick = UI.busy(go, async () => {
+    if (!text.value.trim()) { await UI.alert('Опишите проблему, чтобы мы могли помочь.'); return; }
+    const r = await UI.run(() => api('/tickets', 'POST', { subject: subj.value, text: text.value, server_id: sid }), 'Обращение отправлено');
+    if (!r) return;
+    UI.nav.stack.pop(); UI.nav.push(() => ticketView(r.id));
+  });
+  const servers = D.servers.filter(x => x.status !== 'provisioning');
+  return h('div', {}, UI.nav.backLink('Назад'), h('h1', { class: 'large-title' }, 'Новое обращение'),
+    servers.length ? h('div', {}, h('div', { class: 'group-h' }, 'Сервер'),
+      UI.chips([{ value: null, label: 'Общий вопрос' }, ...servers.map(x => ({ value: x.id, flag: x.flag, label: x.name }))], sid, v => { sid = v; })) : null,
+    group(null, [h('label', { class: 'field' }, subj), h('label', { class: 'field stack' }, text)], 'Ответим здесь и пришлём уведомление в чат с ботом.'),
+    h('div', { style: 'margin:0 var(--gutter) 30px' }, go));
+}
+
+function ticketView(id) {
+  const v = h('div', {}, UI.nav.backLink('Поддержка'), group(null, [h('div', { class: 'skeleton' })]));
+  const draw = t => {
+    const [st, c] = TST[t.status] || [t.status, ''];
+    const body = [UI.nav.backLink('Поддержка'),
+      h('div', { style: 'margin:4px var(--gutter) 14px' },
+        h('div', { style: 'font-size:22px;font-weight:700;letter-spacing:.35px;line-height:28px' }, t.subject),
+        h('div', { style: 'display:flex;gap:8px;align-items:center;margin-top:6px;color:var(--hint);font-size:13px' },
+          h('span', { class: 'badge ' + c }, st), '№ ' + t.id, t.server ? h('span', {}, t.server.flag + ' ' + t.server.name) : null)),
+      UI.chat(t.messages, ['client'], { admin: 'Поддержка' })];
+    if (t.status !== 'closed') body.push(h('div', { style: 'text-align:center;margin:4px 0 16px' },
+      h('button', { class: 'btn plain', type: 'button', style: 'width:auto;display:inline-flex', onclick: async () => {
+        const ok = await UI.ask({ title: 'Вопрос решён?', message: 'Закроем обращение. Если что-то понадобится — просто напишите снова.', buttons: [{ id: 'y', text: 'Да, закрыть' }] });
+        if (ok && await UI.run(() => api(`/tickets/${id}/close`, 'POST'), 'Обращение закрыто') !== undefined) reload();
+      } }, 'Вопрос решён')));
+    body.push(UI.composer(t.status === 'closed' ? 'Написать снова' : 'Сообщение', async txt => {
+      const r = await UI.run(() => api(`/tickets/${id}/messages`, 'POST', { text: txt }));
+      if (r === undefined) return false;
+      await reload(); return true;
+    }));
+    v.replaceChildren(...body);
+    document.body.classList.add('has-composer');
+    requestAnimationFrame(() => window.scrollTo(0, document.body.scrollHeight));
+  };
+  const reload = () => api('/tickets/' + id).then(draw).catch(e => v.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть'), e.message)));
+  reload();
+  return v;
+}
+
+// ───────── Профиль ─────────
+let lastBal = null;
+function profileView() {
+  const u = D.user;
+  const wrap = h('div', {},
+    h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Профиль'), h('div', { style: 'margin-bottom:16px' }, adminBtn())),
+    h('div', { class: 'user-card' }, UI.avatar(u, 56, myAvatarSrc),
+      h('div', { class: 'who' }, h('b', {}, displayName(u)),
+        h('button', { class: 'id', type: 'button', 'aria-label': 'Скопировать ID', onclick: () => UI.copy(String(u.id), 'ID') },
+          h('span', {}, (u.username ? '@' + u.username + ' · ' : '') + 'ID ' + u.id), icon('copy')))));
+
+  // баланс — главный элемент
+  const renewing = D.servers.filter(s => s.status === 'active' && s.auto_renew && s.expires_at).sort((a, b) => new Date(a.expires_at) - new Date(b.expires_at));
+  const next = renewing[0];
+  const bigEl = h('div', { class: 'big', 'aria-live': 'polite' });
+  UI.tween(bigEl, lastBal, D.balance_rub, v => rub(v), 420); lastBal = D.balance_rub;
+  const tags = h('div', { class: 'tags' });
+  if (D.autopay.available) tags.append(h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') }, h('i', { class: 'dot ' + (D.autopay.enabled ? 'ok' : '') }), D.autopay.enabled ? 'Автоплатёж включён' : 'Автоплатёж выключен'));
+  if (D.discount) tags.append(h('span', { class: 'badge accent' }, icon('sparkle'), `Скидка ${D.discount.pct}% · ${D.discount.code}`));
+  if (next && D.balance_rub < next.price_rub && !(D.autopay.available && D.autopay.enabled)) tags.append(h('span', { class: 'badge warn' }, `Не хватает ${rub(Math.ceil(next.price_rub - D.balance_rub))} на продление`));
+  tags.querySelectorAll('svg').forEach(s => { s.style.width = '12px'; s.style.height = '12px'; });
+  wrap.append(h('div', { class: 'hero-card' },
+    h('div', { class: 'lbl' }, icon('wallet'), 'Баланс'), bigEl,
+    h('div', { class: 'meta' }, next ? h('span', {}, 'Ближайшее продление ', h('b', {}, shortDate(next.expires_at)), ' · ', h('b', {}, rub(next.price_rub)), ' — ' + next.name)
+      : 'С баланса оплачиваются покупка и продление серверов.'),
+    tags));
+
+  // пригласить друга (карточка появится, когда загрузятся данные; если программа выключена — не показываем)
+  const refBox = h('div');
+  wrap.append(refBox);
+  api('/referral').then(r => { if (r.enabled) refBox.replaceChildren(referralCard(r)); }).catch(() => {});
+
+  // пополнение
+  const presets = [300, 500, 1000, 2000, 3000, 5000].filter(a => a >= D.cfg.min_topup_rub && a <= D.cfg.max_topup_rub);
+  let amount = topupPrefill || presets[1] || presets[0] || D.cfg.min_topup_rub;
+  topupPrefill = null;
+  let save = false;
+  const input = h('input', { type: 'number', inputmode: 'numeric', min: D.cfg.min_topup_rub, max: D.cfg.max_topup_rub, 'aria-label': 'Сумма пополнения', placeholder: 'Другая сумма' });
+  input.value = amount;
+  const chips = h('div', { class: 'amount-chips', role: 'group', 'aria-label': 'Сумма' }, presets.map(a => h('button', { type: 'button', 'aria-pressed': String(a === amount), onclick: () => { amount = a; input.value = a; sync(); UI.haptic('select'); } }, a.toLocaleString('ru-RU') + ' ₽')));
+  const go = h('button', { class: 'btn', type: 'button' });
+  let shown = null;
+  function sync() {
+    [...chips.children].forEach((c, i) => c.setAttribute('aria-pressed', String(presets[i] === amount)));
+    const ok = amount >= D.cfg.min_topup_rub && amount <= D.cfg.max_topup_rub;
+    go.disabled = !ok;
+    if (ok) { go.textContent = ''; const n = h('span'); go.append('Пополнить на ', n); UI.tween(n, shown, amount, v => rub(v), 200); shown = amount; }
+    else go.textContent = amount > D.cfg.max_topup_rub ? 'Не больше ' + rub(D.cfg.max_topup_rub) : 'От ' + rub(D.cfg.min_topup_rub);
+  }
+  input.addEventListener('input', () => { amount = Math.round(+input.value || 0); sync(); });
+  go.onclick = UI.busy(go, async () => { const r = await UI.run(() => api('/topup', 'POST', { amount_rub: amount, save_method: save })); if (r) UI.openLink(r.url); });
+  sync();
+  let saveRow = null;
+  if (D.autopay.available) {
+    const box = h('span', { class: 'cbox', role: 'checkbox', 'aria-checked': 'false' }, icon('check'));
+    saveRow = h('div', { class: 'save-card' },
+      h('button', { type: 'button', 'aria-label': 'Сохранить карту для автоплатежей', onclick: () => { save = !save; box.classList.toggle('on', save); box.setAttribute('aria-checked', String(save)); UI.haptic('select'); } }, box),
+      h('span', {}, 'Сохранить карту для автоплатежей. Соглашаюсь с ',
+        h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правилами автоплатежей'), '.'));
+  }
+  wrap.append(UI.section('Пополнение', h('div', { class: 'card' }, chips, h('label', { class: 'input' }, input, h('span', { class: 'unit' }, '₽')), saveRow || h('div', { style: 'height:14px' }), go,
+    h('div', { class: 'pay-note' }, icon('shield'), 'Карта или СБП через ЮKassa')),
+    `От ${rub(D.cfg.min_topup_rub)} до ${rub(D.cfg.max_topup_rub)}. После оплаты вернитесь сюда — баланс обновится сам.`));
+
+  // промокод
+  const code = h('input', { type: 'text', placeholder: 'Промокод', autocapitalize: 'characters', spellcheck: false, 'aria-label': 'Промокод' });
+  const apply = h('button', { class: 'btn small tinted', type: 'button' }, 'Применить');
+  apply.onclick = UI.busy(apply, async () => {
+    if (!code.value.trim()) return;
+    const r = await UI.run(() => api('/promo', 'POST', { code: code.value }));
+    if (!r) return; UI.toast(r.message); await refresh();
+  });
+  code.addEventListener('keydown', e => { if (e.key === 'Enter') apply.click(); });
+  wrap.append(UI.section('Промокод', h('div', { class: 'card', style: 'padding:10px' }, h('label', { class: 'input' }, icon('gift'), code, apply)),
+    D.discount ? `Активна скидка ${D.discount.pct}% (${D.discount.code}) на следующую покупку сервера.` : 'Бонус зачислится на баланс, скидка — применится к следующей покупке.'));
+
+  // способы оплаты и автоплатёж
+  const methodsBox = h('div', {}, UI.section('Способы оплаты', h('div', { class: 'list' }, h('div', { class: 'skeleton' }))));
+  const autoBox = h('div');
+  wrap.append(methodsBox, autoBox);
+  const paintMethods = ms => {
+    const rows = ms.length ? ms.map(m => row({
+      icon: 'card', tile: '#438CFF', title: m.title || ('Карта *' + (m.last4 || '')), sub: m.expiry ? 'Действует до ' + m.expiry : 'Сохранена для автоплатежей', chevron: false,
+      right: h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
+        const ok = await UI.ask({ title: 'Удалить карту?', message: `${m.title} больше не будет использоваться для автоплатежей.`, buttons: [{ id: 'y', text: 'Удалить', type: 'destructive' }] });
+        if (!ok) return;
+        if (await UI.run(() => api('/methods/' + m.id, 'DELETE'), 'Карта удалена') !== undefined) await refresh();
+      } }, 'Удалить'),
+    })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет сохранённых карт', sub: D.autopay.available ? 'Отметьте «Сохранить карту» при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
+    rows.push(row({ icon: 'trash', tile: '#FF6B6B', title: 'Удалить все способы оплаты', cls: 'destructive', onClick: async () => {
+      const ok = await UI.ask({ title: 'Удалить все способы оплаты?', message: ms.length ? 'Все сохранённые карты будут отвязаны, автоплатежи выключатся.' : 'Сохранённых способов оплаты сейчас нет. Отвязать всё равно?', buttons: [{ id: 'y', text: 'Удалить все', type: 'destructive' }] });
+      if (!ok) return;
+      const r = await UI.run(() => api('/methods', 'DELETE'));
+      if (r === undefined) return;
+      UI.toast(r.deleted ? `Удалено: ${r.deleted}` : 'Сохранённых способов нет'); await refresh();
+    } }));
+    methodsBox.replaceChildren(group('Способы оплаты', rows));
+    const status = h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') });
+    const paintStatus = () => { status.className = 'badge ' + (D.autopay.enabled ? (ms.length ? 'ok' : 'warn') : ''); status.textContent = D.autopay.enabled ? (ms.length ? 'Включён' : 'Нет карты') : 'Выключен'; };
+    paintStatus();
+    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? 'Карта ' + (ms[0].title || '') : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
+      const r = await UI.run(() => api('/autopay', 'POST', { value: val }), val ? 'Автоплатёж включён' : 'Автоплатёж выключен');
+      if (r === undefined) { inp.checked = !val; return; }
+      D.autopay.enabled = r.enabled; paintStatus();
+    }, 'Автоплатёж')) });
+    autoBox.replaceChildren(group('Автоплатёж', [auto],
+      h('span', {}, 'Спишем только недостающую сумму для продления сервера с включённым автопродлением и сразу пришлём уведомление. ',
+        h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правила автоплатежей'))));
+  };
+  api('/methods').then(paintMethods).catch(() => paintMethods([]));
+
+  // история — последние операции
+  const histBox = h('div', { class: 'list' }, h('div', { class: 'skeleton' }));
+  wrap.append(UI.section('История операций', histBox));
+  api('/history').then(items => {
+    const last = items.slice(0, 3);
+    histBox.replaceChildren(...(last.length ? last.map(txRow) : [row({ icon: 'clock', tile: '#A3A8B4', title: 'Операций пока нет', sub: 'Здесь появятся пополнения и покупки' })]),
+      ...(items.length ? [row({ title: 'Вся история', cls: 'accent', chevron: true, onClick: () => UI.nav.push(historyView) })] : []));
+  }).catch(() => histBox.replaceChildren(row({ title: 'Вся история', cls: 'accent', chevron: true, onClick: () => UI.nav.push(historyView) })));
+
+  // разделы
+  wrap.append(group('Ещё', [
+    row({ icon: 'lifebuoy', tile: '#34D399', title: 'Поддержка', sub: 'Ответим в приложении и в чате', right: D.tickets_unread ? h('span', { class: 'count' }, String(D.tickets_unread)) : null, onClick: () => UI.nav.push(ticketsView) }),
+    row({ icon: 'sparkle', tile: '#C084FC', title: 'Оформление', sub: 'Фон и сезонные эффекты', onClick: () => UI.nav.push(appearanceView) }),
+    row({ icon: 'doc', tile: '#A3A8B4', title: 'Документы', sub: 'Оферта, правила, конфиденциальность', onClick: () => UI.nav.push(documentsView) }),
+  ], `Клиент с ${UI.date(u.since).split(',')[0]}.`));
+  return wrap;
+}
+
+/* Карточка реферальной программы в профиле. */
+function referralCard(r) {
+  const terms = [`${r.pct}% с оплат друга` + (r.months ? ` · ${r.months} мес.` : ''), r.welcome_rub ? `другу +${rub(r.welcome_rub)}` : null].filter(Boolean).join(' · ');
+  const name = D.service_name || 'сервис';
+  const how = () => UI.alert(
+    'Как это работает\n\n1. Поделитесь своей ссылкой.\n2. Друг откроет бота по ссылке и пополнит баланс' + (r.welcome_rub ? ` — получит ${rub(r.welcome_rub)} на баланс после первой оплаты` : '') + '.\n' +
+    `3. Вы получаете ${r.pct}% с каждого его пополнения` + (r.months ? ` в течение ${r.months} мес.` : '') + '.\n\nБонусы зачисляются на баланс и тратятся на серверы. Считаются только новые пользователи и реальные оплаты.');
+  const shareText = `Арендую VPS в ${name}: сервер за пару минут, оплата картой или через СБП.` + (r.welcome_rub ? ` По моей ссылке — ${rub(r.welcome_rub)} на баланс после первой оплаты.` : '');
+  const link = r.bot || r.web;
+  const share = () => {
+    const url = 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(shareText);
+    UI.haptic('light');
+    try { if (UI.tg) return UI.tg.openTelegramLink(url); } catch (e) {}
+    if (navigator.share) navigator.share({ text: shareText, url: link }).catch(() => {}); else UI.copy(link, 'Ссылка');
+  };
+  const pct = r.invited ? Math.max(4, Math.round(r.active / r.invited * 100)) : 0;
+  const earned = h('b');
+  UI.tween(earned, 0, Math.round(r.earned_rub), v => '+' + rub(v), 500);
+  return h('div', { class: 'ref-card rise' },
+    h('div', { class: 'head' }, h('span', { class: 'icon-tile', style: '--tile:#34D399' }, icon('users')),
+      h('div', {}, h('b', {}, 'Пригласите друзей'), h('span', {}, terms)),
+      h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Как это работает', onclick: how }, icon('info'))),
+    h('div', { class: 'earned' }, earned, h('span', {}, 'заработано')),
+    h('div', { class: 'bar' }, h('i', { style: `width:${pct}%` })),
+    h('div', { class: 'cnt' }, r.invited ? `${r.active} ${UI.plural(r.active, 'активный', 'активных', 'активных')} из ${r.invited} ${UI.plural(r.invited, 'приглашённого', 'приглашённых', 'приглашённых')}` : 'Пока никого — поделитесь ссылкой'),
+    h('div', { class: 'two' },
+      h('button', { class: 'btn primary', type: 'button', onclick: share }, icon('share'), 'Telegram'),
+      h('button', { class: 'btn', type: 'button', onclick: () => UI.copy(r.web || link, 'Ссылка') }, icon('link'), 'Ссылка')));
+}
+
+/* Операция истории: иконка по типу, сумма со знаком, ссылка на чек. */
+const TX_ICON = { topup: ['arrowDown', '#34D399'], autopay: ['bolt', '#34D399'], purchase: ['server', '#438CFF'], renew: ['renew', '#438CFF'],
+  upgrade: ['stack', '#8B8CFF'], upgrade_settle: ['stack', '#8B8CFF'], change_ip: ['globe', '#5BB8F0'], promo: ['gift', '#FF7A9A'], ref_bonus: ['users', '#34D399'], ref_welcome: ['gift', '#34D399'], admin_adjust: ['wallet', '#A3A8B4'] };
+function txRow(x) {
+  const [ic, col] = TX_ICON[x.kind] || (String(x.kind).startsWith('refund') ? ['renew', '#34D399'] : ['wallet', '#A3A8B4']);
+  const inc = x.amount_rub > 0;
+  return h('div', { class: 'tx' }, h('span', { class: 'icon-tile', style: '--tile:' + col }, icon(ic)),
+    h('div', { class: 'grow' }, h('div', { class: 't' }, x.title),
+      h('div', { class: 's' }, [x.detail, new Date(x.created).toLocaleString('ru-RU', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })].filter(Boolean).join(' · '))),
+    h('div', { class: 'amt' + (inc ? ' in' : '') }, (inc ? '+' : '−') + rub(Math.abs(x.amount_rub)),
+      x.receipt_url ? h('a', { href: x.receipt_url, onclick: e => { e.preventDefault(); UI.openLink(x.receipt_url); } }, 'Чек') : null));
+}
+
+function documentsView() {
+  const u = D.user;
+  return h('div', {}, UI.nav.backLink('Профиль'), h('h1', { class: 'large-title' }, 'Документы'),
+    group(null, [...D.consent.docs, { key: 'autopay', title: 'Правила автоплатежей' }].map(d => row({ icon: 'doc', tile: '#A3A8B4', title: d.title, onClick: () => UI.nav.push(() => docView(d.key)) })),
+      `Вы приняли документы${D.consent.date ? ' в редакции от ' + D.consent.date : ''}. Клиент с ${UI.date(u.since).split(',')[0]}.`),
+    group(null, [row({ title: 'Отозвать согласие на обработку данных', cls: 'destructive', onClick: async () => {
+      const ok = await UI.ask({ title: 'Отозвать согласие?', message: 'Доступ к сервису закроется, автоплатежи выключатся. Мы удалим ваши данные в течение 30 дней, кроме тех, что нужно хранить по закону. Действующие серверы лучше сначала удалить.', buttons: [{ id: 'y', text: 'Отозвать', type: 'destructive' }] });
+      if (!ok) return;
+      if (await UI.run(() => api('/consent/revoke', 'POST'), 'Согласие отозвано') !== undefined) { await load(); UI.nav.reset(); }
+    } })]));
+}
+
+function historyView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('/history').then(items => {
+    if (!items.length) { list.replaceChildren(h('div', { class: 'empty' }, icon('clock'), h('b', {}, 'Операций пока нет'), 'Здесь появятся пополнения, покупки и продления.')); return; }
+    const byDay = {};
+    items.forEach(x => { const d = new Date(x.created).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' }); (byDay[d] = byDay[d] || []).push(x); });
+    list.replaceChildren(...Object.entries(byDay).map(([day, xs]) => group(day, xs.map(txRow))));
+  }).catch(e => list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return h('div', {}, UI.nav.backLink('Профиль'), h('h1', { class: 'large-title' }, 'История'), list);
+}
+
+// ───────── обновление ─────────
+async function refresh() {
+  try { await load(); } catch (e) { return; }
+  if (tab !== 'new' || UI.nav.stack.length) UI.nav.refresh();
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden && D) refresh(); });
+setInterval(() => { if (D && !document.hidden && !D.consent.needed && D.servers.some(s => s.status === 'provisioning') && tab === 'servers') refresh(); }, 10000);
+
+(async () => {
+  renderTabbar();
+  UI.nav.mount(document.getElementById('root'), root);
+  try { await load(); }
+  catch (e) {
+    document.getElementById('root').replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть кабинет'), e.message));
+    return;
+  }
+  UI.nav.refresh();
+  if (!D.consent.needed) {
+    loadCatalog().catch(() => {});
+    const q = new URLSearchParams(location.search);
+    if (q.get('ticket')) { goTab('profile'); UI.nav.push(ticketsView); UI.nav.push(() => ticketView(+q.get('ticket'))); }
+    else if (q.get('tickets')) { goTab('profile'); UI.nav.push(ticketsView); }
+  }
+})();
+</script>
+</body>
+</html>
