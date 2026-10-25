@@ -153,6 +153,18 @@
   .preset .pprice small { font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
   .preset[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .16), rgba(67, 140, 255, .03) 70%), var(--cell); box-shadow: 0 12px 30px -16px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
 
+  .period-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .period-grid button {
+    display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 11px 4px 10px; border: 0; cursor: pointer; color: inherit; min-width: 0;
+    background: var(--cell); border-radius: var(--r-md); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
+    transition: transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), background var(--t) var(--ease);
+  }
+  .period-grid button:active { transform: scale(.95); }
+  .period-grid b { font-size: 15px; font-weight: 600; white-space: nowrap; }
+  .period-grid span { font-size: 12px; color: var(--hint); white-space: nowrap; }
+  .period-grid span.save { color: var(--ok); font-weight: 600; }
+  .period-grid button[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .18), rgba(67, 140, 255, .04) 70%), var(--cell); box-shadow: 0 10px 26px -14px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
+
   details.all-plans { margin-top: 10px; }
   details.all-plans summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--accent-text); padding: 8px; }
   details.all-plans summary::-webkit-details-marker { display: none; }
@@ -206,7 +218,7 @@ const ST = {
 };
 let D = null, CAT = null, tab = 'servers';
 const revealed = new Set();
-const B = { loc: null, cpu: null, ram: null, disk: null, os: null, password: '' };
+const B = { loc: null, cpu: null, ram: null, disk: null, os: null, password: '', period: '1m' };
 const LIVE = {}; // id → { power_status, conn_info, at }
 const PW_RE = /^[\x21-\x7e]{8,64}$/;
 let topupPrefill = null;
@@ -536,6 +548,13 @@ function presetsFor(loc) {
   return idx.map((k, i) => ({ ...o[k], pname: PRESET_NAMES[i] }));
 }
 const discounted = full => D.discount ? Math.max(0, Math.ceil(full * (100 - D.discount.pct) / 100)) : full;
+const PERIOD_LABEL = { '1m': '1 мес', '3m': '3 мес', '6m': '6 мес', '1y': '1 год' };
+const periodOpts = () => (CAT && CAT.periods && CAT.periods.length ? CAT.periods : [{ code: '1m', months: 1, pct: 0 }]);
+/* Итог за выбранный срок: скидка за срок на весь срок, промокод — на первый месяц (как на сервере). */
+function periodTotal(month, opt) {
+  const full = opt.months > 1 ? Math.ceil(month * opt.months * (100 - opt.pct) / 100) : month;
+  return Math.max(0, full - (month - discounted(month)));
+}
 let lastPrice = null;
 
 function builderView() {
@@ -608,13 +627,31 @@ function builderView() {
     update();
   }
 
-  // 4. система
+  // 4. срок аренды
+  const opts = periodOpts();
+  if (!opts.some(o => o.code === B.period)) B.period = '1m';
+  if (opts.length > 1) {
+    const grid = h('div', { class: 'period-grid', role: 'group', 'aria-label': 'Срок аренды' });
+    opts.forEach(o => {
+      const b = h('button', { type: 'button', 'aria-pressed': String(o.code === B.period), onclick: () => {
+        if (B.period === o.code) return;
+        B.period = o.code; UI.haptic('select');
+        [...grid.children].forEach(c => c.setAttribute('aria-pressed', String(c === b)));
+        update();
+      } }, h('b', {}, PERIOD_LABEL[o.code]), h('span', { class: o.pct ? 'save' : '' }, o.pct ? `−${o.pct}%` : 'помесячно'));
+      grid.append(b);
+    });
+    wrap.append(UI.section('Срок аренды', grid,
+      'При оплате сразу за несколько месяцев — скидка. После срока сервер продлевается помесячно по обычной цене.'));
+  }
+
+  // 5. система
   const osRow = row({ icon: 'disc', tile: '#8B8CFF', title: 'Система', detail: osName(B.os), onClick: () => pickOS(B.os, 'Система', code => { B.os = code; osRow.querySelector('.d').textContent = osName(code); update(); }) });
   const pwRow = row({ icon: 'key', tile: '#FBBF5B', title: 'Пароль root', detail: B.password ? 'Свой' : 'Сгенерируем', onClick: () => passwordSheet(pwRow) });
-  wrap.append(group('Система', [osRow, pwRow, row({ icon: 'clock', tile: '#34D399', title: 'Срок', detail: '30 дней' })]));
+  wrap.append(group('Система', [osRow, pwRow]));
 
-  // 5. панель оплаты
-  const priceNum = h('span'), priceB = h('b', {}, priceNum, h('small', {}, ' / мес')), priceS = h('span');
+  // 6. панель оплаты
+  const priceNum = h('span'), priceUnit = h('small', {}, ' / мес'), priceB = h('b', {}, priceNum, priceUnit), priceS = h('span');
   const pay = h('button', { class: 'btn', type: 'button' });
   wrap.append(h('div', { class: 'buybar' }, h('div', { class: 'price' }, priceB, priceS), pay));
 
@@ -636,15 +673,19 @@ function builderView() {
     note.className = 'match-note' + (over.length ? '' : ' ok');
     note.textContent = over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : 'Точно под ваши параметры.';
     const full = m.price_kop / 100;
-    const price = discounted(full);
+    const opt = periodOpts().find(o => o.code === B.period) || periodOpts()[0];
+    const price = periodTotal(full, opt);
     if (lastPrice !== null && lastPrice !== price) UI.bump(priceB);
     UI.tween(priceNum, lastPrice, price, v => rub(v));
     lastPrice = price;
-    priceS.replaceChildren(D.discount ? h('span', {}, h('s', {}, rub(full)), ` −${D.discount.pct}% · дальше ${rub(full)}`) : `${loc.flag} ${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
+    priceUnit.textContent = opt.months > 1 ? ' за ' + PERIOD_LABEL[opt.code] : ' / мес';
+    const plain = full * opt.months;
+    if (price < plain) priceS.replaceChildren(h('span', {}, h('s', {}, rub(plain)), opt.months > 1 ? ` ≈ ${rub(Math.round(price / opt.months))} / мес` : ` −${D.discount.pct}% · дальше ${rub(full)}`));
+    else priceS.replaceChildren(`${loc.flag} ${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
     pay.disabled = false;
     if (D.balance_rub >= price) {
       pay.textContent = 'Оплатить';
-      pay.onclick = UI.busy(pay, () => buy(m, price));
+      pay.onclick = UI.busy(pay, () => buy(m, price, opt));
     } else {
       const need = Math.max(Math.ceil(price - D.balance_rub), D.cfg.min_topup_rub);
       pay.textContent = 'Пополнить на ' + rub(need);
@@ -679,15 +720,17 @@ function passwordSheet(pwRow) {
   });
 }
 
-async function buy(m, price) {
+async function buy(m, price, opt) {
   const loc = CAT.locations.find(l => l.code === B.loc);
+  opt = opt || { code: '1m', months: 1, pct: 0 };
+  const term = opt.months > 1 ? `${PERIOD_LABEL[opt.code]} (дальше продление помесячно — ${rub(m.price_kop / 100)})` : '30 дней';
   const ok = await UI.ask({
     title: 'Оплатить сервер?',
-    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.\n${rub(price)} за 30 дней спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% по промокоду).` : '.'),
+    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.\n${rub(price)} за ${term} спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% на первый месяц по промокоду).` : '.'),
     buttons: [{ id: 'y', text: 'Оплатить ' + rub(price) }],
   });
   if (!ok) return;
-  const r = await UI.run(() => api('/servers', 'POST', { idx: m.idx, location: B.loc, os: B.os, password: B.password || null }));
+  const r = await UI.run(() => api('/servers', 'POST', { idx: m.idx, location: B.loc, os: B.os, password: B.password || null, period: opt.code }));
   if (r === undefined) return;
   B.password = '';
   UI.toast('Оплачено. Сервер создаётся');

@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Integer, String, Text, UniqueConstraint, inspect, text, update
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, inspect, text, update
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -115,6 +115,8 @@ class Server(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     # сколько клиент фактически заплатил за текущий период (со скидкой); 0 — равно price_kop
     period_paid_kop: Mapped[int] = mapped_column(Integer, default=0)
+    # сколько месяцев покрывает period_paid_kop (1 — помесячно; 3/6/12 — покупка на срок; дробное после досрочного продления)
+    period_months: Mapped[float] = mapped_column(Float, default=1.0)
 
 
 class Tx(Base):

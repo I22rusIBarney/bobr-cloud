@@ -46,7 +46,7 @@ def server_dict(srv: Server, refund_pct: float) -> dict:
         "days_left": None if left is None else round(left, 1),
         "price_rub": srv.price_kop / 100,
         "auto_renew": srv.auto_renew,
-        "refund_rub": svc.refund_amount(svc.paid_base(srv), srv.expires_at, refund_pct) / 100,
+        "refund_rub": svc.refund_amount(svc.paid_base(srv), srv.expires_at, refund_pct, svc.paid_months(srv)) / 100,
     }
 
 
@@ -78,6 +78,7 @@ class BuyIn(BaseModel):
     location: str
     os: str
     password: str | None = None  # пусто — Astra сгенерирует сама
+    period: str = "1m"
 
 
 class RenameIn(BaseModel):
@@ -279,7 +280,10 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 }
             )
         oses = cat.get("os", [])
-        return {"locations": out, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses}}
+        async with session() as s:
+            cfg = await load_settings(s)
+        return {"locations": out, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
+                "periods": svc.period_options(cfg, cat)}
 
     @r.post("/topup")
     async def topup(p: TopupIn, m: dict = Depends(me_ok)):
@@ -295,7 +299,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     @r.post("/servers")
     async def buy(p: BuyIn, m: dict = Depends(me_ok)):
         try:
-            srv = await svc.buy_server(ctx, m["id"], p.idx, p.location, p.os, p.password)
+            srv = await svc.buy_server(ctx, m["id"], p.idx, p.location, p.os, p.password, p.period)
         except UserError as ex:
             raise wrap(ex)
         return {"id": srv.id, "name": srv.name}

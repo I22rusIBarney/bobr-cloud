@@ -309,9 +309,14 @@ async def buy_os(c: CallbackQuery):
     await show(c, "⚙️ <b>Операционная система</b>\n\nВыберите образ — сменить его можно позже переустановкой.", b.as_markup())
 
 
+PERIOD_LABEL = {"1m": "1 мес", "3m": "3 мес", "6m": "6 мес", "1y": "1 год"}
+
+
 @router.callback_query(F.data.startswith("b:o:"))
 async def buy_confirm(c: CallbackQuery):
-    _, _, loc, idx, os_ = c.data.split(":")
+    parts = c.data.split(":")  # b:o:loc:idx:os[:period]
+    loc, idx, os_ = parts[2], parts[3], parts[4]
+    period = parts[5] if len(parts) > 5 else "1m"
     offs = {o["idx"]: o for o in await svc.offers(ctx(), loc, c.from_user.id)}
     o = offs.get(int(idx))
     if not o:
@@ -319,22 +324,41 @@ async def buy_confirm(c: CallbackQuery):
         return
     async with session() as s:
         user = await s.get(User, c.from_user.id)
-    pay_kop = svc.apply_discount(o["price_kop"], user.promo_discount_pct or 0)
+        cfg = await load_settings(s)
+    cat = await ctx().catalog()
+    opts = svc.period_options(cfg, cat)
+    opt = next((x for x in opts if x["code"] == period), opts[0])
+    period = opt["code"]
+    month = o["price_kop"]
+    full = svc.period_price(month, opt["months"], opt["pct"])
+    promo_off = month - svc.apply_discount(month, user.promo_discount_pct or 0)
+    pay_kop = max(0, full - promo_off)
     enough = user.balance_kop >= pay_kop
-    name = loc_name(await ctx().catalog(), loc)
+    name = loc_name(cat, loc)
     price = f"<b>{rub(pay_kop)}</b>"
-    if pay_kop != o["price_kop"]:
-        price += f" <s>{rub(o['price_kop'])}</s> · −{user.promo_discount_pct}% по промокоду, дальше {rub(o['price_kop'])}"
+    notes = []
+    if opt["months"] > 1 and opt["pct"]:
+        notes.append(f"−{opt['pct']}% за срок")
+    if promo_off:
+        notes.append(f"−{user.promo_discount_pct}% на первый месяц по промокоду")
+    if pay_kop != month * opt["months"]:
+        price += f" <s>{rub(month * opt['months'])}</s>"
+    term = "30 дней" if opt["months"] == 1 else f"{PERIOD_LABEL[period]}, дальше продление помесячно — {rub(month)}"
     text = (
         "🛒 <b>Подтверждение заказа</b>\n\n"
         f"🌍 {svc.flag(loc)} {e(name)}\n"
         f"🖥 {o['cpu']} vCPU · {o['ram']} ГБ RAM · {o['disk']} ГБ NVMe\n"
         f"⚙️ {e(svc.os_label(os_))}\n"
-        f"🔄 30 дней, автопродление можно отключить\n\n"
-        f"💳 К оплате: {price}\n"
+        f"🔄 {term}\n\n"
+        f"💳 К оплате: {price}" + (f"\n<i>{' · '.join(notes)}</i>" if notes else "") + "\n"
         f"💰 Баланс: {rub(user.balance_kop)}"
     )
-    rows = [[(f"✅ Оплатить {rub(pay_kop)}", f"b:go:{loc}:{idx}:{os_}")]] if enough else [[("💳 Пополнить баланс", "m:topup")]]
+    rows = []
+    if len(opts) > 1:  # выбор срока: текущий отмечен галочкой
+        btns = [(("✅ " if x["code"] == period else "") + PERIOD_LABEL[x["code"]] + (f" −{x['pct']}%" if x["pct"] else ""),
+                 f"b:o:{loc}:{idx}:{os_}:{x['code']}") for x in opts]
+        rows += [btns[i:i + 2] for i in range(0, len(btns), 2)]
+    rows += [[(f"✅ Оплатить {rub(pay_kop)}", f"b:go:{loc}:{idx}:{os_}:{period}")]] if enough else [[("💳 Пополнить баланс", "m:topup")]]
     if not enough:
         text += f"\n\n⚠️ Не хватает <b>{rub(pay_kop - user.balance_kop)}</b> — пополните баланс."
     await show(c, text, kb_rows(rows, back=f"b:p:{loc}:{idx}"))
@@ -342,10 +366,12 @@ async def buy_confirm(c: CallbackQuery):
 
 @router.callback_query(F.data.startswith("b:go:"))
 async def buy_go(c: CallbackQuery):
-    _, _, loc, idx, os_ = c.data.split(":")
+    parts = c.data.split(":")  # b:go:loc:idx:os[:period]
+    loc, idx, os_ = parts[2], parts[3], parts[4]
+    period = parts[5] if len(parts) > 5 else "1m"
     await c.answer("⚡ Создаём сервер…")
     try:
-        srv = await svc.buy_server(ctx(), c.from_user.id, int(idx), loc, os_)
+        srv = await svc.buy_server(ctx(), c.from_user.id, int(idx), loc, os_, period=period)
     except UserError as ex:
         await show(c, f"❌ {e(ex)}", kb_rows([], back="m:home"))
         return
@@ -597,7 +623,7 @@ async def delete_confirm(c: CallbackQuery):
         return
     async with session() as s:
         cfg = await load_settings(s)
-    refund = svc.refund_amount(svc.paid_base(srv), srv.expires_at, cfg["refund_pct"])
+    refund = svc.refund_amount(svc.paid_base(srv), srv.expires_at, cfg["refund_pct"], svc.paid_months(srv))
     await show(
         c,
         f"⚠️ <b>Удалить сервер {e(srv.name)}?</b>\n\nСервер и все данные будут удалены безвозвратно.\n💰 Вернём на баланс: <b>{rub(refund)}</b> за неиспользованные дни.",

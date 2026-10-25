@@ -104,7 +104,8 @@ function rootView() {
   const low = ab.balance_rub !== undefined && ab.balance_rub < S.settings.low_balance_rub;
   v.append(group(null, [row({
     icon: 'stack', tile: low ? '#FF3B30' : '#5856D6', title: 'Баланс Astra',
-    sub: ab.error ? 'Не удалось получить' : `Скидка ${ab.discount_pct ?? '?'}%` + (ab.reseller && ab.reseller.next ? `, ${ab.reseller.next.discount_pct}% от ${ab.reseller.next.at_servers} серверов` : ''),
+    sub: ab.error ? 'Не удалось получить' : `Скидка ${ab.discount_pct ?? '?'}%` + (ab.reseller && ab.reseller.next
+      ? ` · до ${ab.reseller.next.discount_pct}% ещё ${Math.max(0, ab.reseller.next.at_servers - (ab.reseller.active_servers || 0))} ${UI.plural(Math.max(0, ab.reseller.next.at_servers - (ab.reseller.active_servers || 0)), 'сервер', 'сервера', 'серверов')}` : ''),
     detail: ab.error ? '—' : h('span', { style: low ? 'color:var(--danger);font-weight:600' : '' }, rub(ab.balance_rub)),
     onClick: () => { try { UI.tg ? UI.tg.openTelegramLink('https://t.me/astravpsbot') : UI.openLink('https://t.me/astravpsbot'); } catch (e) { UI.openLink('https://t.me/astravpsbot'); } },
   })], low ? 'Баланс ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot.' : 'Пополняется в @astravpsbot. Скидка растёт автоматически.'));
@@ -158,6 +159,13 @@ function rootView() {
     toggleRow('Чеки после пополнения', 'receipts_enabled', INT && !INT.nalog.configured ? 'Сначала подключите «Мой налог»' : null),
     toggleRow('Автоплатежи', 'autopay_available', 'Включайте, когда ЮKassa подключит рекуррентные платежи'),
   ], S.settings.maintenance ? 'Заказы закрыты: клиенты видят сообщение о паузе. Текущие серверы работают.' : 'Раздел «Способы оплаты» с удалением карт и переключателем автоплатежа клиенты видят всегда — это нужно для проверки ЮKassa.'));
+
+  v.append(group('Покупка на срок', [
+    toggleRow('Срок 3 / 6 / 12 месяцев', 'periods_enabled'),
+    numField('Скидка за 3 месяца', 'period_3m_pct', '%'),
+    numField('Скидка за 6 месяцев', 'period_6m_pct', '%'),
+    numField('Скидка за год', 'period_1y_pct', '%'),
+  ], 'Клиент платит сразу за срок со скидкой, сервер у Astra заказывается на этот срок. Продление после срока — помесячно по обычной цене. Скидка за срок не должна быть больше наценки, иначе продажа уйдёт в минус.'));
 
   v.append(group('Реферальная программа', [
     toggleRow('Включена', 'ref_enabled'),

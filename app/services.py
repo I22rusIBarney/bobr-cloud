@@ -151,6 +151,30 @@ def check_password(pw: str) -> str:
     return pw
 
 
+# ───────────────────────── сроки аренды ─────────────────────────
+
+PERIOD_MONTHS = {"1m": 1, "3m": 3, "6m": 6, "1y": 12}
+_PERIOD_KEY = {"3m": "period_3m_pct", "6m": "period_6m_pct", "1y": "period_1y_pct"}
+
+
+def period_options(cfg: dict, cat: dict) -> list[dict]:
+    """Сроки, доступные клиенту: из каталога Astra, со скидкой из админки. 1 месяц есть всегда."""
+    have = [p for p in (cat.get("periods") or ["1m"]) if p in PERIOD_MONTHS]
+    out = [{"code": "1m", "months": 1, "pct": 0}]
+    if cfg.get("periods_enabled", True):
+        for code in ("3m", "6m", "1y"):
+            if code in have:
+                out.append({"code": code, "months": PERIOD_MONTHS[code], "pct": int(cfg.get(_PERIOD_KEY[code], 0))})
+    return out
+
+
+def period_price(month_kop: int, months: int, pct: int) -> int:
+    """Цена за срок: месяц × N со скидкой за срок, вверх до рубля."""
+    if months <= 1:
+        return month_kop
+    return math.ceil(month_kop * months * (100 - max(0, pct)) / 100 / 100) * 100
+
+
 def apply_discount(price_kop: int, pct: int) -> int:
     """Цена со скидкой, округлённая вверх до рубля."""
     if pct <= 0:
@@ -158,7 +182,7 @@ def apply_discount(price_kop: int, pct: int) -> int:
     return max(0, math.ceil(price_kop * (100 - pct) / 100 / 100) * 100)
 
 
-async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, password: str | None = None) -> Server:
+async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, password: str | None = None, period: str = "1m") -> Server:
     if password:
         password = check_password(password)
     async with session() as s:
@@ -182,15 +206,20 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         if os_ not in cat.get("os", []):
             raise UserError("Эта ОС недоступна.")
 
-        price = sell_price_kop(cost_rub, no_markup_cfg(cfg) if user.no_markup else cfg)
+        opt = next((o for o in period_options(cfg, cat) if o["code"] == period), None)
+        if opt is None:
+            raise UserError("Этот срок аренды недоступен.")
+        months = opt["months"]
+        price = sell_price_kop(cost_rub, no_markup_cfg(cfg) if user.no_markup else cfg)  # цена месяца = цена продления
         discount_pct = max(0, min(100, int(user.promo_discount_pct or 0)))
-        charge = apply_discount(price, discount_pct)
+        # промокод — скидка на первый месяц, скидка за срок — на весь срок
+        charge = max(0, period_price(price, months, opt["pct"]) - (price - apply_discount(price, discount_pct)))
         if not await change_balance(s, tg_id, -charge, "purchase", f"{location}:{idx}"):
             raise UserError("Недостаточно средств на балансе. Пополните баланс и повторите.")
 
     name = f"vps-{secrets.token_hex(3)}"
     try:
-        resp = await ctx.astra.create(idx=idx, location=location, os=os_, name=name, period="1m", password=password or None)
+        resp = await ctx.astra.create(idx=idx, location=location, os=os_, name=name, period=period, password=password or None)
     except AstraError as ex:
         await _refund(tg_id, charge, "refund_create", name)
         if ex.status == 402:
@@ -218,9 +247,10 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         os=spec.get("os", os_),
         price_kop=price,
         period_paid_kop=charge,
-        cost_kop=cost_kop(charged) if charged is not None else cost_kop(cost_rub),
+        period_months=float(months),
+        cost_kop=cost_kop(charged / months) if charged is not None else cost_kop(cost_rub),
         status="provisioning",
-        expires_at=utcnow() + timedelta(days=int(resp.get("expires_in_days", 30))),
+        expires_at=utcnow() + timedelta(days=int(resp.get("expires_in_days", 30 * months))),
         auto_renew=cfg["auto_renew_default"],
     )
     async with session() as s:
@@ -263,11 +293,16 @@ async def renew_server(ctx: Ctx, server_id: int) -> Server:
     # сначала сдвигаем срок сами: если запрос состояния ниже не пройдёт, не продлим повторно
     async with session() as s:
         row = await s.get(Server, server_id)
-        base = row.expires_at if row.expires_at and row.expires_at > utcnow() else utcnow()
+        now = utcnow()
+        base = row.expires_at if row.expires_at and row.expires_at > now else now
+        # остаток уже оплаченного срока (важно при покупке на несколько месяцев) + новый месяц
+        months_old = float(row.period_months or 1.0)
+        left = min(max(0.0, (base - now).total_seconds() / 86400 / 30.0), months_old)
+        row.period_paid_kop = int(round(paid_base(row) * left)) + price
+        row.period_months = round(left + 1.0, 4)
         row.expires_at = base + timedelta(days=30)
         row.notified_stage = 0
-        row.renew_try_at = utcnow()
-        row.period_paid_kop = price
+        row.renew_try_at = now
         await s.commit()
     await refresh_server(ctx, srv.astra_id)  # точная дата от Astra, если доступна
     async with session() as s:
@@ -542,7 +577,7 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте список серверов через минуту.") from ex
-    refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"])
+    refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"], paid_months(srv))
     async with session() as s:
         row = await s.get(Server, server_id)
         row.status = "deleted"
@@ -554,16 +589,22 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
 
 
 def paid_base(srv: Server) -> int:
-    """База для возврата: сколько реально оплачено за период (учитывает скидку промокода)."""
+    """База для возврата — реально оплаченное за 30 дней текущего срока (учитывает промокод и скидку за срок)."""
     paid = int(srv.period_paid_kop or 0)
-    return min(srv.price_kop, paid) if paid > 0 else srv.price_kop
+    months = max(1.0, float(srv.period_months or 1.0))
+    return min(srv.price_kop, int(paid / months)) if paid > 0 else srv.price_kop
 
 
-def refund_amount(price_kop: int, expires_at, refund_pct: float) -> int:
+def paid_months(srv: Server) -> float:
+    return max(1.0, float(srv.period_months or 1.0))
+
+
+def refund_amount(price_kop: int, expires_at, refund_pct: float, max_months: float = 1.0) -> int:
+    """Возврат за неиспользованные дни: price_kop — оплачено за 30 дней, не больше оплаченного срока."""
     if not expires_at:
         return 0
     left_days = max(0.0, (expires_at - utcnow()).total_seconds() / 86400)
-    return int(price_kop * min(left_days / 30.0, 1.0) * refund_pct / 100.0)
+    return int(price_kop * min(left_days / 30.0, max(1.0, max_months)) * refund_pct / 100.0)
 
 
 # ───────────────────────── платежи ─────────────────────────
@@ -846,7 +887,7 @@ async def sync_servers(ctx: Ctx) -> None:
                 f"✅ <b>Сервер готов</b>\n\n🖥 <b>{html.escape(srv.name)}</b>\nIP: <code>{html.escape(str(srv.ip))}</code>\nЛогин: <code>root</code>\nПароль: <code>{html.escape(str(srv.root_password))}</code>\n\nУправление — в разделе «🖥 Мои серверы» или в личном кабинете.",
             )
         elif kind == "failed":
-            await _refund(srv.tg_id, paid_base(srv), "refund_failed", str(srv.astra_id))
+            await _refund(srv.tg_id, int(srv.period_paid_kop or 0) or paid_base(srv), "refund_failed", str(srv.astra_id))
             await ctx.notify(srv.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
         elif kind == "vanished":
             await ctx.alert_admin(f"⚠️ Сервер #{srv.astra_id} клиента {srv.tg_id} пропал из списка Astra.")

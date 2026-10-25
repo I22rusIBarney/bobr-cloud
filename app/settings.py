@@ -36,6 +36,11 @@ DEFAULTS: dict[str, Any] = {
     "docs_date": "",
     # поддержка провайдера, куда передаются технические проблемы (username без @)
     "provider_support": "AstraSupportroBot",
+    # покупка сразу на несколько месяцев: скидка клиенту за срок (продление потом — помесячно)
+    "periods_enabled": True,
+    "period_3m_pct": 5,
+    "period_6m_pct": 10,
+    "period_1y_pct": 15,
     # реферальная программа (бонусы только на баланс)
     "ref_enabled": True,
     "ref_pct": 10,               # % от каждого пополнения приглашённого — пригласившему
@@ -90,6 +95,8 @@ async def save_settings(s: AsyncSession, patch: dict[str, Any]) -> dict[str, Any
             raise ValueError("неизвестный фон")
         if k == "theme_effect" and v not in THEME_EFFECTS:
             raise ValueError("неизвестный эффект")
+        if k in ("period_3m_pct", "period_6m_pct", "period_1y_pct") and not (0 <= v <= 50):
+            raise ValueError("Скидка за срок — от 0 до 50%")
         if k == "ref_pct" and not (0 <= v <= 50):
             raise ValueError("Реферальный процент — от 0 до 50")
         if k in ("ref_months", "ref_welcome_rub") and v < 0:
