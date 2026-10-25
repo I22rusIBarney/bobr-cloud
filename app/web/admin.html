@@ -105,10 +105,12 @@ function rootView() {
   v.append(group(null, [row({
     icon: 'stack', tile: low ? '#FF3B30' : '#5856D6', title: 'Баланс Astra',
     sub: ab.error ? 'Не удалось получить' : `Скидка ${ab.discount_pct ?? '?'}%` + (ab.reseller && ab.reseller.next
-      ? ` · до ${ab.reseller.next.discount_pct}% ещё ${Math.max(0, ab.reseller.next.at_servers - (ab.reseller.active_servers || 0))} ${UI.plural(Math.max(0, ab.reseller.next.at_servers - (ab.reseller.active_servers || 0)), 'сервер', 'сервера', 'серверов')}` : ''),
+      ? ` · ${ab.reseller.active_servers || 0}/${ab.reseller.next.at_servers} до ${ab.reseller.next.discount_pct}%` : ''),
     detail: ab.error ? '—' : h('span', { style: low ? 'color:var(--danger);font-weight:600' : '' }, rub(ab.balance_rub)),
     onClick: () => { try { UI.tg ? UI.tg.openTelegramLink('https://t.me/astravpsbot') : UI.openLink('https://t.me/astravpsbot'); } catch (e) { UI.openLink('https://t.me/astravpsbot'); } },
-  })], low ? 'Баланс ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot.' : 'Пополняется в @astravpsbot. Скидка растёт автоматически.'));
+  })], (low ? 'Баланс ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot. ' : 'Пополняется в @astravpsbot. ')
+    + (ab.reseller && ab.reseller.next ? `Скидку считает Astra по активным серверам на вашем ключе: сейчас ${ab.reseller.active_servers || 0}, для ${ab.reseller.next.discount_pct}% нужно ${ab.reseller.next.at_servers}.` : '')
+    + (ab.reseller && (ab.reseller.active_servers || 0) !== st.servers ? ` В боте активных серверов: ${st.servers} — остальные созданы на ключе не через бота.` : '')));
 
   // клиенты и промокоды — самое частое
   const tunread = S.tickets ? S.tickets.unread : 0;
