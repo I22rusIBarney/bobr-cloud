@@ -19,7 +19,11 @@ compose() { docker compose "$@"; }
 
 case "${1:-install}" in
   update)
-    if [ -d .git ] && command -v git >/dev/null; then git pull --ff-only || die "Не удалось обновить из git — проверьте локальные изменения (git status)"; fi
+    if [ -d .git ] && command -v git >/dev/null; then
+      # не зависим от настроек отслеживания ветки: явно берём origin/main
+      git fetch origin main && git merge --ff-only origin/main \
+        || die "Не удалось обновить из git — проверьте локальные изменения (git status)"
+    fi
     compose up -d --build; ok "Обновлено"; exit 0 ;;
   logs)   compose logs -f --tail=100 bot; exit 0 ;;
   status) compose ps; exit 0 ;;
