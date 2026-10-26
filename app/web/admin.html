@@ -451,7 +451,10 @@ function payMethodsView() {
   const yk = INT && INT.yookassa && INT.yookassa.configured, pg = INT && INT.platega && INT.platega.configured;
   const label = (key, ph) => { const i = h('input', { type: 'text', maxlength: 40, placeholder: ph, style: 'text-align:left', 'aria-label': 'Подпись' }); i.value = S.settings[key] || ''; i.addEventListener('input', () => setVal(key, i.value)); return h('label', { class: 'field stack' }, h('label', {}, 'Как видит клиент'), i); };
   return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Способы оплаты'),
-    group('ЮKassa', [toggleRow('Показывать клиентам', 'pay_yookassa_on', yk ? 'Карты и СБП, автоплатежи' : 'Сначала подключите ключи ЮKassa'), label('pay_yookassa_label', 'Карта или СБП · ЮKassa')]),
+    group('ЮKassa', [toggleRow('Показывать клиентам', 'pay_yookassa_on', yk ? null : 'Сначала подключите ключи ЮKassa'),
+      h('div', { style: 'padding:10px 12px' }, UI.segmented([['sbp', 'Только СБП'], ['bank_card', 'Только карта'], ['all', 'Все способы']].map(([v, l]) => ({ value: v, label: l })), S.settings.yk_method || 'all', v => setVal('yk_method', v))),
+      label('pay_yookassa_label', 'Карта или СБП · ЮKassa')],
+      '«Только СБП» — клиент сразу попадает на выбор банка, без страницы со способами (комиссия ЮKassa по СБП ниже). Сохранить карту для автоплатежей можно только при оплате картой. Если оставить стандартную подпись, она сама подстроится под выбранный способ.'),
     group('Platega', [toggleRow('Показывать клиентам', 'pay_platega_on', pg ? 'СБП, карты и другие методы на странице Platega' : 'Сначала подключите ключи Platega'), label('pay_platega_label', 'СБП или карта · Platega')]),
     h('div', { class: 'group-f', style: 'margin:-12px var(--gutter) 30px' }, 'Включите один способ или оба — тогда клиент выберет при пополнении. Способ без ключей клиентам не показывается, даже если включён.'));
 }

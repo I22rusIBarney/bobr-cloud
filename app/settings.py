@@ -27,6 +27,7 @@ DEFAULTS: dict[str, Any] = {
     # платёжные провайдеры: можно включить один или оба — клиент выберет при пополнении
     "pay_yookassa_on": True,
     "pay_yookassa_label": "Карта или СБП · ЮKassa",
+    "yk_method": "sbp",          # all — страница выбора ЮKassa | sbp — сразу СБП | bank_card — сразу карта
     "pay_platega_on": False,
     "pay_platega_label": "СБП или карта · Platega",
     # автоплатежи: включайте после того, как ЮKassa подключит рекуррентные платежи магазину
@@ -114,6 +115,8 @@ async def save_settings(s: AsyncSession, patch: dict[str, Any]) -> dict[str, Any
             raise ValueError("неизвестный эффект")
         if k in ("period_3m_pct", "period_6m_pct", "period_1y_pct") and not (0 <= v <= 50):
             raise ValueError("Скидка за срок — от 0 до 50%")
+        if k == "yk_method" and v not in ("all", "sbp", "bank_card"):
+            raise ValueError("Способ ЮKassa: all, sbp или bank_card")
         if k == "health_interval_min" and not (1 <= v <= 60):
             raise ValueError("Интервал проверок — от 1 до 60 минут")
         if k == "backup_hours" and v not in (0, 6, 12, 24, 48, 168):

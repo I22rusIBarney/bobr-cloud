@@ -642,7 +642,12 @@ def payment_providers(ctx: Ctx, cfg: dict) -> list[dict]:
     """Включённые и настроенные способы пополнения в порядке показа клиенту."""
     out = []
     if cfg.get("pay_yookassa_on", True) and ctx.yk.configured:
-        out.append({"code": "yookassa", "label": cfg.get("pay_yookassa_label") or "ЮKassa", "autopay": True})
+        mode = cfg.get("yk_method", "all")
+        label = cfg.get("pay_yookassa_label") or ""
+        if not label or label == "Карта или СБП · ЮKassa":  # стандартная подпись — по выбранному способу
+            label = {"sbp": "СБП · ЮKassa", "bank_card": "Банковская карта · ЮKassa"}.get(mode, "Карта или СБП · ЮKassa")
+        # сохранить карту для автоплатежей можно только при оплате картой
+        out.append({"code": "yookassa", "label": label, "autopay": mode != "sbp"})
     if cfg.get("pay_platega_on") and ctx.platega is not None and ctx.platega.configured:
         out.append({"code": "platega", "label": cfg.get("pay_platega_label") or "Platega", "autopay": False})
     return out
@@ -672,15 +677,29 @@ async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool 
         if save_method:  # согласие с Правилами автоплатежей — отметка при пополнении
             s.add(Consent(tg_id=tg_id, doc="autopay", version=cfg["docs_version"], source="app"))
         await s.commit()
+    mode = cfg.get("yk_method", "all")
     kw = dict(
         amount_kop=pay.amount_kop,
         description=f"Пополнение баланса #{pay.id}",
         return_url=env().public_url.rstrip("/") + "/paid",
         metadata={"payment_id": pay.id, "tg_id": tg_id},
+        method=None if mode == "all" else mode,
     )
     try:
         data = await ctx.yk.create_payment(**kw, idem_key=f"topup-{pay.id}", save_payment_method=save_method)
     except YooKassaError as ex:
+        if kw["method"] and not save_method:
+            # способ не подключён в магазине — не теряем клиента: страница выбора ЮKassa
+            log.warning("ЮKassa отклонила способ %s: %s", kw["method"], ex)
+            await ctx.alert_once("yk_method", f"⚠️ ЮKassa не приняла платёж только через «{kw['method']}» ({ex.status}: {ex.description}). "
+                                 "Клиентам показана обычная страница выбора способа. Проверьте, что способ подключён в магазине ЮKassa.")
+            kw["method"] = None
+            data = await ctx.yk.create_payment(**kw, idem_key=f"topup-{pay.id}-any")
+            async with session() as s:
+                row = await s.get(Payment, pay.id)
+                row.yk_id = data["id"]
+                await s.commit()
+            return pay, data["confirmation"]["confirmation_url"]
         if not save_method:
             raise
         # магазину ещё не подключили автоплатежи — проводим обычный платёж

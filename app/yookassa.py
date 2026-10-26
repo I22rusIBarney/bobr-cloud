@@ -73,7 +73,7 @@ class YooKassa:
 
     async def create_payment(
         self, *, amount_kop: int, description: str, return_url: str, metadata: dict[str, Any],
-        idem_key: str | None = None, save_payment_method: bool = False,
+        idem_key: str | None = None, save_payment_method: bool = False, method: str | None = None,
     ) -> dict:
         body = {
             "amount": {"value": f"{amount_kop / 100:.2f}", "currency": "RUB"},
@@ -84,6 +84,8 @@ class YooKassa:
         }
         if save_payment_method:
             body["save_payment_method"] = True
+        if method:  # sbp | bank_card: сразу нужный способ, без страницы выбора ЮKassa
+            body["payment_method_data"] = {"type": method}
         r = await self._client().post("/payments", json=body, headers={"Idempotence-Key": idem_key or str(uuid.uuid4())})
         if r.status_code >= 400:
             raise YooKassaError(r.status_code, _json(r))
