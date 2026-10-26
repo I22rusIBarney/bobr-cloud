@@ -412,6 +412,39 @@ async def get_user_server(s, tg_id: int, server_id: int) -> Server:
     return srv
 
 
+_LINK_KEYS = ("url", "link", "vnc_url", "console_url", "vnc", "console", "href", "novnc_url", "web_url")
+
+
+def vnc_link(resp) -> str | None:
+    """Ссылка на консоль из ответа Astra: ищем по известным полям, затем любую http(s)-ссылку в любом месте ответа."""
+    import re
+
+    def walk(x, depth=0):
+        if depth > 5:
+            return None
+        if isinstance(x, str):
+            m = re.search(r"https?://\S+", x)
+            return m.group(0).rstrip('",)') if m else None
+        if isinstance(x, dict):
+            for k in _LINK_KEYS:  # сначала явные поля
+                if k in x:
+                    r = walk(x[k], depth + 1)
+                    if r:
+                        return r
+            for v in x.values():
+                r = walk(v, depth + 1)
+                if r:
+                    return r
+        if isinstance(x, (list, tuple)):
+            for v in x:
+                r = walk(v, depth + 1)
+                if r:
+                    return r
+        return None
+
+    return walk(resp)
+
+
 async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:
     """Сервер и роль клиента: owner — свой, member — общий доступ."""
     from .shares import role
@@ -448,6 +481,12 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог действия {action} #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте статус сервера через минуту.") from ex
+    if action == "vnc":
+        link = vnc_link(resp)
+        if not link:
+            await ctx.alert_once("vnc_format", f"⚠️ Astra не вернула ссылку на VNC (сервер #{srv.astra_id}). Ответ: <code>{html.escape(str(resp)[:600])}</code>", every_s=3600)
+            raise UserError("Провайдер не прислал ссылку на консоль. Попробуйте через минуту — если повторится, напишите в поддержку.")
+        resp = {"link": link, "raw": resp}
     from . import serverlog
     quiet = {"start": 5, "stop": 10, "reboot": 10, "reinstall": 20, "password": 20, "change-ip": 20}.get(action)
     if quiet:  # мониторинг не будит клиента, пока сервер перезапускается

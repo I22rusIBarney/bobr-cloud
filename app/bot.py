@@ -1056,8 +1056,9 @@ async def simple_action(c: CallbackQuery):
         await c.message.answer(f"❌ {e(ex)}", parse_mode="HTML")
         return
     if action == "vnc":
-        url = next((resp.get(k) for k in ("url", "link", "vnc_url", "console_url") if isinstance(resp, dict) and resp.get(k)), None)
-        await c.message.answer(f"🖥 <b>Консоль VNC</b>\n\n{e(url)}\n\n<i>Ссылка действует ограниченное время.</i>" if url else f"⚠️ Ответ провайдера: <code>{e(str(resp)[:500])}</code>", parse_mode="HTML")
+        url = resp.get("link") if isinstance(resp, dict) else None
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🖥 Открыть консоль", url=url)]]) if url and url.startswith("https://") else None
+        await c.message.answer(f"🖥 <b>Консоль VNC</b>\n\n{e(url)}\n\n<i>Ссылка действует ограниченное время.</i>", parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
     else:
         done = {"start": "Сервер включается.", "stop": "Сервер выключается.", "reboot": "Сервер перезагружается.",
                 "change-ip": "IP-адрес меняется — новый появится в карточке сервера через пару минут.",

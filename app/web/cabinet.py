@@ -470,10 +470,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             resp = await svc.server_action(ctx, m["id"], sid, p.action, body)
         except UserError as ex:
             raise wrap(ex)
-        link = None
-        if p.action == "vnc" and isinstance(resp, dict):
-            link = next((resp.get(k) for k in ("url", "link", "vnc_url", "console_url") if resp.get(k)), None)
-        return {"ok": True, "link": link}
+        return {"ok": True, "link": resp.get("link") if p.action == "vnc" and isinstance(resp, dict) else None}
 
     @r.post("/servers/{sid}/renew")
     async def renew(sid: int, m: dict = Depends(me_ok)):
