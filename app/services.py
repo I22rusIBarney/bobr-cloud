@@ -46,6 +46,7 @@ class Ctx:
     # отправка в произвольный чат (канал событий): → None или текст ошибки
     post: Callable[[Any, str], Awaitable[str | None]] | None = None
     tg_ping: Callable[[], Awaitable[Any]] | None = None
+    send_transfer_offer: Callable[[int, str, int], Awaitable[None]] | None = None
     post_file: Callable[[Any, str, str], Awaitable[str | None]] | None = None
     # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
     send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None

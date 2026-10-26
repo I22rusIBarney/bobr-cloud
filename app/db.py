@@ -148,6 +148,19 @@ class Server(Base):
     period_months: Mapped[float] = mapped_column(Float, default=1.0)
 
 
+class ServerTransfer(Base):
+    """Передача сервера другому клиенту: ждёт согласия получателя 24 часа."""
+    __tablename__ = "server_transfers"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    from_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    to_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    # pending | accepted | declined | cancelled | expired
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
 class Tx(Base):
     """Журнал движения баланса клиентов."""
 

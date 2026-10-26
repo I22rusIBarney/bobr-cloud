@@ -17,6 +17,7 @@ from .. import account as acc
 from .. import tickets as tk
 from .. import referral
 from .. import subscription as sub
+from .. import transfers as trf
 from ..legal import DOCS, REQUIRED, render_fragment
 from ..settings import load_settings
 from .auth import validate_init_data
@@ -83,6 +84,10 @@ class BuyIn(BaseModel):
     period: str = "1m"
 
 
+class TransferIn(BaseModel):
+    to: str
+
+
 class NewsIn(BaseModel):
     enabled: bool
 
@@ -146,6 +151,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
         return {
             "subscription": {"needed": True, **sub_info} if sub_info else {"needed": False},
             "news_off": not user.ads_consent,
+            "transfers": await trf.pending_for(m["id"]) if m["consented"] else {"incoming": [], "outgoing": []},
+            "transfers_enabled": bool(cfg.get("transfers_enabled", True)),
             "ads_consent": bool(user.ads_consent),
             "is_admin": m["id"] in env().admins,
             "user": {"id": user.tg_id, "username": user.username, "first_name": user.first_name, "since": user.created_at.isoformat()},
@@ -168,6 +175,30 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 "support": None,  # поддержка — через обращения в кабинете
             },
         }
+
+    # ───── передача серверов ─────
+
+    @r.post("/servers/{sid}/transfer")
+    async def transfer_create(sid: int, p: TransferIn, m: dict = Depends(me_ok)):
+        try:
+            return await trf.create(ctx, m["id"], sid, p.to)
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.post("/transfers/{tid}/{act}")
+    async def transfer_act(tid: int, act: str, m: dict = Depends(me_ok)):
+        try:
+            if act == "accept":
+                return await trf.accept(ctx, tid, m["id"])
+            if act == "decline":
+                await trf.decline(ctx, tid, m["id"])
+            elif act == "cancel":
+                await trf.cancel(ctx, tid, m["id"])
+            else:
+                raise HTTPException(404)
+        except UserError as ex:
+            raise wrap(ex)
+        return {"ok": True}
 
     # ───── подписка на канал и новости ─────
 

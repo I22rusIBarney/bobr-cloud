@@ -25,6 +25,7 @@ from . import services as svc
 from . import tickets as tk
 from . import referral
 from . import subscription as sub
+from . import transfers as tr
 from .legal import DOCS, REQUIRED
 from .config import env
 from .db import Payment, Server, User, change_balance, get_or_create_user, session
@@ -60,6 +61,10 @@ class TopUp(StatesGroup):
 
 class PromoInput(StatesGroup):
     code = State()
+
+
+class TransferInput(StatesGroup):
+    to = State()
 
 
 class Guard(BaseMiddleware):
@@ -610,7 +615,7 @@ def card_kb(srv: Server) -> InlineKeyboardMarkup:
         [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
         [("🖥 Консоль VNC", f"s:a:{i}:vnc"), ("🌍 Сменить IP", f"s:c:{i}:change-ip")],
         [("⚙️ Переустановить ОС", f"s:ri:{i}"), ("🛡 Сбросить пароль", f"s:c:{i}:password")],
-        [("❌ Удалить сервер", f"s:d:{i}")],
+        [("🔁 Передать другу", f"s:tr:{i}"), ("❌ Удалить сервер", f"s:d:{i}")],
     ]
     return kb_rows(rows, back="s:list", back_text="← Мои серверы")
 
@@ -624,11 +629,102 @@ async def _own(c: CallbackQuery, sid: int) -> Server | None:
     return srv
 
 
+async def _outgoing(tg_id: int, server_id: int) -> dict | None:
+    p = await tr.pending_for(tg_id)
+    return next((x for x in p["outgoing"] if x["server_id"] == server_id), None)
+
+
 @router.callback_query(F.data.startswith("s:v:"))
-async def server_card(c: CallbackQuery):
+async def server_card(c: CallbackQuery, state: FSMContext | None = None):
+    if state is not None:
+        await state.clear()
     srv = await _own(c, int(c.data.split(":")[2]))
     if srv:
-        await show(c, card_text(srv), card_kb(srv))
+        out = await _outgoing(c.from_user.id, srv.id)
+        text, kb = card_text(srv), card_kb(srv)
+        if out:
+            u = out["user"] or {}
+            text += f"\n\n🔁 <b>Ожидает подтверждения</b> от {e(u.get('first_name') or '')}" + (f" @{e(u['username'])}" if u.get("username") else f" (ID {u.get('tg_id')})")
+            rows = [list(r) for r in kb.inline_keyboard]
+            rows.insert(len(rows) - 1, [InlineKeyboardButton(text="✖️ Отменить передачу", callback_data=f"tr:c:{out['id']}")])
+            kb = InlineKeyboardMarkup(inline_keyboard=rows)
+        await show(c, text, kb)
+
+
+# ───────────────────────── передача сервера ─────────────────────────
+
+
+@router.callback_query(F.data.startswith("s:tr:"))
+async def transfer_start(c: CallbackQuery, state: FSMContext):
+    srv = await _own(c, int(c.data.split(":")[2]))
+    if not srv:
+        return
+    if srv.status not in ("active", "suspended"):
+        return await c.answer("Передать можно только созданный сервер.", show_alert=True)
+    await state.set_state(TransferInput.to)
+    await state.update_data(server_id=srv.id)
+    await show(c, f"🔁 <b>Передать {e(srv.name)}</b>\n\nОтправьте @username или Telegram ID друга. Он должен быть клиентом бота.\n\n"
+                  "<i>Друг получит запрос и примет его. После этого сервер со всем оплаченным сроком перейдёт к нему, "
+                  "а продление — с его баланса. Заранее удалите с сервера свои данные.</i>",
+               kb_rows([], back=f"s:v:{srv.id}", back_text="← Отмена"))
+
+
+@router.message(TransferInput.to)
+async def transfer_to(m: Message, state: FSMContext):
+    data = await state.get_data()
+    sid = data.get("server_id")
+    try:
+        u = await tr.find_recipient(m.text or "")
+        if u.tg_id == m.from_user.id:
+            raise UserError("Нельзя передать сервер самому себе.")
+    except UserError as ex:
+        await m.answer(f"⚠️ {e(ex)}\n\nОтправьте @username или ID ещё раз.", parse_mode="HTML", reply_markup=kb_rows([], back=f"s:v:{sid}", back_text="← Отмена"))
+        return
+    await state.clear()
+    who = e(u.first_name or "") + (f" @{e(u.username)}" if u.username else f" (ID {u.tg_id})")
+    await m.answer(f"🔁 <b>Передать сервер {who}?</b>\n\nПосле его согласия сервер исчезнет из вашего списка. Отменить можно, пока запрос не принят.",
+                   parse_mode="HTML", reply_markup=kb_rows([[("✅ Отправить запрос", f"tr:y:{sid}:{u.tg_id}")]], back=f"s:v:{sid}", back_text="← Отмена"))
+
+
+@router.callback_query(F.data.startswith("tr:y:"))
+async def transfer_send(c: CallbackQuery):
+    _, _, sid, to = c.data.split(":")
+    try:
+        r = await tr.create(ctx(), c.from_user.id, int(sid), to)
+    except UserError as ex:
+        return await c.answer(str(ex)[:190], show_alert=True)
+    await c.answer("✅ Запрос отправлен")
+    await show(c, "✅ <b>Запрос отправлен</b>\n\nКак только друг примет его, сервер перейдёт к нему, а вам придёт уведомление. Запрос действует 24 часа.",
+               kb_rows([[("🖥 К серверу", f"s:v:{sid}")]], back="s:list", back_text="← Мои серверы"))
+
+
+@router.callback_query(F.data.startswith("tr:a:") | F.data.startswith("tr:d:") | F.data.startswith("tr:c:"))
+async def transfer_answer(c: CallbackQuery):
+    _, act, tid = c.data.split(":")
+    try:
+        if act == "a":
+            r = await tr.accept(ctx(), int(tid), c.from_user.id)
+        elif act == "d":
+            await tr.decline(ctx(), int(tid), c.from_user.id)
+        else:
+            await tr.cancel(ctx(), int(tid), c.from_user.id)
+    except UserError as ex:
+        await c.answer(str(ex)[:190], show_alert=True)
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        return
+    if act == "a":
+        await c.answer("✅ Сервер ваш")
+        await show(c, f"✅ <b>Сервер {e(r['name'])} теперь ваш</b>\n\nРекомендуем сразу сменить пароль root. Продление — с вашего баланса.",
+                   kb_rows([[("🖥 Открыть сервер", f"s:v:{r['server_id']}")]], back="s:list", back_text="← Мои серверы"))
+    elif act == "d":
+        await c.answer("Запрос отклонён")
+        await show(c, "❌ <b>Передача отклонена</b>\n\nСервер остаётся у владельца.", None)
+    else:
+        await c.answer("Передача отменена")
+        await show(c, "✖️ <b>Передача отменена</b>\n\nСервер остаётся у вас.", kb_rows([], back="s:list", back_text="← Мои серверы"))
 
 
 @router.callback_query(F.data.startswith("s:ar:"))
@@ -1027,6 +1123,17 @@ def make_poster(bot: Bot):
             return str(ex)
 
     return post, post_file
+
+
+def make_transfer_offer(bot: Bot):
+    async def offer(tg_id: int, text: str, tid: int) -> None:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять", callback_data=f"tr:a:{tid}"),
+                                                     InlineKeyboardButton(text="❌ Отклонить", callback_data=f"tr:d:{tid}")]])
+        try:
+            await bot.send_message(tg_id, text, parse_mode="HTML", reply_markup=kb)
+        except Exception:
+            log.warning("transfer offer %s failed", tg_id, exc_info=True)
+    return offer
 
 
 def make_broadcast_sender(bot: Bot):

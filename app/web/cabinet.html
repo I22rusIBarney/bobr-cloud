@@ -346,6 +346,8 @@ function serversView() {
   const act = D.servers.filter(s => s.status === 'active');
   const monthly = act.reduce((a, s) => a + (+s.price_rub || 0), 0);
   const wrap = h('div', {}, header('Серверы', { sub: D.servers.length ? `${D.servers.length} ${UI.plural(D.servers.length, 'сервер', 'сервера', 'серверов')}` + (monthly ? ` · ${rub(monthly)} в месяц` : '') : null }));
+  // входящие передачи: друг отправил сервер — принять или отклонить
+  ((D.transfers && D.transfers.incoming) || []).forEach(t => wrap.append(transferOfferCard(t)));
   if (!D.servers.length) {
     wrap.append(h('div', { class: 'empty' }, icon('server'), h('b', {}, 'Пока нет серверов'),
       'Соберите конфигурацию — сервер будет готов через 1–3 минуты.',
@@ -447,6 +449,19 @@ function serverView(id) {
 
   v.append(group(null, [row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', sub: 'Вопрос по этому серверу', onClick: () => UI.nav.push(() => newTicketView(s.id)) })]));
 
+  // передача другу
+  const out = ((D.transfers && D.transfers.outgoing) || []).find(t => t.server_id === s.id);
+  if (out) {
+    const u = out.user || {};
+    v.append(group(null, [row({ icon: 'renew', tile: '#FBBF5B', title: 'Ожидает подтверждения', cls: 'wrap',
+      sub: `Передача ${u.first_name || ''}${u.username ? ' @' + u.username : ' (ID ' + u.tg_id + ')'} · до ${UI.date(out.until)}` }),
+      row({ title: 'Отменить передачу', cls: 'destructive', onClick: async () => {
+        if (await UI.run(() => api(`/transfers/${out.id}/cancel`, 'POST'), 'Передача отменена') !== undefined) await refresh();
+      } })]));
+  } else if (D.transfers_enabled && live) {
+    v.append(group(null, [row({ icon: 'renew', tile: '#5BB8F0', title: 'Передать другу', sub: 'Другому клиенту бота по @username или ID', onClick: () => transferSheet(s) })]));
+  }
+
   v.append(group(null, [row({ title: 'Удалить сервер', cls: 'destructive', onClick: async () => {
     const ok = await UI.ask({ title: 'Удалить ' + s.name + '?', message: `Сервер и данные будут удалены безвозвратно. Вернём ${rub(s.refund_rub)} на баланс за неиспользованные дни.`, buttons: [{ id: 'y', text: 'Удалить', type: 'destructive' }] });
     if (!ok) return;
@@ -456,6 +471,46 @@ function serverView(id) {
     await load(); UI.nav.back();
   } })], `Вернём ${rub(s.refund_rub)} за неиспользованные дни.`));
   return v;
+}
+
+function transferSheet(s) {
+  UI.sheet('Передать сервер', close => {
+    const inp = h('input', { type: 'text', placeholder: '@username или Telegram ID', autocapitalize: 'off', spellcheck: false, autocomplete: 'off', 'aria-label': 'Получатель' });
+    const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Отправить запрос');
+    inp.addEventListener('input', () => { go.disabled = inp.value.trim().length < 3; });
+    go.onclick = UI.busy(go, async () => {
+      const ok = await UI.ask({ title: 'Передать ' + s.name + '?', message: `Получатель ${inp.value.trim()} должен подтвердить. После этого сервер со всем оплаченным сроком перейдёт к нему и исчезнет из вашего списка. Заранее удалите с сервера свои данные.`, buttons: [{ id: 'y', text: 'Отправить запрос' }] });
+      if (!ok) return;
+      const r = await UI.run(() => api(`/servers/${s.id}/transfer`, 'POST', { to: inp.value.trim() }));
+      if (r === undefined) return;
+      close(); UI.toast('Запрос отправлен'); await refresh();
+    });
+    setTimeout(() => inp.focus(), 350);
+    return h('div', {}, h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field stack' }, h('label', {}, 'Кому'), inp)),
+      h('div', { class: 'group-f' }, 'Друг должен быть клиентом бота. Он получит запрос в Telegram и примет его — продление дальше будет с его баланса. Запрос действует 24 часа.')),
+      h('div', { style: 'margin:0 var(--gutter)' }, go));
+  });
+}
+
+function transferOfferCard(t) {
+  const u = t.user || {};
+  const days = t.expires_at ? Math.max(0, Math.floor((new Date(t.expires_at) - Date.now()) / 864e5)) : 0;
+  const act = a => async () => {
+    if (a === 'accept') {
+      const ok = await UI.ask({ title: 'Принять сервер?', message: `Сервер станет вашим. Продление дальше — ${rub(t.price_rub)} в месяц с вашего баланса. После принятия смените пароль root.`, buttons: [{ id: 'y', text: 'Принять' }] });
+      if (!ok) return;
+    }
+    if (await UI.run(() => api(`/transfers/${t.id}/${a}`, 'POST'), a === 'accept' ? 'Сервер теперь ваш' : 'Запрос отклонён') !== undefined) await refresh();
+  };
+  return h('div', { class: 'server-card', style: 'cursor:default;box-shadow:var(--shadow-card),inset 0 0 0 1.5px var(--accent)' },
+    h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, t.flag),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, 'Вам передают ' + t.server),
+        h('div', { class: 'ip', style: 'font-family:inherit' }, 'от ' + (u.first_name || '') + (u.username ? ' @' + u.username : ''))),
+      h('span', { class: 'badge accent' }, 'Передача')),
+    h('div', { class: 'specs' }, specChip('cpu', t.cpu + ' vCPU'), specChip('ram', t.ram + ' ГБ'), specChip('drive', t.disk + ' ГБ'), specChip('clock', `оплачен ещё ${days} дн.`)),
+    h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px' },
+      h('button', { class: 'btn secondary', type: 'button', style: 'min-height:44px', onclick: act('decline') }, 'Отклонить'),
+      h('button', { class: 'btn', type: 'button', style: 'min-height:44px', onclick: act('accept') }, 'Принять')));
 }
 
 function renameSheet(s) {
