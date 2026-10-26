@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Установщик VPS-бота. Запуск на чистом VPS (Ubuntu/Debian) от root:
-#   sudo ./install.sh            — установка / повторная настройка
-#   sudo ./install.sh update     — подтянуть обновления (git pull), пересобрать и перезапустить
-#   sudo ./install.sh logs       — смотреть логи
-#   sudo ./install.sh status     — состояние контейнеров
+# Установщик Bobr Cloud. Запуск на чистом VPS (Ubuntu/Debian) от root: sudo ./install.sh
+# После установки доступна короткая команда bcloud (bcloud help — список команд).
 set -euo pipefail
 cd "$(dirname "$(readlink -f "$0")")"
 
@@ -17,18 +14,63 @@ die()  { printf '%s✖ %s%s\n' "$C_R" "$*" "$C_0" >&2; exit 1; }
 
 compose() { docker compose "$@"; }
 
+# Команда bcloud в /usr/local/bin: работает из любой папки и сама поднимает права через sudo
+install_cli() {
+  local dir; dir="$(pwd)"
+  cat > /usr/local/bin/bcloud <<EOF
+#!/usr/bin/env bash
+# Bobr Cloud — управление ботом. Создано установщиком из ${dir}
+if [[ \$EUID -ne 0 ]]; then exec sudo "\$0" "\$@"; fi
+cd "${dir}" || { echo "Папка бота ${dir} не найдена — запустите install.sh из новой папки"; exit 1; }
+exec ./install.sh "\${@:-help}"
+EOF
+  chmod 755 /usr/local/bin/bcloud
+}
+
+usage() {
+  cat <<EOF
+${C_B}bcloud${C_0} — управление Bobr Cloud
+
+  bcloud update    обновить из GitHub, пересобрать и перезапустить
+  bcloud restart   перезапустить бота
+  bcloud logs      логи бота (выход — Ctrl+C)
+  bcloud status    состояние сервисов и версия
+  bcloud backup    резервная копия базы и настроек в /root/bcloud-backups
+  bcloud setup     повторная настройка (токен, домен, ключи)
+  bcloud help      эта справка
+EOF
+}
+
 case "${1:-install}" in
   update)
     if [ -d .git ] && command -v git >/dev/null; then
+      before="$(git rev-parse --short HEAD 2>/dev/null || true)"
       # не зависим от настроек отслеживания ветки: явно берём origin/main
-      git fetch origin main && git merge --ff-only origin/main \
+      git fetch -q origin main && git merge -q --ff-only origin/main \
         || die "Не удалось обновить из git — проверьте локальные изменения (git status)"
+      after="$(git rev-parse --short HEAD)"
+      if [[ "$before" == "$after" ]]; then ok "Уже последняя версия ($after)"; else ok "Код обновлён: $before → $after"; fi
+      # дальше — уже свежей версией скрипта
+      exec ./install.sh _rebuild
     fi
-    compose up -d --build; ok "Обновлено"; exit 0 ;;
-  logs)   compose logs -f --tail=100 bot; exit 0 ;;
-  status) compose ps; exit 0 ;;
-  install) ;;
-  *) die "Неизвестная команда: $1" ;;
+    compose up -d --build; install_cli; ok "Обновлено"; exit 0 ;;
+  _rebuild) compose up -d --build; install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
+  restart) compose restart bot; ok "Бот перезапущен"; exit 0 ;;
+  logs)    compose logs -f --tail=100 bot; exit 0 ;;
+  status)
+    compose ps
+    [ -d .git ] && say "Версия: $(git log -1 --format='%h от %cd' --date=format:'%d.%m.%Y %H:%M' 2>/dev/null)"
+    exit 0 ;;
+  backup)
+    mkdir -p /root/bcloud-backups
+    f="/root/bcloud-backups/bcloud-$(date +%Y%m%d-%H%M%S).tar.gz"
+    tar -czf "$f" data .env $( [ -f Caddyfile ] && echo Caddyfile ) 2>/dev/null || die "Не удалось создать копию"
+    chmod 600 "$f"
+    ls -1t /root/bcloud-backups/bcloud-*.tar.gz | tail -n +11 | xargs -r rm -f  # храним 10 последних
+    ok "Копия: $f"; exit 0 ;;
+  help|-h|--help) usage; exit 0 ;;
+  setup|install) ;;
+  *) usage; die "Неизвестная команда: $1" ;;
 esac
 
 # ───────── значения по умолчанию из прошлой установки ─────────
@@ -150,6 +192,7 @@ fi
 # ───────── Запуск ─────────
 say; say "Собираю и запускаю (первый раз 1–3 минуты)…"
 compose up -d --build
+install_cli
 
 say "Жду, пока сервис ответит по HTTPS…"
 up=""
@@ -161,7 +204,7 @@ done
 say
 if [[ -n "$up" ]]; then ok "Сервис работает: https://${V[DOMAIN]}"; else
   warn "HTTPS ещё не отвечает. Частые причины: DNS не обновился, закрыты порты 80/443."
-  warn "Логи: sudo ./install.sh logs"
+  warn "Логи: bcloud logs"
 fi
 
 cat <<EOF
@@ -175,5 +218,5 @@ ${C_B}Готово. Дальше всё настраивается в Telegram:$
  3. Там же наценка и остальные параметры.
 Клиентский кабинет — кнопка «Кабинет» в боте.
 
-Команды: ./install.sh logs | status | update
+Управление: bcloud update · restart · logs · status · backup · setup (bcloud help — подробнее)
 EOF
