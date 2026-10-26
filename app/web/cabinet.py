@@ -82,7 +82,10 @@ class TicketMsgIn(BaseModel):
 
 
 class BuyIn(BaseModel):
-    idx: int
+    idx: int | None = None       # готовый тариф; пусто — своя конфигурация
+    cpu: int | None = None
+    ram: int | None = None
+    disk: int | None = None
     location: str
     os: str
     password: str | None = None  # пусто — Astra сгенерирует сама
@@ -386,6 +389,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                     "name": loc["name"],
                     "flag": loc.get("flag") or svc.flag(loc["code"]),
                     "channel": loc.get("channel", ""),
+                    "description": loc.get("description") or "",
+                    "virtual": bool(loc.get("virtual")),
                     # себестоимость клиенту не отдаём
                     "offers": [{k: v for k, v in o.items() if k != "cost_rub"} for o in await svc.offers(ctx, loc["code"], m["id"])],
                 }
@@ -393,8 +398,18 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
         oses = cat.get("os", [])
         async with session() as s:
             cfg = await load_settings(s)
+        conf = svc.configurator(cat) if cfg.get("custom_enabled", True) else None
         return {"locations": out, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
-                "periods": svc.period_options(cfg, cat)}
+                "periods": svc.period_options(cfg, cat), "configurator": conf}
+
+    @r.get("/quote")
+    async def quote(location: str, cpu: int, ram: int, disk: int, m: dict = Depends(me_ok)):
+        """Цена своей конфигурации для конструктора (себестоимость клиенту не отдаём)."""
+        try:
+            o = await svc.custom_offer(ctx, location, cpu, ram, disk, m["id"])
+        except UserError as ex:
+            raise wrap(ex)
+        return {k: v for k, v in o.items() if k != "cost_rub"}
 
     @r.post("/topup")
     async def topup(p: TopupIn, m: dict = Depends(me_ok)):
@@ -410,7 +425,10 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     @r.post("/servers")
     async def buy(p: BuyIn, m: dict = Depends(me_ok)):
         try:
-            srv = await svc.buy_server(ctx, m["id"], p.idx, p.location, p.os, p.password, p.period)
+            if p.idx is None and not (p.cpu and p.ram and p.disk):
+                raise UserError("Не указана конфигурация.")
+            spec = None if p.idx is not None else {"cpu": p.cpu, "ram": p.ram, "disk": p.disk}
+            srv = await svc.buy_server(ctx, m["id"], p.idx, p.location, p.os, p.password, p.period, spec=spec)
         except UserError as ex:
             raise wrap(ex)
         return {"id": srv.id, "name": srv.name}

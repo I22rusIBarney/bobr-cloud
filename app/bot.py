@@ -361,8 +361,10 @@ async def buy_locations(c: CallbackQuery):
         log.exception("catalog")
         await show(c, "⚠️ <b>Каталог временно недоступен</b>\n\nПопробуйте через пару минут.", kb_rows([]))
         return
-    rows = [[(f"{l['flag']} {l['name']}", f"b:l:{l['code']}")] for l in locs]
-    await show(c, "🌍 <b>Выберите расположение сервера</b>\n\nЦена зависит от локации. Выдача — за 1–3 минуты.", kb_rows(rows))
+    rows = [[(f"{l['flag']} {l['name']}" + (" · IP-локация" if l.get("virtual") else ""), f"b:l:{l['code']}")] for l in locs]
+    virt = [f"{l['flag']} {e(l['name'])} — {e(l['description'])}" for l in locs if l.get("virtual") and l.get("description")]
+    note = ("\n\n<i>IP-локации: адрес выбранной страны, сам сервер — в другом дата-центре.</i>\n" + "\n".join(virt)) if virt else ""
+    await show(c, f"🌍 <b>Выберите расположение сервера</b>\n\nЦена зависит от локации. Выдача — за 1–3 минуты.{note}", kb_rows(rows))
 
 
 @router.callback_query(F.data.startswith("b:l:"))
@@ -374,13 +376,26 @@ async def buy_tariffs(c: CallbackQuery):
         await show(c, f"⚠️ <b>{svc.flag(loc)} {e(name)}</b>\n\nВ этой локации сейчас нет доступных тарифов.", kb_rows([], back="m:buy"))
         return
     rows = [[(f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — {rub(o['price_kop'])}", f"b:p:{loc}:{o['idx']}")] for o in offs]
+    cat_ = await ctx().catalog()
+    desc = next((l.get("description") for l in cat_.get("locations", []) if l.get("code") == loc and l.get("virtual")), None)
     limited = [f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — до {e(o['speed'])}" for o in offs if o.get("speed_limited")]
     base = svc.channel_speed(svc.loc_channel(await ctx().catalog(), loc))
     if limited:
         speed_note = "\n\n🌐 <b>Скорость канала</b>\n" + "\n".join(limited) + (f"\nОстальные тарифы — до {e(base)}" if base and len(limited) < len(offs) else "")
     else:
         speed_note = f"\n\n🌐 Канал: до {e(base)} на всех тарифах" if base else ""
-    await show(c, f"🖥 <b>Конфигурация · {svc.flag(loc)} {e(name)}</b>\n\nПроцессор · память · диск NVMe.\nЦены — за 30 дней.{speed_note}", kb_rows(rows, back="m:buy"))
+    kb = kb_rows(rows, back="m:buy")
+    app_url = env().public_url.rstrip("/") + "/app"
+    async with session() as s_:
+        custom_on = (await load_settings(s_)).get("custom_enabled", True)
+    custom = custom_on and svc.configurator(cat_) is not None and app_url.startswith("https://")
+    if custom:  # свою конфигурацию удобнее собрать ползунками в кабинете
+        rows_ = [list(r) for r in kb.inline_keyboard]
+        rows_.insert(len(rows_) - 1, [InlineKeyboardButton(text="🎛 Собрать свою конфигурацию", web_app=WebAppInfo(url=app_url + "?tab=new"))])
+        kb = InlineKeyboardMarkup(inline_keyboard=rows_)
+    head = f"🖥 <b>Конфигурация · {svc.flag(loc)} {e(name)}</b>\n" + (f"<i>{e(desc)}</i>\n" if desc else "")
+    tail = "\n\nНужно другое сочетание процессора, памяти и диска — соберите его в кабинете." if custom else ""
+    await show(c, f"{head}\nПроцессор · память · диск NVMe.\nЦены — за 30 дней.{speed_note}{tail}", kb)
 
 
 @router.callback_query(F.data.startswith("b:p:"))

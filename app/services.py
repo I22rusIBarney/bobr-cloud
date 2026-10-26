@@ -1,6 +1,7 @@
 """Бизнес-логика: покупка, продление, платежи, чеки, синхронизация с Astra."""
 from __future__ import annotations
 
+import asyncio
 import html
 import re
 import math
@@ -8,7 +9,7 @@ import logging
 import secrets
 import time
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
 from sqlalchemy import func, select, update
@@ -148,6 +149,94 @@ def loc_channel(cat: dict, code: str) -> str:
     return next((l.get("channel") or "" for l in cat.get("locations", []) if l.get("code") == code), "")
 
 
+def configurator(cat: dict) -> dict | None:
+    """Диапазоны своей конфигурации из каталога Astra: {cpu|ram|disk: {min, max, step}} или None."""
+    c = cat.get("configurator")
+    if not isinstance(c, dict):
+        return None
+    out = {}
+    for k in ("cpu", "ram", "disk"):
+        r = c.get(k) or {}
+        try:
+            mn, mx, st = int(r["min"]), int(r["max"]), max(1, int(r.get("step", 1)))
+        except (KeyError, TypeError, ValueError):
+            return None
+        if mn <= 0 or mx < mn:
+            return None
+        out[k] = {"min": mn, "max": mx, "step": st}
+    return out
+
+
+def fits(conf: dict, cpu: int, ram: int, disk: int) -> bool:
+    for k, v in (("cpu", cpu), ("ram", ram), ("disk", disk)):
+        r = conf[k]
+        if not (r["min"] <= v <= r["max"]) or (v - r["min"]) % r["step"]:
+            return False
+    return True
+
+
+def port_label(port) -> str:
+    """«25gbps» → «25 Гбит/с», «200mbps» → «200 Мбит/с»."""
+    m = re.fullmatch(r"\s*(\d+(?:[.,]\d+)?)\s*([gm])(?:bit|bps|b)?(?:/s|ps)?\s*", str(port or ""), re.I)
+    if not m:
+        return ""
+    return f"{m.group(1).replace('.', ',')} {'Гбит/с' if m.group(2).lower() == 'g' else 'Мбит/с'}"
+
+
+_quote_cache: dict[tuple, tuple[float, dict]] = {}
+QUOTE_TTL = 600
+
+
+async def astra_quote(ctx: Ctx, location: str, cpu: int, ram: int, disk: int, fresh: bool = False) -> dict:
+    """Цена своей конфигурации у Astra (за месяц). Кэш 10 минут — ползунки в кабинете дёргают часто."""
+    key = (location, cpu, ram, disk)
+    hit = _quote_cache.get(key)
+    if not fresh and hit and time.time() - hit[0] < QUOTE_TTL:
+        return hit[1]
+    try:
+        q = await ctx.astra.quote(location=location, cpu=cpu, ram=ram, disk=disk, period="1m")
+    except AstraError as ex:
+        hint = (ex.payload or {}).get("hint") if isinstance(ex.payload, dict) else None
+        raise UserError("Такую конфигурацию сейчас собрать нельзя" + (f" ({hint})" if hint else "") + ".") from ex
+    except Exception as ex:
+        raise UserError("Не удалось рассчитать цену. Попробуйте через минуту.") from ex
+    if len(_quote_cache) > 2000:
+        _quote_cache.clear()
+    _quote_cache[key] = (time.time(), q)
+    return q
+
+
+def quote_cost_rub(q: dict) -> float:
+    """Себестоимость месяца: берём большее из цены покупки и продления — чтобы не уйти в минус."""
+    vals = [float(q[k]) for k in ("price_rub", "renew_month_rub") if isinstance(q.get(k), (int, float))]
+    if not vals:
+        raise UserError("Провайдер не сообщил цену этой конфигурации.")
+    return max(vals)
+
+
+async def custom_offer(ctx: Ctx, location: str, cpu: int, ram: int, disk: int, tg_id: int | None = None, fresh: bool = False) -> dict:
+    """Своя конфигурация: цена клиенту в месяц и скорость канала."""
+    cat = await ctx.catalog()
+    conf = configurator(cat)
+    async with session() as s:
+        cfg = await load_settings(s)
+        u = await s.get(User, tg_id) if tg_id else None
+    if conf is None or not cfg.get("custom_enabled", True):
+        raise UserError("Своя конфигурация сейчас недоступна — выберите готовый тариф.")
+    loc = next((x for x in cat.get("locations", []) if x.get("code") == location), None)
+    if not loc or not loc.get("available", True):
+        raise UserError("Эта локация сейчас недоступна.")
+    if not fits(conf, cpu, ram, disk):
+        raise UserError("Такой конфигурации нет: проверьте процессор, память и диск.")
+    q = await astra_quote(ctx, location, cpu, ram, disk, fresh=fresh)
+    cost = quote_cost_rub(q)
+    pcfg = user_price_cfg(cfg, u)
+    spec = q.get("spec") or {}
+    speed = manual_speed(cfg, cpu, ram, disk) or port_label(spec.get("port")) or channel_speed(loc.get("channel", ""))
+    return {"idx": None, "cpu": cpu, "ram": ram, "disk": disk, "cost_rub": cost, "price_kop": sell_price_kop(cost, pcfg),
+            "speed": speed, "speed_limited": bool(manual_speed(cfg, cpu, ram, disk))}
+
+
 async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict]:
     """Тарифы для локации с ценой клиенту (с учётом персонального «без наценки»)."""
     cat = await ctx.catalog()
@@ -163,6 +252,7 @@ async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict
         cost = p.get("price_month_rub", {}).get(location)
         if cost is None:
             continue
+        cost = max(cost, (p.get("renew_month_rub") or {}).get(location) or cost)  # цена продления у Astra может быть выше
         out.append(
             {
                 "idx": p["idx"],
@@ -227,7 +317,9 @@ def apply_discount(price_kop: int, pct: int) -> int:
     return max(0, math.ceil(price_kop * (100 - pct) / 100 / 100) * 100)
 
 
-async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, password: str | None = None, period: str = "1m") -> Server:
+async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: str, password: str | None = None, period: str = "1m",
+                     spec: dict | None = None) -> Server:
+    """Покупка: готовый тариф (idx) или своя конфигурация (idx=None, spec={cpu, ram, disk})."""
     if password:
         password = check_password(password)
     async with session() as s:
@@ -237,17 +329,28 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
             raise UserError("Доступ ограничен.")
         if cfg["maintenance"]:
             raise UserError("Продажи временно приостановлены. Попробуйте позже.")
-        if idx in cfg["hidden_presets"]:
+        if idx is not None and idx in cfg["hidden_presets"]:
             raise UserError("Этот тариф недоступен.")
 
         cat = await ctx.catalog(fresh=True)
-        preset = next((p for p in cat.get("presets", []) if p["idx"] == idx), None)
         loc = next((x for x in cat.get("locations", []) if x["code"] == location), None)
-        if not preset or not loc or not loc.get("available", True):
-            raise UserError("Тариф или локация недоступны.")
-        cost_rub = preset["price_month_rub"].get(location)
-        if cost_rub is None:
-            raise UserError("В этой локации тариф недоступен.")
+        if idx is None:  # своя конфигурация: цена — свежий расчёт Astra
+            if not spec:
+                raise UserError("Не указана конфигурация.")
+            c = await custom_offer(ctx, location, int(spec["cpu"]), int(spec["ram"]), int(spec["disk"]), tg_id, fresh=True)
+            preset = {"cpu": c["cpu"], "ram": c["ram"], "disk": c["disk"]}
+            cost_rub = renew_rub = c["cost_rub"]
+        else:
+            preset = next((p for p in cat.get("presets", []) if p["idx"] == idx), None)
+            if not preset or not loc or not loc.get("available", True):
+                raise UserError("Тариф или локация недоступны.")
+            cost_rub = preset["price_month_rub"].get(location)
+            if cost_rub is None:
+                raise UserError("В этой локации тариф недоступен.")
+            renew_rub = (preset.get("renew_month_rub") or {}).get(location) or cost_rub
+            cost_rub = max(cost_rub, renew_rub)  # продаём не дешевле, чем потом продлевать
+        if not loc or not loc.get("available", True):
+            raise UserError("Эта локация сейчас недоступна.")
         if os_ not in cat.get("os", []):
             raise UserError("Эта ОС недоступна.")
 
@@ -261,12 +364,17 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
             discount_pct = 0
         # промокод — скидка на первый месяц, скидка за срок — на весь срок
         charge = max(0, period_price(price, months, opt["pct"]) - (price - apply_discount(price, discount_pct)))
-        if not await change_balance(s, tg_id, -charge, "purchase", f"{location}:{idx}"):
+        ref = f"{location}:{idx}" if idx is not None else f"{location}:{preset['cpu']}-{preset['ram']}-{preset['disk']}"
+        if not await change_balance(s, tg_id, -charge, "purchase", ref):
             raise UserError("Недостаточно средств на балансе. Пополните баланс и повторите.")
 
     name = f"vps-{secrets.token_hex(3)}"
     try:
-        resp = await ctx.astra.create(idx=idx, location=location, os=os_, name=name, period=period, password=password or None)
+        if idx is not None:
+            resp = await ctx.astra.create(idx=idx, location=location, os=os_, name=name, period=period, password=password or None)
+        else:
+            resp = await ctx.astra.create(cpu=preset["cpu"], ram=preset["ram"], disk=preset["disk"], location=location, os=os_,
+                                          name=name, period=period, password=password or None)
     except AstraError as ex:
         await _refund(tg_id, charge, "refund_create", name)
         if ex.status == 402:
@@ -295,7 +403,8 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         price_kop=price,
         period_paid_kop=charge,
         period_months=float(months),
-        cost_kop=cost_kop(charged / months) if charged is not None else cost_kop(cost_rub),
+        # себестоимость месяца для маржи и продления — цена продления у Astra
+        cost_kop=cost_kop(max(renew_rub, charged / months)) if charged is not None else cost_kop(renew_rub),
         status="provisioning",
         expires_at=utcnow() + timedelta(days=int(resp.get("expires_in_days", 30 * months))),
         auto_renew=cfg["auto_renew_default"],
@@ -480,6 +589,75 @@ def _brand_vnc(url: str) -> str:
     return re.sub(r"^https?://" + re.escape(VNC_HOST) + r"(?=[/:?#]|$)", "https://" + d, url, flags=re.I)
 
 
+IP_FAILED = {"failed", "error", "rejected", "canceled", "cancelled", "declined"}
+IP_DONE = {"done", "success", "succeeded", "completed", "ok", "finished"}
+
+
+def _ts(v) -> datetime | None:
+    if isinstance(v, (int, float)) and v > 0:
+        return datetime.fromtimestamp(v / 1000 if v > 1e12 else v, tz=timezone.utc)
+    if isinstance(v, str) and v:
+        try:
+            d = datetime.fromisoformat(v.strip().replace("Z", "+00:00"))
+            return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+        except ValueError:
+            return None
+    return None
+
+
+def parse_ip_status(r: dict) -> tuple[str | None, str, datetime | None]:
+    """Из ответа change-ip/status: текущий IP, статус последней операции, её время."""
+    r = r if isinstance(r, dict) else {}
+    ip = r.get("ip") or r.get("current_ip") or (r.get("server") or {}).get("ip")
+    op = r.get("last_operation") or r.get("operation") or r.get("last") or r.get("last_change") or {}
+    if not isinstance(op, dict):
+        op = {}
+    status = str(op.get("status") or r.get("status") or "").lower()
+    when = None
+    for k in ("created_at", "requested_at", "started_at", "at", "time", "updated_at", "finished_at"):
+        when = _ts(op.get(k))
+        if when:
+            break
+    return (str(ip) if ip else None), status, when
+
+
+async def verify_change_ip(ctx: Ctx, server_id: int, astra_id: int, old_ip: str | None, started: datetime, charge: int, tg_id: int,
+                           tries: int = 10, delay: float = 60.0) -> str:
+    """Проверка смены IP после таймаута: done — IP сменился, refunded — операция отклонена (деньги вернули),
+    unknown — за 10 минут ясности нет (решает админ, автоматически не возвращаем и не повторяем)."""
+    from . import serverlog
+
+    for _ in range(tries):
+        await asyncio.sleep(delay)
+        try:
+            ip, status, when = parse_ip_status(await ctx.astra.change_ip_status(astra_id))
+        except Exception:
+            log.warning("change-ip status %s failed", astra_id, exc_info=True)
+            continue
+        fresh_op = when is not None and when >= started - timedelta(minutes=2)  # старая операция не подтверждает новую
+        if ip and old_ip and ip != old_ip:
+            async with session() as s:
+                row = await s.get(Server, server_id)
+                if row:
+                    row.ip = ip
+                    await s.commit()
+            await refresh_server(ctx, astra_id)
+            await serverlog.add(server_id, tg_id, "change-ip", f"новый IP {ip}")
+            await ctx.notify(tg_id, f"✅ <b>IP-адрес сменён</b>\n\nНовый IP: <code>{html.escape(ip)}</code>")
+            return "done"
+        if fresh_op and status in IP_FAILED:
+            if charge:
+                await _refund(tg_id, charge, "refund_change_ip", str(astra_id))
+            await ctx.notify(tg_id, "❌ <b>IP-адрес не сменился</b>\n\nПровайдер отклонил операцию"
+                                    + (f", {fmt_rub(charge)} вернули на баланс." if charge else ".") + " Можно попробовать ещё раз.")
+            await ctx.alert_admin(f"ℹ️ Смена IP #{astra_id} после таймаута: отклонена, клиенту {tg_id} возвращено {fmt_rub(charge)}.")
+            return "refunded"
+    await ctx.alert_admin(f"⚠️ Смена IP #{astra_id} (клиент {tg_id}) не подтверждена за {tries} мин после таймаута. "
+                          f"Списано {fmt_rub(charge)}, IP был {old_ip}. Проверьте вручную — автоматически не возвращаем и не повторяем.")
+    await ctx.notify(tg_id, "⏳ Смена IP ещё не подтверждена провайдером — мы проверим вручную и напишем. Повторно запускать не нужно.")
+    return "unknown"
+
+
 async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:
     """Сервер и роль клиента: owner — свой, member — общий доступ."""
     from .shares import role
@@ -514,6 +692,9 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
             await _refund(tg_id, charge, "refund_change_ip", str(srv.astra_id))
         raise UserError(f"Не удалось выполнить действие ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
+        if action == "change-ip":  # таймаут ≠ отказ: проверим результат по статусу операции, деньги пока удержаны
+            asyncio.get_running_loop().create_task(verify_change_ip(ctx, server_id, srv.astra_id, srv.ip, utcnow(), charge, tg_id))
+            raise UserError("Провайдер отвечает с задержкой. Проверим смену IP автоматически и пришлём результат в течение 10 минут.") from ex
         await ctx.alert_admin(f"⚠️ Неизвестный итог действия {action} #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте статус сервера через минуту.") from ex
     if action == "vnc":
@@ -645,6 +826,10 @@ async def upgrade_quote(ctx: Ctx, tg_id: int, server_id: int, cpu: int | None = 
     cat = await ctx.catalog()
     presets = cat.get("presets", [])
     opts = upgrade_options(presets, srv.location, srv.cpu, srv.ram)
+    conf = configurator(cat)
+    if conf:  # с конструктором доступны любые значения из диапазона
+        opts = {k: sorted(set(opts[k]) | {v for v in range(conf[k]["min"], conf[k]["max"] + 1, conf[k]["step"]) if v >= getattr(srv, k)})
+                for k in ("cpu", "ram")}
     days_left = max(0.0, (srv.expires_at - utcnow()).total_seconds() / 86400) if srv.expires_at else 0.0
     out = {"current": {"cpu": srv.cpu, "ram": srv.ram, "disk": srv.disk}, "options": opts,
            "days_left": round(days_left, 1), "price_kop": srv.price_kop}
@@ -656,7 +841,14 @@ async def upgrade_quote(ctx: Ctx, tg_id: int, server_id: int, cpu: int | None = 
         raise UserError("Выберите больше процессоров или памяти.")
     if cpu not in opts["cpu"] or ram not in opts["ram"]:
         raise UserError("Такого значения нет в тарифах.")
-    est_cost = estimate_month_cost(presets, srv.location, cpu, ram, srv.disk)
+    est_cost = None
+    if conf and fits(conf, cpu, ram, srv.disk):
+        try:
+            est_cost = quote_cost_rub(await astra_quote(ctx, srv.location, cpu, ram, srv.disk))
+        except UserError:
+            est_cost = None
+    if est_cost is None:
+        est_cost = estimate_month_cost(presets, srv.location, cpu, ram, srv.disk)
     if est_cost is None:
         raise UserError("Такого сочетания нет в тарифах. Уменьшите процессор или память.")
     new_price = max(sell_price_kop(est_cost, cfg), srv.price_kop)
@@ -1212,7 +1404,8 @@ async def watch_locations(ctx: Ctx) -> None:
         n_offers = sum(1 for p in cat.get("presets", []) if p["idx"] not in hidden and p.get("price_month_rub", {}).get(code) is not None)
         prices = [p["price_month_rub"][code] for p in cat.get("presets", []) if p["idx"] not in hidden and p.get("price_month_rub", {}).get(code) is not None]
         now[code] = {"name": loc.get("name") or code.upper(), "on": bool(loc.get("available", True)) and n_offers > 0,
-                     "offers": n_offers, "from": min(prices) if prices else None, "channel": loc.get("channel") or ""}
+                     "offers": n_offers, "from": min(prices) if prices else None, "channel": loc.get("channel") or "",
+                     "description": loc.get("description") or ""}
     try:
         known = _json.loads(row.value) if row else None
     except ValueError:
@@ -1234,6 +1427,7 @@ async def watch_locations(ctx: Ctx) -> None:
                 price = fmt_rub(sell_price_kop(v["from"], cfg)) if v["from"] is not None else "—"
                 await events.emit(ctx, "sales", f"🆕 <b>Новая локация в продаже: {name}</b>\n\nТарифов: {v['offers']}, цена клиенту от {price} в месяц"
                                   + (f"\nКанал: {html.escape(v['channel'])}" if v["channel"] else "")
+                                  + (f"\n📍 {html.escape(v['description'])}" if v.get("description") else "")
                                   + "\n\nУже доступна в боте и кабинете. Проверьте наценку в «Тарифы и маржа».")
             else:
                 await events.emit(ctx, "sales", f"🆕 <b>У Astra появилась локация {name}</b>\n\nПока без доступных тарифов — в продаже появится автоматически, как только Astra откроет заказы.")

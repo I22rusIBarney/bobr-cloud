@@ -79,8 +79,22 @@ class Astra:
         return (await self._req("GET", f"/servers/{sid}")).get("server", {})
 
     # --- запись ---
-    async def create(self, *, idx: int, location: str, os: str, name: str, period: str = "1m", password: str | None = None) -> dict:
-        body = {"idx": idx, "location": location, "os": os, "period": period, "name": name[:60]}
+    async def quote(self, *, location: str, cpu: int, ram: int, disk: int, period: str = "1m") -> dict:
+        """Стоимость своей конфигурации без создания сервера и без списания."""
+        return await self._req("POST", "/quote", json={"location": location, "cpu": cpu, "ram": ram, "disk": disk, "period": period})
+
+    async def change_ip_status(self, sid: int) -> dict:
+        """Текущий IP и последняя операция смены IP (время, статус) — для проверки после таймаута."""
+        return await self._req("GET", f"/servers/{sid}/change-ip/status")
+
+    async def create(self, *, location: str, os: str, name: str, period: str = "1m", password: str | None = None,
+                     idx: int | None = None, cpu: int | None = None, ram: int | None = None, disk: int | None = None) -> dict:
+        """Готовый тариф (idx) или своя конфигурация (cpu, ram, disk)."""
+        body = {"location": location, "os": os, "period": period, "name": name[:60]}
+        if idx is not None:
+            body["idx"] = idx
+        else:
+            body.update(cpu=cpu, ram=ram, disk=disk)
         if password:
             body["password"] = password
         return await self._req("POST", "/servers", json=body, mutating=True)

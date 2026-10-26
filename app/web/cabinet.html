@@ -793,9 +793,37 @@ async function pickOS(current, title, onPick) {
 // ───────── Конструктор ─────────
 function offersFor(loc) { const l = CAT && CAT.locations.find(x => x.code === loc); return l ? l.offers : []; }
 const uniq = a => [...new Set(a)].sort((x, y) => x - y);
-function axes(loc) { const o = offersFor(loc); return { cpu: uniq(o.map(x => x.cpu)), ram: uniq(o.map(x => x.ram)), disk: uniq(o.map(x => x.disk)) }; }
+function axes(loc) {
+  const o = offersFor(loc), c = CAT && CAT.configurator;
+  const ax = { cpu: o.map(x => x.cpu), ram: o.map(x => x.ram), disk: o.map(x => x.disk) };
+  if (c) for (const k of ['cpu', 'ram', 'disk']) for (let v = c[k].min; v <= c[k].max; v += c[k].step) ax[k].push(v);
+  return { cpu: uniq(ax.cpu), ram: uniq(ax.ram), disk: uniq(ax.disk) };
+}
+/* Своя конфигурация: попадает ли в диапазоны и шаги конструктора Astra. */
+function fitsConf(cpu, ram, disk) {
+  const c = CAT && CAT.configurator;
+  if (!c) return false;
+  return [['cpu', cpu], ['ram', ram], ['disk', disk]].every(([k, v]) => v >= c[k].min && v <= c[k].max && (v - c[k].min) % c[k].step === 0);
+}
+/* Цена своей конфигурации: из кэша или запрос с задержкой (ползунки двигают часто). */
+const QUOTES = {};
+let quoteTimer = null, builderUpdate = null;
+function customOffer(loc, cpu, ram, disk) {
+  const key = [loc, cpu, ram, disk].join(':');
+  if (QUOTES[key]) return QUOTES[key];
+  clearTimeout(quoteTimer);
+  quoteTimer = setTimeout(async () => {
+    try { QUOTES[key] = { ...(await api(`/quote?location=${encodeURIComponent(loc)}&cpu=${cpu}&ram=${ram}&disk=${disk}`)), idx: null }; }
+    catch (e) { QUOTES[key] = { error: e.message, cpu, ram, disk, idx: null }; setTimeout(() => { delete QUOTES[key]; }, 30000); }
+    if (builderUpdate) builderUpdate();
+  }, 350);
+  return { pending: true, cpu, ram, disk, idx: null };
+}
 function snap(vals, v) { if (!vals.length) return null; if (v == null) return vals[0]; return vals.find(x => x >= v) ?? vals[vals.length - 1]; }
 function match() {
+  const exact = offersFor(B.loc).find(o => o.cpu === B.cpu && o.ram === B.ram && o.disk === B.disk);
+  if (exact) return exact;
+  if (fitsConf(B.cpu, B.ram, B.disk)) return customOffer(B.loc, B.cpu, B.ram, B.disk);
   const c = offersFor(B.loc).filter(o => o.cpu >= B.cpu && o.ram >= B.ram && o.disk >= B.disk);
   c.sort((a, b) => a.price_kop - b.price_kop || (a.cpu + a.ram + a.disk) - (b.cpu + b.ram + b.disk));
   return c[0] || null;
@@ -858,7 +886,8 @@ function builderView() {
     locGrid.append(b);
   });
   const someLimited = loc && loc.offers.some(o => o.speed_limited);
-  wrap.append(UI.section('Локация', locGrid, loc && loc.channel ? `Канал в локации ${loc.name}: ${loc.channel}.` + (someLimited ? ' На отдельных тарифах скорость ограничена — она указана в тарифе.' : '') : null));
+  const locNote = loc ? [loc.description ? loc.description + '.' : '', loc.channel ? `Канал: ${loc.channel}.` : '', someLimited ? 'На отдельных тарифах скорость ограничена — она указана в тарифе.' : ''].filter(Boolean).join(' ') : '';
+  wrap.append(UI.section('Локация', locGrid, locNote || null));
 
   // 2. готовые тарифы
   const presets = presetsFor(B.loc);
@@ -883,7 +912,7 @@ function builderView() {
     const vals = ax[k];
     const val = h('span', { class: 'v' });
     const input = h('input', { type: 'range', class: 'ios', min: 0, max: Math.max(vals.length - 1, 0), step: 1, 'aria-label': title, disabled: vals.length < 2 });
-    const paint = () => { const p = vals.length > 1 ? (input.value / (vals.length - 1)) * 100 : 0; input.style.setProperty('--p', p + '%'); val.textContent = 'от ' + vals[input.value] + ' ' + unit; };
+    const paint = () => { const p = vals.length > 1 ? (input.value / (vals.length - 1)) * 100 : 0; input.style.setProperty('--p', p + '%'); val.textContent = (CAT.configurator ? '' : 'от ') + vals[input.value] + ' ' + unit; };
     const setTo = v => { input.value = String(Math.max(vals.indexOf(v), 0)); paint(); };
     setTo(B[k]);
     input.addEventListener('input', () => { const nv = vals[+input.value]; if (nv !== B[k]) { B[k] = nv; UI.haptic('select'); } paint(); update(); });
@@ -926,6 +955,7 @@ function builderView() {
   wrap.append(h('div', { class: 'buybar' }, h('div', { class: 'price' }, priceB, priceS), pay));
 
   let prev = {};
+  builderUpdate = () => { if (tab === 'new' && !UI.nav.stack.length && note.isConnected) update(); };
   function update() {
     const m = match();
     for (const k of ['cpu', 'ram', 'disk']) {
@@ -939,9 +969,19 @@ function builderView() {
       note.className = 'match-note bad'; note.textContent = nearestFix();
       priceNum.textContent = '—'; lastPrice = null; priceS.textContent = 'нет такого тарифа'; pay.textContent = 'Нет такого тарифа'; pay.disabled = true; return;
     }
+    if (m.pending || m.error) {
+      note.className = 'match-note' + (m.error ? ' bad' : '');
+      note.textContent = m.error || 'Считаем цену своей конфигурации…';
+      priceB.style.opacity = '.4';  // прежняя цена приглушена, пока Astra считает новую
+      if (m.error) { priceNum.textContent = '—'; lastPrice = null; }
+      priceS.textContent = `${B.cpu} vCPU · ${B.ram} ГБ · ${B.disk} ГБ`;
+      pay.textContent = m.error ? 'Недоступно' : 'Считаем…'; pay.disabled = true; return;
+    }
+    priceB.style.opacity = '';
     const over = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
     note.className = 'match-note' + (over.length ? '' : ' ok');
-    note.textContent = (over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : 'Точно под ваши параметры.') + (m.speed ? ` Скорость канала — до ${m.speed}.` : '');
+    note.textContent = (over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : m.idx == null ? 'Своя конфигурация — ровно под ваши параметры.' : 'Точно под ваши параметры.')
+      + (m.speed ? ` Скорость канала — до ${m.speed}.` : '');
     const full = m.price_kop / 100;
     const opt = periodOpts().find(o => o.code === B.period) || periodOpts()[0];
     const price = periodTotal(full, opt);
@@ -1000,7 +1040,8 @@ async function buy(m, price, opt) {
     buttons: [{ id: 'y', text: 'Оплатить ' + rub(price) }],
   });
   if (!ok) return;
-  const r = await UI.run(() => api('/servers', 'POST', { idx: m.idx, location: B.loc, os: B.os, password: B.password || null, period: opt.code }));
+  const r = await UI.run(() => api('/servers', 'POST', m.idx == null ? { cpu: m.cpu, ram: m.ram, disk: m.disk, location: B.loc, os: B.os, password: B.password || null, period: opt.code }
+    : { idx: m.idx, location: B.loc, os: B.os, password: B.password || null, period: opt.code }));
   if (r === undefined) return;
   B.password = '';
   UI.toast('Оплачено. Сервер создаётся');
@@ -1394,6 +1435,7 @@ setInterval(() => { if (D && !document.hidden && !D.consent.needed && D.servers.
     const q = new URLSearchParams(location.search);
     if (q.get('ticket')) { goTab('profile'); UI.nav.push(ticketsView); UI.nav.push(() => ticketView(+q.get('ticket'))); }
     else if (q.get('tickets')) { goTab('profile'); UI.nav.push(ticketsView); }
+    else if (q.get('tab') === 'new') goTab('new');
   }
 })();
 </script>
