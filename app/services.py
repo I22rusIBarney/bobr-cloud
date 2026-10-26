@@ -607,8 +607,14 @@ def _ts(v) -> datetime | None:
     return None
 
 
+def ip_status_correlated(r: dict) -> bool | None:
+    """Astra сама говорит, относится ли последняя операция к нашему запросу (request_correlated)."""
+    v = r.get("request_correlated") if isinstance(r, dict) else None
+    return v if isinstance(v, bool) else None
+
+
 def parse_ip_status(r: dict) -> tuple[str | None, str, datetime | None]:
-    """Из ответа change-ip/status: текущий IP, статус последней операции, её время."""
+    """Из ответа change-ip/status: текущий IP (current_ip), статус последней операции, её время."""
     r = r if isinstance(r, dict) else {}
     ip = r.get("ip") or r.get("current_ip") or (r.get("server") or {}).get("ip")
     op = r.get("last_operation") or r.get("operation") or r.get("last") or r.get("last_change") or {}
@@ -632,11 +638,14 @@ async def verify_change_ip(ctx: Ctx, server_id: int, astra_id: int, old_ip: str 
     for _ in range(tries):
         await asyncio.sleep(delay)
         try:
-            ip, status, when = parse_ip_status(await ctx.astra.change_ip_status(astra_id))
+            raw = await ctx.astra.change_ip_status(astra_id)
+            ip, status, when = parse_ip_status(raw)
         except Exception:
             log.warning("change-ip status %s failed", astra_id, exc_info=True)
             continue
-        fresh_op = when is not None and when >= started - timedelta(minutes=2)  # старая операция не подтверждает новую
+        corr = ip_status_correlated(raw)
+        # старая операция не подтверждает новую: верим признаку Astra, без него — времени операции
+        fresh_op = corr if corr is not None else (when is not None and when >= started - timedelta(minutes=2))
         if ip and old_ip and ip != old_ip:
             async with session() as s:
                 row = await s.get(Server, server_id)
