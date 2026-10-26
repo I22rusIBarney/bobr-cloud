@@ -608,16 +608,22 @@ def card_text(srv: Server) -> str:
     )
 
 
-def card_kb(srv: Server) -> InlineKeyboardMarkup:
+def card_kb(srv: Server, transfers: bool = True) -> InlineKeyboardMarkup:
     i = srv.id
     rows = [
         [("🔄 Продлить на 30 дней", f"s:rn:{i}"), (("Автопродление: вкл" if srv.auto_renew else "Автопродление: выкл"), f"s:ar:{i}")],
         [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
         [("🖥 Консоль VNC", f"s:a:{i}:vnc"), ("🌍 Сменить IP", f"s:c:{i}:change-ip")],
         [("⚙️ Переустановить ОС", f"s:ri:{i}"), ("🛡 Сбросить пароль", f"s:c:{i}:password")],
-        [("🔁 Передать другу", f"s:tr:{i}"), ("❌ Удалить сервер", f"s:d:{i}")],
+        ([("🔁 Передать другу", f"s:tr:{i}")] if transfers else []) + [("❌ Удалить сервер", f"s:d:{i}")],
     ]
     return kb_rows(rows, back="s:list", back_text="← Мои серверы")
+
+
+async def _card_kb(srv: Server) -> InlineKeyboardMarkup:
+    async with session() as s:
+        cfg = await load_settings(s)
+    return card_kb(srv, bool(cfg.get("transfers_enabled", True)))
 
 
 async def _own(c: CallbackQuery, sid: int) -> Server | None:
@@ -641,7 +647,7 @@ async def server_card(c: CallbackQuery, state: FSMContext | None = None):
     srv = await _own(c, int(c.data.split(":")[2]))
     if srv:
         out = await _outgoing(c.from_user.id, srv.id)
-        text, kb = card_text(srv), card_kb(srv)
+        text, kb = card_text(srv), await _card_kb(srv)
         if out:
             u = out["user"] or {}
             text += f"\n\n🔁 <b>Ожидает подтверждения</b> от {e(u.get('first_name') or '')}" + (f" @{e(u['username'])}" if u.get("username") else f" (ID {u.get('tg_id')})")
@@ -661,6 +667,9 @@ async def transfer_start(c: CallbackQuery, state: FSMContext):
         return
     if srv.status not in ("active", "suspended"):
         return await c.answer("Передать можно только созданный сервер.", show_alert=True)
+    async with session() as s:
+        if not (await load_settings(s)).get("transfers_enabled", True):
+            return await c.answer("Передача серверов сейчас отключена.", show_alert=True)
     await state.set_state(TransferInput.to)
     await state.update_data(server_id=srv.id)
     await show(c, f"🔁 <b>Передать {e(srv.name)}</b>\n\nОтправьте @username или Telegram ID друга. Он должен быть клиентом бота.\n\n"
@@ -737,7 +746,7 @@ async def toggle_autorenew(c: CallbackQuery):
         row.auto_renew = not row.auto_renew
         await s.commit()
         srv = row
-    await show(c, card_text(srv), card_kb(srv))
+    await show(c, card_text(srv), await _card_kb(srv))
 
 
 @router.callback_query(F.data.startswith("s:rn:"))
@@ -751,7 +760,7 @@ async def renew_now(c: CallbackQuery):
     except UserError as ex:
         await c.message.answer(f"❌ {e(ex)}", parse_mode="HTML")
         return
-    await show(c, card_text(srv), card_kb(srv))
+    await show(c, card_text(srv), await _card_kb(srv))
 
 
 @router.callback_query(F.data.startswith("s:a:"))
