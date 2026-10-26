@@ -212,7 +212,17 @@
   .readout .over { box-shadow: inset 0 0 0 1px var(--accent-ring); background: rgba(67, 140, 255, .08); }
   .spec { padding: 12px 0 12px; position: relative; }
   .spec + .spec::before { content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--sep); }
-  .spec-h { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; font-weight: 500; }
+  .spec-h { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; font-weight: 500; }
+  .stepper { display: inline-flex; align-items: center; flex: none; background: var(--fill); border-radius: var(--r-pill); padding: 3px; box-shadow: inset 0 0 0 1px var(--line); }
+  .stepper button { width: 34px; height: 34px; border: 0; border-radius: 50%; background: none; color: var(--accent-text); font: 500 22px/1 var(--font); cursor: pointer;
+    display: grid; place-items: center; touch-action: manipulation; -webkit-user-select: none; user-select: none; transition: background var(--t-fast); }
+  .stepper button:active { background: var(--cell); }
+  .stepper button:disabled { color: var(--hint-2); cursor: default; background: none; }
+  .stepper label { display: flex; align-items: baseline; gap: 3px; padding: 0 2px; cursor: text; }
+  .stepper input { width: 3.2ch; border: 0; outline: 0; background: none; padding: 0; text-align: right; color: var(--text);
+    font: 600 16px/1 var(--font); font-variant-numeric: tabular-nums; }
+  .stepper input:focus { color: var(--accent-text); }
+  .stepper .u { font-size: 13px; color: var(--hint); white-space: nowrap; }
   .spec-h .v { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
   .ticks { display: flex; justify-content: space-between; font-size: 11px; color: var(--hint-2); margin-top: 2px; padding: 0 4px; font-variant-numeric: tabular-nums; }
   .match-note { font-size: 13px; color: var(--hint); text-align: center; padding: 10px 8px 6px; min-height: 18px; transition: color var(--t); }
@@ -924,14 +934,53 @@ function builderView() {
   const sliders = {};
   const sliderEls = [['cpu', 'Процессор', 'vCPU'], ['ram', 'Память', 'ГБ'], ['disk', 'Диск NVMe', 'ГБ']].map(([k, title, unit]) => {
     const vals = ax[k];
-    const val = h('span', { class: 'v' });
     const input = h('input', { type: 'range', class: 'ios', min: 0, max: Math.max(vals.length - 1, 0), step: 1, 'aria-label': title, disabled: vals.length < 2 });
-    const paint = () => { const p = vals.length > 1 ? (input.value / (vals.length - 1)) * 100 : 0; input.style.setProperty('--p', p + '%'); val.textContent = (CAT.configurator ? '' : 'от ') + vals[input.value] + ' ' + unit; };
+    // точная настройка: число можно ввести, «−»/«+» — шаг, удержание — быстро
+    const num = h('input', { type: 'text', inputmode: 'numeric', pattern: '[0-9]*', enterkeyhint: 'done', autocomplete: 'off', 'aria-label': `${title}, ${unit}` });
+    const minus = h('button', { type: 'button', 'aria-label': `${title}: меньше` }, '−');
+    const plus = h('button', { type: 'button', 'aria-label': `${title}: больше` }, '+');
+    const last = () => vals.length - 1;
+    const paint = () => {
+      const i = +input.value;
+      input.style.setProperty('--p', (vals.length > 1 ? i / last() * 100 : 0) + '%');
+      if (document.activeElement !== num) num.value = vals[i];
+      num.style.width = Math.max(1, String(vals[i]).length) + 0.4 + 'ch';
+      minus.disabled = i <= 0; plus.disabled = i >= last();
+    };
+    const go = i => {
+      i = Math.max(0, Math.min(last(), i));
+      input.value = String(i);
+      const nv = vals[i];
+      if (nv !== B[k]) { B[k] = nv; UI.haptic('select'); }
+      raised = []; paint(); update();
+    };
+    const hold = (btn, d) => {
+      let t1 = null, t2 = null;
+      const stop = () => { clearTimeout(t1); clearInterval(t2); t1 = t2 = null; };
+      btn.addEventListener('pointerdown', e => { e.preventDefault(); go(+input.value + d); stop(); t1 = setTimeout(() => { t2 = setInterval(() => go(+input.value + d), 70); }, 380); });
+      ['pointerup', 'pointerleave', 'pointercancel'].forEach(ev => btn.addEventListener(ev, stop));
+      btn.addEventListener('click', e => { if (e.detail === 0) go(+input.value + d); });  // клавиатура
+    };
+    hold(minus, -1); hold(plus, 1);
+    const commit = () => {
+      const v = parseInt(String(num.value).replace(/\D/g, ''), 10);
+      if (isNaN(v)) { paint(); return; }
+      // ближайшее допустимое значение (при равенстве — большее)
+      let best = 0;
+      vals.forEach((x, i) => { if (Math.abs(x - v) < Math.abs(vals[best] - v) || (Math.abs(x - v) === Math.abs(vals[best] - v) && x > vals[best])) best = i; });
+      go(best); num.value = vals[best];
+    };
+    num.addEventListener('focus', () => setTimeout(() => num.select(), 0));
+    num.addEventListener('input', () => { num.value = num.value.replace(/\D/g, '').slice(0, 5); num.style.width = Math.max(1, num.value.length) + 0.4 + 'ch'; });
+    num.addEventListener('change', commit);
+    num.addEventListener('blur', commit);
+    num.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); num.blur(); } });
     const setTo = v => { input.value = String(Math.max(vals.indexOf(v), 0)); paint(); };
     setTo(B[k]);
-    input.addEventListener('input', () => { const nv = vals[+input.value]; if (nv !== B[k]) { B[k] = nv; UI.haptic('select'); } paint(); update(); });
+    input.addEventListener('input', () => { const nv = vals[+input.value]; if (nv !== B[k]) { B[k] = nv; UI.haptic('select'); } raised = []; paint(); update(); });
     sliders[k] = { setTo };
-    return h('div', { class: 'spec' }, h('div', { class: 'spec-h' }, h('span', {}, title), val), input,
+    return h('div', { class: 'spec' }, h('div', { class: 'spec-h' }, h('span', {}, title),
+        h('div', { class: 'stepper' }, minus, h('label', {}, num, h('span', { class: 'u' }, unit)), plus)), input,
       h('div', { class: 'ticks' }, h('span', {}, vals[0]), h('span', {}, vals[vals.length - 1])));
   });
   wrap.append(UI.section('Конфигурация', h('div', { class: 'card builder' }, readout, note, ...sliderEls)));
@@ -970,13 +1019,18 @@ function builderView() {
 
   let prev = {};
   builderUpdate = () => { if (tab === 'new' && !UI.nav.stack.length && note.isConnected) update(); };
+  let raised = [];
   function update() {
     const m = match();
+    if (m && m.idx == null) {  // своя конфигурация: если подняли до минимума — ползунок встаёт туда же
+      const up = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
+      if (up.length) { raised = up; up.forEach(k => { B[k] = m[k]; sliders[k].setTo(B[k]); }); }
+    } else raised = [];
     for (const k of ['cpu', 'ram', 'disk']) {
       const shown = m ? m[k] : B[k];
       if (prev[k] !== undefined && prev[k] !== shown) UI.bump(nums[k]);
       nums[k].textContent = shown; prev[k] = shown;
-      tiles[k].classList.toggle('over', !!m && m[k] > B[k]);
+      tiles[k].classList.toggle('over', !!m && (m[k] > B[k] || raised.includes(k)));
     }
     presetBtns.forEach(b => b.setAttribute('aria-pressed', String(!!m && b._idx === m.idx)));
     if (!m) {
@@ -995,7 +1049,7 @@ function builderView() {
     const over = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
     note.className = 'match-note' + (over.length ? '' : ' ok');
     const UNIT = { cpu: ' vCPU', ram: ' ГБ памяти', disk: ' ГБ диска' };
-    note.textContent = (over.length && m.idx == null ? `Своя конфигурация — от ${over.map(k => m[k] + UNIT[k]).join(', ')}: подняли до минимума.`
+    note.textContent = (m.idx == null && raised.length ? `Своя конфигурация — от ${raised.map(k => m[k] + UNIT[k]).join(', ')}: подвинули до минимума.`
       : over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : m.idx == null ? 'Своя конфигурация — ровно под ваши параметры.' : 'Точно под ваши параметры.')
       + (m.speed ? ` Скорость канала — до ${m.speed}.` : '');
     const full = m.price_kop / 100;
