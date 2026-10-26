@@ -23,6 +23,9 @@ class Env(BaseSettings):
     nalog_inn: str = ""
     nalog_password: str = ""
 
+    # свой домен для консоли VNC (прокси на vnc.astravps.co через Caddy): bcloud vnc vnc.example.com
+    vnc_domain: str = ""
+
     database_url: str = "sqlite+aiosqlite:///data/bot.db"
     web_host: str = "0.0.0.0"
     web_port: int = 8080

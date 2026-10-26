@@ -443,7 +443,7 @@ def vnc_link(resp) -> str | None:
 
     found = walk(resp)
     if found:
-        return found
+        return _brand_vnc(found)
     # запасной вариант: адрес без схемы или только токен консоли (формат ссылок Astra: https://vnc.astravps.co/<токен>)
     def strings(x, key="", depth=0):
         if depth > 5:
@@ -460,13 +460,24 @@ def vnc_link(resp) -> str | None:
         v = val.strip()
         m = re.match(r"^(?://)?(vnc\.[a-z0-9.-]+/\S+)$", v, re.I)
         if m:
-            return "https://" + m.group(1)
+            return _brand_vnc("https://" + m.group(1))
         if key in ("token", "vnc_token", "console_token", "key", "session", "hash", "id", "code") and re.fullmatch(r"[A-Za-z0-9_-]{20,128}", v):
-            return VNC_BASE + v
+            return _brand_vnc(VNC_BASE + v)
     return None
 
 
 VNC_BASE = "https://vnc.astravps.co/"
+VNC_HOST = "vnc.astravps.co"
+
+
+def _brand_vnc(url: str) -> str:
+    """Если настроен свой домен консоли (bcloud vnc), показываем его вместо адреса Astra — Caddy проксирует."""
+    from .config import env
+
+    d = (env().vnc_domain or "").strip().lower().removeprefix("https://").strip("/")
+    if not d:
+        return url
+    return re.sub(r"^https?://" + re.escape(VNC_HOST) + r"(?=[/:?#]|$)", "https://" + d, url, flags=re.I)
 
 
 async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:

@@ -29,6 +29,68 @@ EOF
   chmod 755 /usr/local/bin/bcloud
 }
 
+# ───────── Caddy: основной домен и (по желанию) свой домен консоли VNC ─────────
+env_get() { [[ -f .env ]] && sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" .env | tail -1; }
+env_set() {
+  if grep -q "^$1=" .env 2>/dev/null; then sed -i "s|^$1=.*|$1='$2'|" .env; else printf "%s='%s'\n" "$1" "$2" >> .env; fi
+}
+write_caddyfile() {  # $1 — домен бота, $2 — домен консоли (может быть пустым)
+  printf '%s {\n\treverse_proxy bot:8080\n}\n' "$1" > Caddyfile
+  if [[ -n "${2:-}" ]]; then
+    cat >> Caddyfile <<CADDY
+
+# консоль VNC под своим доменом: прозрачный прокси на Astra (страница и WebSocket)
+$2 {
+	reverse_proxy https://vnc.astravps.co {
+		header_up Host vnc.astravps.co
+		header_up Origin https://vnc.astravps.co
+		header_up Referer https://vnc.astravps.co/
+		transport http {
+			tls_server_name vnc.astravps.co
+		}
+	}
+}
+CADDY
+  fi
+}
+
+vnc_domain_cmd() {
+  [[ -f .env ]] || die "Сначала установите бота: sudo ./install.sh"
+  local d="${1:-}" main cur ip res a
+  main="$(env_get PUBLIC_URL)"; main="${main#https://}"; main="${main%%/*}"
+  cur="$(env_get VNC_DOMAIN)"
+  if [[ -z "$d" ]]; then
+    say "Консоль VNC сейчас: ${cur:-адрес Astra (свой домен не настроен)}"
+    say "Включить:  bcloud vnc vnc.${main#*.}   (A-запись поддомена — на IP этого сервера)"
+    say "Выключить: bcloud vnc off"
+    return 0
+  fi
+  if [[ "$d" == off ]]; then
+    d=""
+  else
+    d="${d#https://}"; d="${d%%/*}"; d="${d,,}"
+    [[ "$d" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || die "Неверный домен: $d"
+    [[ "$d" != "$main" ]] || die "Нужен отдельный поддомен, не $main — например vnc.${main#*.}"
+    ip=$(curl -fsS -4 -m 5 https://api.ipify.org 2>/dev/null || true)
+    res=$(getent ahostsv4 "$d" 2>/dev/null | awk '{print $1; exit}' || true)
+    if [[ -n "$ip" && "$res" != "$ip" ]]; then
+      warn "$d сейчас указывает на «${res:-ничего}», а не на этот сервер ($ip)."
+      warn "Добавьте A-запись $d → $ip, иначе сертификат не выпустится."
+      read -r -p "Продолжить всё равно? [y/N] " a; [[ "$a" =~ ^[yYдД] ]] || { say "Отменено"; return 0; }
+    fi
+  fi
+  env_set VNC_DOMAIN "$d"
+  write_caddyfile "$main" "$d"
+  compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy
+  compose up -d --force-recreate bot >/dev/null 2>&1 || compose restart bot
+  if [[ -n "$d" ]]; then
+    ok "Консоль VNC теперь открывается по адресу https://$d/…"
+    say "Сертификат выпустится за минуту. Проверьте: откройте консоль в кабинете."
+  else
+    ok "Свой домен консоли выключен — ссылки снова ведут на Astra"
+  fi
+}
+
 # ───────── защита сервера ─────────
 ssh_port() { sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'; }
 
@@ -189,6 +251,7 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud restore Ф восстановить базу из копии (файл из Telegram *.db.gz или bot.db)
   bcloud harden    защитить сервер: файрвол, fail2ban, SSH, автообновления
   bcloud security  состояние защиты: файрвол, блокировки, вход по паролю
+  bcloud vnc ДОМЕН консоль VNC под своим поддоменом (bcloud vnc off — выключить)
   bcloud setup     повторная настройка (токен, домен, ключи)
   bcloud help      эта справка
 EOF
@@ -241,6 +304,7 @@ case "${1:-install}" in
     exit 0 ;;
   harden)   harden; exit 0 ;;
   security) security_status; exit 0 ;;
+  vnc)      vnc_domain_cmd "${2:-}"; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   setup|install) ;;
   *) usage; die "Неизвестная команда: $1" ;;
@@ -346,9 +410,10 @@ YOOKASSA_SHOP_ID='${V[YOOKASSA_SHOP_ID]:-}'
 YOOKASSA_SECRET_KEY='${V[YOOKASSA_SECRET_KEY]:-}'
 NALOG_INN='${V[NALOG_INN]:-}'
 NALOG_PASSWORD='${V[NALOG_PASSWORD]:-}'
+VNC_DOMAIN='${V[VNC_DOMAIN]:-}'
 EOF
 chmod 600 .env
-printf '%s {\n\treverse_proxy bot:8080\n}\n' "${V[DOMAIN]}" > Caddyfile
+write_caddyfile "${V[DOMAIN]}" "${V[VNC_DOMAIN]:-}"
 mkdir -p data
 ok "Конфигурация записана (.env, Caddyfile)"
 
