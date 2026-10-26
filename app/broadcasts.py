@@ -77,8 +77,8 @@ def validate(text: str, btn_text: str = "", btn_url: str = "") -> str:
 def _audience_query(audience: str, kind: str):
     active_ids = select(Server.tg_id).where(Server.status.in_(["active", "suspended", "provisioning"]))
     q = select(User.tg_id).where(User.banned.is_(False), User.bot_blocked.is_(False), User.consent_version > 0)
-    if kind == "news":
-        q = q.where(User.news_off.is_(False))
+    if kind == "news":  # реклама — только с согласием (38-ФЗ ст. 18)
+        q = q.where(User.ads_consent.is_(True))
     if audience == "active":
         q = q.where(User.tg_id.in_(active_ids))
     elif audience == "inactive":
@@ -101,10 +101,12 @@ def buttons(b: Broadcast | dict) -> list:
         out.append((get("btn_text"), get("btn_url"), None))
     if get("kind") == "news":
         out.append(("🔕 Отписаться от новостей", None, "nw:off"))
+    elif get("ask_ads"):
+        out.append(("🔔 Получать новости и акции", None, "nw:on"))
     return out
 
 
-async def create(ctx, admin_id: int, text: str, audience: str, kind: str, btn_text: str = "", btn_url: str = "") -> Broadcast:
+async def create(ctx, admin_id: int, text: str, audience: str, kind: str, btn_text: str = "", btn_url: str = "", ask_ads: bool = False) -> Broadcast:
     text = validate(text, btn_text, btn_url)
     if audience not in AUDIENCES or kind not in KINDS:
         raise BroadcastError("Неизвестная аудитория.")
@@ -116,7 +118,7 @@ async def create(ctx, admin_id: int, text: str, audience: str, kind: str, btn_te
         raise BroadcastError("В этой аудитории никого нет.")
     async with session() as s:
         b = Broadcast(text=text, btn_text=btn_text.strip(), btn_url=btn_url.strip(), audience=audience, kind=kind,
-                      status="sending", total=total, created_by=admin_id)
+                      ask_ads=bool(ask_ads and kind == "service"), status="sending", total=total, created_by=admin_id)
         s.add(b)
         await s.commit()
         await s.refresh(b)
@@ -124,11 +126,11 @@ async def create(ctx, admin_id: int, text: str, audience: str, kind: str, btn_te
     return b
 
 
-async def send_test(ctx, admin_id: int, text: str, kind: str, btn_text: str = "", btn_url: str = "") -> str:
+async def send_test(ctx, admin_id: int, text: str, kind: str, btn_text: str = "", btn_url: str = "", ask_ads: bool = False) -> str:
     text = validate(text, btn_text, btn_url)
     if ctx.send_broadcast is None:
         raise BroadcastError("Бот ещё не запущен.")
-    res = await ctx.send_broadcast(admin_id, text, buttons({"btn_text": btn_text, "btn_url": btn_url, "kind": kind}))
+    res = await ctx.send_broadcast(admin_id, text, buttons({"btn_text": btn_text, "btn_url": btn_url, "kind": kind, "ask_ads": ask_ads}))
     if res != "ok":
         raise BroadcastError("Telegram не принял сообщение — проверьте разметку и ссылку кнопки." if res == "error" else "Не удалось отправить: напишите боту /start.")
     return res
@@ -204,7 +206,7 @@ async def _report(ctx, bid: int) -> None:
 
 def as_dict(b: Broadcast) -> dict:
     return {"id": b.id, "text": b.text, "btn_text": b.btn_text, "btn_url": b.btn_url, "audience": b.audience, "kind": b.kind,
-            "status": b.status, "total": b.total, "sent": b.sent, "failed": b.failed, "blocked": b.blocked,
+            "ask_ads": b.ask_ads, "status": b.status, "total": b.total, "sent": b.sent, "failed": b.failed, "blocked": b.blocked,
             "created": b.created_at.isoformat(), "finished": b.finished_at.isoformat() if b.finished_at else None}
 
 
@@ -221,5 +223,7 @@ async def get(bid: int) -> dict | None:
 
 
 async def news_unsubscribed_count() -> int:
+    """Клиенты без согласия на рекламу (не отписавшиеся явно — тоже: просто ещё не дали согласие)."""
     async with session() as s:
-        return (await s.execute(select(func.count()).select_from(User).where(User.news_off.is_(True)))).scalar_one()
+        return (await s.execute(select(func.count()).select_from(User).where(
+            User.ads_consent.is_(False), User.banned.is_(False), User.consent_version > 0))).scalar_one()

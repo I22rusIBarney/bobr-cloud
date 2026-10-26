@@ -111,24 +111,26 @@ def consent_kb(tg_id: int) -> InlineKeyboardMarkup:
     base = env().public_url.rstrip("/")
     done = _checked.get(tg_id, set())
     b = InlineKeyboardBuilder()
-    for k in REQUIRED:
+    for k in (*REQUIRED, "ads"):  # последний пункт — необязательное согласие на рекламу
         mark = "✅" if k in done else "⬜️"
         b.row(InlineKeyboardButton(text=f"{mark} {DOCS[k]['check']}", callback_data=f"cs:t:{k}"))
     # ссылки на документы — отдельными кнопками, чтобы их можно было прочитать до согласия
     links = [InlineKeyboardButton(text="📄 " + t, url=f"{base}/legal/{k}") for k, t in
-             (("terms", "Соглашение"), ("aup", "Правила"), ("privacy", "Политика"), ("pd", "Согласие"))]
+             (("terms", "Соглашение"), ("aup", "Правила"), ("privacy", "Политика"), ("pd", "Согласие"), ("ads", "Реклама"))]
     if base.startswith("https://"):
         b.row(*links[:2])
-        b.row(*links[2:])
+        b.row(*links[2:4])
+        b.row(links[4])
     all_ok = all(k in done for k in REQUIRED)
-    b.row(InlineKeyboardButton(text="✅ Продолжить" if all_ok else "Отметьте все пункты", callback_data="cs:ok"))
+    b.row(InlineKeyboardButton(text="✅ Продолжить" if all_ok else "Отметьте обязательные пункты", callback_data="cs:ok"))
     return b.as_markup()
 
 
 CONSENT_TEXT = (
     "🛡 <b>Добро пожаловать</b>\n\n"
     "Перед началом работы ознакомьтесь с документами и отметьте пункты ниже. "
-    "Каждый документ открывается кнопкой 📄.\n\n"
+    "Каждый документ открывается кнопкой 📄.\n"
+    "Последний пункт — по желанию: без него не будем присылать новости и акции.\n\n"
     "<i>Без согласия на обработку персональных данных мы не сможем оказывать услуги.</i>"
 )
 
@@ -187,7 +189,7 @@ async def subscribe_check(c: CallbackQuery, state: FSMContext):
 @router.callback_query(F.data.startswith("cs:t:"))
 async def consent_toggle(c: CallbackQuery):
     k = c.data.split(":")[2]
-    if k not in REQUIRED:
+    if k not in REQUIRED and k != "ads":
         return await c.answer()
     done = _checked.setdefault(c.from_user.id, set())
     done.symmetric_difference_update({k})
@@ -202,7 +204,7 @@ async def consent_toggle(c: CallbackQuery):
 async def consent_ok(c: CallbackQuery, state: FSMContext):
     done = _checked.get(c.from_user.id, set())
     if not all(k in done for k in REQUIRED):
-        return await c.answer("Отметьте все пункты — без них мы не можем оказывать услуги.", show_alert=True)
+        return await c.answer("Отметьте первые четыре пункта — без них мы не можем оказывать услуги.", show_alert=True)
     try:
         await acc.accept_consent(c.from_user.id, "bot", list(done))
     except UserError as ex:
@@ -828,13 +830,12 @@ def make_broadcast_sender(bot: Bot):
 @router.callback_query(F.data.in_({"nw:off", "nw:on"}))
 async def news_toggle(c: CallbackQuery):
     on = c.data == "nw:on"
-    async with session() as s:
-        u = await s.get(User, c.from_user.id)
-        if u:
-            u.news_off = not on
-            await s.commit()
+    try:
+        await acc.set_ads_consent(c.from_user.id, on, "bot")
+    except UserError:
+        return await c.answer()
     if on:
-        await c.answer("✅ Вы снова получаете новости", show_alert=True)
+        await c.answer("✅ Готово: будем присылать новости и акции. Отписаться можно в любой момент.", show_alert=True)
     else:
         await c.answer("🔕 Вы отписались от новостей и акций. Уведомления о серверах и оплате будут приходить как раньше.", show_alert=True)
     try:

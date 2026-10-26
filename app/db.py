@@ -59,6 +59,8 @@ class User(Base):
     markup_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     # рассылки: отписался от новостей / заблокировал бота (не шлём, пока снова не напишет)
     news_off: Mapped[bool] = mapped_column(Boolean, default=False)
+    # согласие на рекламу (38-ФЗ ст. 18): только с ним уходят рассылки «Новости и акции»
+    ads_consent: Mapped[bool] = mapped_column(Boolean, default=False)
     bot_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     # реферальная программа: кто пригласил, когда, выдан ли приветственный бонус
     referrer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
@@ -75,6 +77,7 @@ class Broadcast(Base):
     btn_url: Mapped[str] = mapped_column(String(512), default="")
     audience: Mapped[str] = mapped_column(String(16), default="all")   # all | active | inactive
     kind: Mapped[str] = mapped_column(String(16), default="news")      # news (с отпиской) | service
+    ask_ads: Mapped[bool] = mapped_column(Boolean, default=False)       # кнопка «Получать новости и акции» в важной рассылке
     status: Mapped[str] = mapped_column(String(16), default="sending")  # sending | done | cancelled
     total: Mapped[int] = mapped_column(Integer, default=0)
     sent: Mapped[int] = mapped_column(Integer, default=0)

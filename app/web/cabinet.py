@@ -144,11 +144,12 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
         sub_info = await sub.required(ctx, m["id"]) if m["consented"] else None
         return {
             "subscription": {"needed": True, **sub_info} if sub_info else {"needed": False},
-            "news_off": bool(user.news_off),
+            "news_off": not user.ads_consent,
+            "ads_consent": bool(user.ads_consent),
             "is_admin": m["id"] in env().admins,
             "user": {"id": user.tg_id, "username": user.username, "first_name": user.first_name, "since": user.created_at.isoformat()},
             "consent": {"needed": not m["consented"], "version": cfg["docs_version"], "date": cfg["docs_date"],
-                        "docs": [{"key": k, **DOCS[k]} for k in REQUIRED]},
+                        "docs": [{"key": k, **DOCS[k]} for k in REQUIRED], "optional": [{"key": "ads", **DOCS["ads"]}]},
             "discount": {"pct": user.promo_discount_pct, "code": user.promo_code} if user.promo_discount_pct else None,
             "autopay": {"available": cfg["autopay_available"], "enabled": user.autopay_enabled, "methods": n_methods},
             "service_name": cfg["service_name"],
@@ -176,11 +177,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
 
     @r.post("/news")
     async def news_toggle(p: NewsIn, m: dict = Depends(me_ok)):
-        async with session() as s:
-            u = await s.get(User, m["id"])
-            u.news_off = not p.enabled
-            await s.commit()
-        return {"enabled": p.enabled}
+        return {"enabled": await acc.set_ads_consent(m["id"], p.enabled, "app")}
 
     # ───── согласия и документы ─────
 

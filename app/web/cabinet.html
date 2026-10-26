@@ -777,19 +777,22 @@ function subscribeView() {
 function consentView() {
   const checked = new Set();
   const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Продолжить');
-  const rows = D.consent.docs.map(d => {
+  const required = D.consent.docs.map(d => d.key);
+  const mkRow = d => {
     const box = h('span', { class: 'cbox', role: 'checkbox', 'aria-checked': 'false' }, icon('check'));
     const toggle = () => {
       checked.has(d.key) ? checked.delete(d.key) : checked.add(d.key);
       box.classList.toggle('on', checked.has(d.key)); box.setAttribute('aria-checked', String(checked.has(d.key)));
-      go.disabled = checked.size !== D.consent.docs.length; UI.haptic('select');
+      go.disabled = !required.every(k => checked.has(k)); UI.haptic('select');
     };
     const r = h('div', { class: 'row' },
       h('button', { type: 'button', style: 'display:flex;align-items:center;gap:12px;flex:1;border:0;background:none;padding:11px 0;text-align:left;cursor:pointer', onclick: toggle }, box, h('span', { style: 'font-size:15px;letter-spacing:-0.24px' }, d.check)),
       h('button', { type: 'button', class: 'btn plain', style: 'width:auto;min-height:0;padding:6px 0 6px 8px;font-size:15px', onclick: () => UI.nav.push(() => docView(d.key)) }, 'Читать'));
     r.style.setProperty('--inset', '52px');
     return r;
-  });
+  };
+  const rows = D.consent.docs.map(mkRow);
+  const optional = (D.consent.optional || []).map(mkRow);
   go.onclick = UI.busy(go, async () => {
     const r = await UI.run(() => api('/consent', 'POST', { docs: [...checked] }));
     if (r === undefined) return;
@@ -802,6 +805,7 @@ function consentView() {
       h('h1', { style: 'font-size:28px;line-height:34px;margin:0 0 8px;letter-spacing:.36px' }, 'Добро пожаловать в ' + name),
       h('p', { style: 'margin:0;color:var(--hint);font-size:15px' }, 'Перед началом работы ознакомьтесь с документами и отметьте пункты ниже.')),
     group(null, rows, D.consent.date ? `Редакция от ${D.consent.date}.` : null),
+    optional.length ? group('По желанию', optional, 'Без этой отметки не будем присылать новости и акции. Изменить можно в профиле.') : null,
     h('div', { style: 'margin:0 var(--gutter) 12px' }, go),
     h('div', { class: 'group-f', style: 'text-align:center;margin:0 var(--gutter) 30px' }, 'Без согласия на обработку персональных данных мы не сможем оказывать услуги.'));
 }
@@ -999,8 +1003,8 @@ function profileView() {
   wrap.append(group('Ещё', [
     row({ icon: 'lifebuoy', tile: '#34D399', title: 'Поддержка', sub: 'Ответим в приложении и в чате', right: D.tickets_unread ? h('span', { class: 'count' }, String(D.tickets_unread)) : null, onClick: () => UI.nav.push(ticketsView) }),
     row({ icon: 'sparkle', tile: '#C084FC', title: 'Оформление', sub: 'Фон и сезонные эффекты', onClick: () => UI.nav.push(appearanceView) }),
-    row({ icon: 'megaphone', tile: '#438CFF', title: 'Новости и акции', sub: 'Сообщения в боте', right: UI.toggle(!D.news_off, async (val, inp) => {
-      const r = await UI.run(() => api('/news', 'POST', { enabled: val }), val ? 'Новости включены' : 'Вы отписались от новостей');
+    row({ icon: 'megaphone', tile: '#438CFF', title: 'Новости и акции', sub: 'Согласие на рекламу в боте', right: UI.toggle(!D.news_off, async (val, inp) => {
+      const r = await UI.run(() => api('/news', 'POST', { enabled: val }), val ? 'Будем присылать новости и акции' : 'Вы отписались от новостей');
       if (r === undefined) { inp.checked = !val; return; }
       D.news_off = !val;
     }, 'Новости и акции') }),
@@ -1055,7 +1059,7 @@ function txRow(x) {
 function documentsView() {
   const u = D.user;
   return h('div', {}, UI.nav.backLink('Профиль'), h('h1', { class: 'large-title' }, 'Документы'),
-    group(null, [...D.consent.docs, { key: 'autopay', title: 'Правила автоплатежей' }].map(d => row({ icon: 'doc', tile: '#A3A8B4', title: d.title, onClick: () => UI.nav.push(() => docView(d.key)) })),
+    group(null, [...D.consent.docs, { key: 'autopay', title: 'Правила автоплатежей' }, { key: 'ads', title: 'Согласие на получение рекламы' }].map(d => row({ icon: 'doc', tile: '#A3A8B4', title: d.title, onClick: () => UI.nav.push(() => docView(d.key)) })),
       `Вы приняли документы${D.consent.date ? ' в редакции от ' + D.consent.date : ''}. Клиент с ${UI.date(u.since).split(',')[0]}.`),
     group(null, [row({ title: 'Отозвать согласие на обработку данных', cls: 'destructive', onClick: async () => {
       const ok = await UI.ask({ title: 'Отозвать согласие?', message: 'Доступ к сервису закроется, автоплатежи выключатся. Мы удалим ваши данные в течение 30 дней, кроме тех, что нужно хранить по закону. Действующие серверы лучше сначала удалить.', buttons: [{ id: 'y', text: 'Отозвать', type: 'destructive' }] });

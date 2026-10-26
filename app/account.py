@@ -43,9 +43,26 @@ async def accept_consent(tg_id: int, source: str, docs: list[str] | None = None)
             raise UserError("Пользователь не найден. Откройте бота заново.")
         for d in REQUIRED:
             s.add(Consent(tg_id=tg_id, doc=d, version=ver, source=source))
+        if "ads" in docs and not u.ads_consent:  # необязательное согласие на рекламу
+            s.add(Consent(tg_id=tg_id, doc="ads", version=ver, source=source))
+            u.ads_consent, u.news_off = True, False
         u.consent_version, u.consent_at = ver, utcnow()
         await s.commit()
     return ver
+
+
+async def set_ads_consent(tg_id: int, on: bool, source: str) -> bool:
+    """Даёт или отзывает согласие на рекламу; каждое изменение пишется в журнал согласий."""
+    async with session() as s:
+        cfg = await load_settings(s)
+        u = await s.get(User, tg_id)
+        if u is None:
+            raise UserError("Пользователь не найден.")
+        if bool(u.ads_consent) != bool(on):
+            s.add(Consent(tg_id=tg_id, doc="ads", version=int(cfg["docs_version"]), source=source, accepted=bool(on)))
+        u.ads_consent, u.news_off = bool(on), not on
+        await s.commit()
+    return bool(on)
 
 
 async def revoke_consent(tg_id: int, source: str) -> None:
@@ -56,7 +73,9 @@ async def revoke_consent(tg_id: int, source: str) -> None:
         if u is None:
             return
         s.add(Consent(tg_id=tg_id, doc="pd", version=int(cfg["docs_version"]), source=source, accepted=False))
-        u.consent_version, u.autopay_enabled = 0, False
+        if u.ads_consent:
+            s.add(Consent(tg_id=tg_id, doc="ads", version=int(cfg["docs_version"]), source=source, accepted=False))
+        u.consent_version, u.autopay_enabled, u.ads_consent, u.news_off = 0, False, False, True
         await s.commit()
 
 

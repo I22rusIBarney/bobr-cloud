@@ -283,7 +283,7 @@ function broadcastsView() {
           const ok = await UI.ask({ title: 'Остановить рассылку?', message: 'Тем, кто ещё не получил сообщение, оно не придёт.', buttons: [{ id: 'y', text: 'Остановить', type: 'destructive' }] });
           if (ok && await UI.run(() => api(`broadcasts/${b.id}/cancel`, 'POST'), 'Рассылка остановлена') !== undefined) draw();
         } : undefined });
-    }), r.unsubscribed ? `Отписались от новостей: ${r.unsubscribed}. Им приходят только «важные» рассылки.` : null));
+    }), r.unsubscribed ? `Без согласия на рекламу: ${r.unsubscribed} — им приходят только «важные» рассылки. Спросить согласие можно кнопкой в «важной» рассылке.` : null));
     clearTimeout(timer);
     if (r.items.some(b => b.status === 'sending') && v.isConnected) timer = setTimeout(draw, 2500);
   };
@@ -303,16 +303,20 @@ function composeView() {
   const send = h('button', { class: 'btn', type: 'button' });
   const test = h('button', { class: 'btn tinted', type: 'button' }, 'Отправить себе');
   const audBox = h('div');
+  const askToggle = UI.toggle(!!DRAFT.ask_ads, v => { DRAFT.ask_ads = v; }, 'Предложить подписаться на новости');
+  const askBox = group(null, [row({ title: 'Кнопка «Получать новости и акции»', sub: 'Даст согласие на рекламу в один тап', right: askToggle })],
+    'Так можно спросить согласие у тех, кто его ещё не дал. Сам текст «Важного» не должен быть рекламой.');
   const n = () => counts[`${DRAFT.kind}:${DRAFT.audience}`] ?? 0;
   const paint = () => {
     audBox.replaceChildren(UI.chips(Object.keys(AUD_LABEL).map(k => ({ value: k, label: `${AUD_LABEL[k]} · ${counts[`${DRAFT.kind}:${k}`] ?? 0}` })), DRAFT.audience, v => { DRAFT.audience = v; paint(); }));
     send.textContent = `Отправить · ${n()} ${UI.plural(n(), 'получатель', 'получателя', 'получателей')}`;
     send.disabled = !ta.value.trim() || !n();
+    askBox.style.display = DRAFT.kind === 'service' ? '' : 'none';
   };
   ta.addEventListener('input', () => { DRAFT.text = ta.value; paint(); });
   bt.addEventListener('input', () => { DRAFT.btn_text = bt.value; });
   bu.addEventListener('input', () => { DRAFT.btn_url = bu.value; });
-  const body = extra => ({ text: ta.value, kind: DRAFT.kind, audience: DRAFT.audience, btn_text: bt.value, btn_url: bu.value, ...extra });
+  const body = extra => ({ text: ta.value, kind: DRAFT.kind, audience: DRAFT.audience, btn_text: bt.value, btn_url: bu.value, ask_ads: DRAFT.kind === 'service' && !!DRAFT.ask_ads, ...extra });
   test.onclick = UI.busy(test, async () => { await UI.run(() => api('broadcasts', 'POST', body({ test: true })), 'Отправили вам в бота'); });
   send.onclick = UI.busy(send, async () => {
     const ok = await UI.ask({ title: 'Запустить рассылку?', message: `Сообщение получат ${n()} ${UI.plural(n(), 'клиент', 'клиента', 'клиентов')}. Отменить отправленное нельзя — сначала проверьте его кнопкой «Отправить себе».`, buttons: [{ id: 'y', text: 'Отправить' }] });
@@ -328,7 +332,8 @@ function composeView() {
     group('Сообщение', [h('label', { class: 'field stack' }, ta)],
       h('span', {}, 'Можно оформлять: ', h('span', { class: 'mono' }, '<b>жирный</b> <i>курсив</i> <a href="https://…">ссылка</a>'), '. Эмодзи — как обычно.')),
     group('Тип', [h('div', { style: 'padding:10px 12px' }, UI.segmented([{ value: 'news', label: 'Новости и акции' }, { value: 'service', label: 'Важное' }], DRAFT.kind, v => { DRAFT.kind = v; paint(); }))],
-      'Новости не получают те, кто отписался, и в сообщении есть кнопка «Отписаться». «Важное» — для плановых работ и изменений условий: приходит всем.'),
+      'Новости и акции — это реклама: уходят только тем, кто дал согласие на рекламу, с кнопкой «Отписаться». «Важное» — плановые работы, изменение условий, без рекламы: приходит всем.'),
+    askBox,
     h('div', { class: 'group-h' }, 'Кому'), audBox,
     group('Кнопка (необязательно)', [h('label', { class: 'field stack' }, h('label', {}, 'Текст'), bt), h('label', { class: 'field stack' }, h('label', {}, 'Ссылка'), bu)]),
     h('div', { class: 'actions' }, test, send),
@@ -532,7 +537,7 @@ function clientBody(c) {
   if (c.history.length) out.push(group('Операции по балансу', c.history.slice(0, 15).map(x => row({ title: x.title, sub: [x.detail, UI.date(x.created)].filter(Boolean).join('  ·  '),
     right: h('span', { class: 'num', style: 'font-weight:600;color:' + (x.amount_rub > 0 ? 'var(--ok)' : 'var(--text)') }, (x.amount_rub > 0 ? '+' : '−') + rub(Math.abs(x.amount_rub))) }))));
   if (c.promos.length) out.push(group('Промокоды', c.promos.map(p => row({ title: p.code, sub: UI.date(p.created), detail: p.kind === 'bonus' ? '+' + rub(p.value) : '−' + p.value + '%' }))));
-  const DOCN = { terms: 'Соглашение', aup: 'Правила', privacy: 'Политика', pd: 'Согласие ПД', autopay: 'Автоплатежи' };
+  const DOCN = { terms: 'Соглашение', aup: 'Правила', privacy: 'Политика', pd: 'Согласие ПД', autopay: 'Автоплатежи', ads: 'Реклама' };
   if (c.consents.length) out.push(group('Журнал согласий', c.consents.slice(0, 12).map(x => row({ title: (x.accepted ? '' : 'Отзыв: ') + (DOCN[x.doc] || x.doc), sub: `ред. ${x.version}  ·  ${x.source === 'bot' ? 'в боте' : 'в приложении'}`, detail: UI.date(x.created) })), 'Журнал подтверждает, когда и где клиент принял документы.'));
   return out;
 }

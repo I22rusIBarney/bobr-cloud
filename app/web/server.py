@@ -86,6 +86,7 @@ class BroadcastIn(BaseModel):
     kind: str = "news"
     btn_text: str = ""
     btn_url: str = ""
+    ask_ads: bool = False
     test: bool = False
 
 
@@ -433,9 +434,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         from .. import broadcasts as bc
         try:
             if p.test:
-                await bc.send_test(ctx, int(u["id"]), p.text, p.kind, p.btn_text, p.btn_url)
+                await bc.send_test(ctx, int(u["id"]), p.text, p.kind, p.btn_text, p.btn_url, p.ask_ads)
                 return {"test": True}
-            b = await bc.create(ctx, int(u["id"]), p.text, p.audience, p.kind, p.btn_text, p.btn_url)
+            b = await bc.create(ctx, int(u["id"]), p.text, p.audience, p.kind, p.btn_text, p.btn_url, p.ask_ads)
         except bc.BroadcastError as ex:
             raise HTTPException(400, str(ex))
         return bc.as_dict(b)
