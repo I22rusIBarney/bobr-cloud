@@ -364,7 +364,7 @@ function serversView() {
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
         h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name), h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—'))),
         h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
-      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.auto_renew ? specChip('renew', 'Автопродление') : null),
+      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.speed ? specChip('globe', s.speed) : null, s.auto_renew ? specChip('renew', 'Автопродление') : null),
       days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
         h('div', { class: 'term-row' }, h('span', {}, days > 0 ? `Осталось ${days} ${UI.plural(days, 'день', 'дня', 'дней')}` : 'Срок истёк'), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
   });
