@@ -16,6 +16,7 @@ from ..services import UserError
 from .. import account as acc
 from .. import tickets as tk
 from .. import referral
+from .. import subscription as sub
 from ..legal import DOCS, REQUIRED, render_fragment
 from ..settings import load_settings
 from .auth import validate_init_data
@@ -81,6 +82,10 @@ class BuyIn(BaseModel):
     period: str = "1m"
 
 
+class NewsIn(BaseModel):
+    enabled: bool
+
+
 class RenameIn(BaseModel):
     name: str
 
@@ -120,6 +125,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     async def me_ok(m: dict = Depends(me)) -> dict:
         if not m["consented"]:
             raise HTTPException(403, "Чтобы продолжить, примите документы сервиса.")
+        if await sub.required(ctx, m["id"]):
+            raise HTTPException(403, "Чтобы продолжить, подпишитесь на наш канал.")
         return m
 
     def wrap(ex: UserError) -> HTTPException:
@@ -134,7 +141,10 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 await s.execute(select(Server).where(Server.tg_id == m["id"], Server.status != "deleted").order_by(Server.id))
             ).scalars().all()
         n_methods = len(await acc.methods(m["id"]))
+        sub_info = await sub.required(ctx, m["id"]) if m["consented"] else None
         return {
+            "subscription": {"needed": True, **sub_info} if sub_info else {"needed": False},
+            "news_off": bool(user.news_off),
             "is_admin": m["id"] in env().admins,
             "user": {"id": user.tg_id, "username": user.username, "first_name": user.first_name, "since": user.created_at.isoformat()},
             "consent": {"needed": not m["consented"], "version": cfg["docs_version"], "date": cfg["docs_date"],
@@ -155,6 +165,22 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 "support": None,  # поддержка — через обращения в кабинете
             },
         }
+
+    # ───── подписка на канал и новости ─────
+
+    @r.post("/subscription/check")
+    async def subscription_check(m: dict = Depends(me)):
+        sub.forget(m["id"])
+        info = await sub.required(ctx, m["id"])
+        return {"needed": bool(info), **(info or {})}
+
+    @r.post("/news")
+    async def news_toggle(p: NewsIn, m: dict = Depends(me_ok)):
+        async with session() as s:
+            u = await s.get(User, m["id"])
+            u.news_off = not p.enabled
+            await s.commit()
+        return {"enabled": p.enabled}
 
     # ───── согласия и документы ─────
 

@@ -118,6 +118,7 @@ function rootView() {
   v.append(group(null, [
     row({ icon: 'chat', tile: '#34C759', title: 'Обращения', detail: tunread ? null : (topen ? String(topen) : ''), right: tunread ? h('span', { class: 'count' }, String(tunread)) : null, onClick: () => UI.nav.push(ticketsView) }),
     row({ icon: 'users', tile: '#30B0C7', title: 'Клиенты', detail: String(st.users), onClick: () => UI.nav.push(usersView) }),
+    row({ icon: 'megaphone', tile: '#5856D6', title: 'Рассылки', onClick: () => UI.nav.push(broadcastsView) }),
     row({ icon: 'gift', tile: '#FF2D55', title: 'Промокоды', onClick: () => UI.nav.push(promosView) }),
     row({ icon: 'wallet', tile: '#AF52DE', title: 'Платежи и чеки', onClick: () => UI.nav.push(paymentsView) }),
   ]));
@@ -133,6 +134,7 @@ function rootView() {
   v.append(group('Подключения', [
     row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
     row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
+    row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
   ]));
 
   // цены
@@ -223,6 +225,116 @@ function textsView() {
 }
 
 // ───────── ЮKassa ─────────
+// ───────── подписка на канал ─────────
+function textField(label, key, placeholder) {
+  const i = h('input', { type: 'text', 'aria-label': label, placeholder: placeholder || '', autocapitalize: 'off', spellcheck: false, style: 'text-align:left' });
+  i.value = S.settings[key] || '';
+  i.addEventListener('input', () => setVal(key, i.value.trim()));
+  return { el: h('label', { class: 'field stack' }, h('label', {}, label), i), input: i };
+}
+function subView() {
+  const chat = textField('Канал или группа', 'sub_chat', '@bobrcloud или -1001234567890');
+  const link = textField('Ссылка-приглашение (для закрытых)', 'sub_link', 'https://t.me/+…');
+  const st = statusLine();
+  const check = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить канал');
+  check.onclick = UI.busy(check, async () => {
+    if (!chat.input.value.trim()) { showStatus(st, { ok: false, message: 'Укажите канал или группу.' }); return; }
+    try {
+      const r = await api('subscription/check', 'POST', { chat: chat.input.value.trim() });
+      if (r.title) setVal('sub_title', r.title);
+      if (r.ok && r.link && !link.input.value.trim() && !/^https:\/\/t\.me\/[A-Za-z]/.test(r.link)) { link.input.value = r.link; setVal('sub_link', r.link); }
+      showStatus(st, { ok: r.ok, message: r.ok ? `✓ «${r.title}»: бот — администратор, подписку проверить можно.` + (r.note ? ' ' + r.note : '') : r.error });
+    } catch (e) { showStatus(st, { ok: false, message: e.message }); }
+  });
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Подписка на канал'),
+    group(null, [toggleRow('Обязательная подписка', 'sub_required', 'Без подписки бот и кабинет не пускают дальше')],
+      'Клиент видит сообщение «Подпишитесь на канал» с кнопками «Подписаться» и «Я подписался». Администраторов это не касается.'),
+    group('Канал', [chat.el, link.el], h('span', {}, st)),
+    h('div', { style: 'margin:-14px var(--gutter) 22px' }, check),
+    group('Как подключить', [row({ cls: 'wrap', title: '1. Добавьте бота в канал или группу администратором', sub: 'Права можно не давать — Telegram разрешает проверять подписчиков только администраторам.' }),
+      row({ cls: 'wrap', title: '2. Укажите @username канала', sub: 'Для закрытого — ID вида -100… и ссылку-приглашение.' }),
+      row({ cls: 'wrap', title: '3. Нажмите «Проверить канал» и сохраните', sub: 'Если бот потеряет права, клиентов пропустит без подписки, а вам придёт предупреждение.' })]));
+}
+
+// ───────── рассылки ─────────
+const AUD_LABEL = { all: 'Все', active: 'С серверами', inactive: 'Без серверов' };
+const BST = { sending: ['Отправляется', 'warn'], done: ['Готово', 'ok'], cancelled: ['Остановлена', ''] };
+const DRAFT = { text: '', kind: 'news', audience: 'all', btn_text: '', btn_url: '' };
+const stripTags = t => t.replace(/<[^>]+>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+
+function broadcastsView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' })]));
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Рассылки'),
+    h('div', { style: 'margin:0 var(--gutter) 22px' }, h('button', { class: 'btn', type: 'button', onclick: () => UI.nav.push(composeView) }, icon('plus'), 'Новая рассылка')),
+    list);
+  let timer = null;
+  const draw = async () => {
+    let r; try { r = await api('broadcasts'); } catch (e) { list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)); return; }
+    BC = r;
+    if (!r.items.length) list.replaceChildren(h('div', { class: 'empty' }, icon('megaphone'), h('b', {}, 'Рассылок пока не было'), 'Сообщите клиентам о новых локациях, акциях или плановых работах.'));
+    else list.replaceChildren(group('История', r.items.map(b => {
+      const [st, cl] = BST[b.status] || [b.status, ''];
+      const done = b.sent + b.failed + b.blocked;
+      return row({ cls: 'wrap', title: stripTags(b.text).split('\n')[0].slice(0, 80) || '—',
+        sub: `${UI.date(b.created)} · ${AUD_LABEL[b.audience] || b.audience} · ${b.kind === 'news' ? 'новости' : 'важное'}\n`
+          + (b.status === 'sending' ? `Отправлено ${done} из ${b.total}` : `Доставлено ${b.sent} из ${b.total}` + (b.blocked ? ` · заблокировали ${b.blocked}` : '') + (b.failed ? ` · ошибок ${b.failed}` : '')),
+        right: h('span', { class: 'badge ' + cl }, st),
+        onClick: b.status === 'sending' ? async () => {
+          const ok = await UI.ask({ title: 'Остановить рассылку?', message: 'Тем, кто ещё не получил сообщение, оно не придёт.', buttons: [{ id: 'y', text: 'Остановить', type: 'destructive' }] });
+          if (ok && await UI.run(() => api(`broadcasts/${b.id}/cancel`, 'POST'), 'Рассылка остановлена') !== undefined) draw();
+        } : undefined });
+    }), r.unsubscribed ? `Отписались от новостей: ${r.unsubscribed}. Им приходят только «важные» рассылки.` : null));
+    clearTimeout(timer);
+    if (r.items.some(b => b.status === 'sending') && v.isConnected) timer = setTimeout(draw, 2500);
+  };
+  draw();
+  return v;
+}
+let BC = null;
+
+function composeView() {
+  const counts = { ...((BC && BC.counts) || {}) };
+  api('broadcasts').then(r => { BC = r; Object.assign(counts, r.counts); if (ta.isConnected) paint(); }).catch(() => {});
+  const ta = h('textarea', { rows: 8, maxlength: 3500, 'aria-label': 'Текст рассылки', placeholder: 'Текст сообщения…' });
+  ta.value = DRAFT.text;
+  const bt = h('input', { type: 'text', maxlength: 64, placeholder: 'Например, «Открыть кабинет»', 'aria-label': 'Текст кнопки', style: 'text-align:left' });
+  const bu = h('input', { type: 'url', placeholder: 'https://…', 'aria-label': 'Ссылка кнопки', autocapitalize: 'off', spellcheck: false, style: 'text-align:left' });
+  bt.value = DRAFT.btn_text; bu.value = DRAFT.btn_url;
+  const send = h('button', { class: 'btn', type: 'button' });
+  const test = h('button', { class: 'btn tinted', type: 'button' }, 'Отправить себе');
+  const audBox = h('div');
+  const n = () => counts[`${DRAFT.kind}:${DRAFT.audience}`] ?? 0;
+  const paint = () => {
+    audBox.replaceChildren(UI.chips(Object.keys(AUD_LABEL).map(k => ({ value: k, label: `${AUD_LABEL[k]} · ${counts[`${DRAFT.kind}:${k}`] ?? 0}` })), DRAFT.audience, v => { DRAFT.audience = v; paint(); }));
+    send.textContent = `Отправить · ${n()} ${UI.plural(n(), 'получатель', 'получателя', 'получателей')}`;
+    send.disabled = !ta.value.trim() || !n();
+  };
+  ta.addEventListener('input', () => { DRAFT.text = ta.value; paint(); });
+  bt.addEventListener('input', () => { DRAFT.btn_text = bt.value; });
+  bu.addEventListener('input', () => { DRAFT.btn_url = bu.value; });
+  const body = extra => ({ text: ta.value, kind: DRAFT.kind, audience: DRAFT.audience, btn_text: bt.value, btn_url: bu.value, ...extra });
+  test.onclick = UI.busy(test, async () => { await UI.run(() => api('broadcasts', 'POST', body({ test: true })), 'Отправили вам в бота'); });
+  send.onclick = UI.busy(send, async () => {
+    const ok = await UI.ask({ title: 'Запустить рассылку?', message: `Сообщение получат ${n()} ${UI.plural(n(), 'клиент', 'клиента', 'клиентов')}. Отменить отправленное нельзя — сначала проверьте его кнопкой «Отправить себе».`, buttons: [{ id: 'y', text: 'Отправить' }] });
+    if (!ok) return;
+    const r = await UI.run(() => api('broadcasts', 'POST', body()));
+    if (r === undefined) return;
+    Object.assign(DRAFT, { text: '', btn_text: '', btn_url: '' });
+    UI.toast('Рассылка запущена');
+    UI.nav.back(); UI.nav.refresh();
+  });
+  paint();
+  return h('div', {}, UI.nav.backLink('Рассылки'), h('h1', { class: 'large-title' }, 'Новая рассылка'),
+    group('Сообщение', [h('label', { class: 'field stack' }, ta)],
+      h('span', {}, 'Можно оформлять: ', h('span', { class: 'mono' }, '<b>жирный</b> <i>курсив</i> <a href="https://…">ссылка</a>'), '. Эмодзи — как обычно.')),
+    group('Тип', [h('div', { style: 'padding:10px 12px' }, UI.segmented([{ value: 'news', label: 'Новости и акции' }, { value: 'service', label: 'Важное' }], DRAFT.kind, v => { DRAFT.kind = v; paint(); }))],
+      'Новости не получают те, кто отписался, и в сообщении есть кнопка «Отписаться». «Важное» — для плановых работ и изменений условий: приходит всем.'),
+    h('div', { class: 'group-h' }, 'Кому'), audBox,
+    group('Кнопка (необязательно)', [h('label', { class: 'field stack' }, h('label', {}, 'Текст'), bt), h('label', { class: 'field stack' }, h('label', {}, 'Ссылка'), bu)]),
+    h('div', { class: 'actions' }, test, send),
+    h('div', { class: 'group-f', style: 'margin:-18px var(--gutter) 30px' }, 'Отправка идёт в фоне, примерно 20 сообщений в секунду. По окончании пришлём отчёт в бота.'));
+}
+
 function statusLine() { return h('div', { class: 'status-line', role: 'status' }); }
 function showStatus(el, r) { el.className = 'status-line ' + (r.ok ? 'ok' : 'bad'); el.textContent = r.message; UI.haptic(r.ok ? 'success' : 'error'); }
 
@@ -293,7 +405,7 @@ function usersView() {
       const tags = [`${u.servers} ${UI.plural(u.servers, 'сервер', 'сервера', 'серверов')}`];
       if (u.methods) tags.push('карта');
       if (u.autopay) tags.push('автоплатёж');
-      if (u.no_markup) tags.push('без наценки');
+      if (u.no_markup) tags.push('без наценки'); else if (u.own_markup_pct != null) tags.push(`наценка ${u.own_markup_pct}%`);
       if (u.banned) tags.push('заблокирован');
       const r = row({ cls: 'wrap', title: nameOf(u), sub: (u.username ? '@' + u.username + '  ·  ' : '') + tags.join(', '), detail: rub(u.balance_rub), onClick: () => UI.nav.push(() => clientView(u.tg_id)) });
       r.classList.add('has-icon'); r.prepend(UI.avatar({ id: u.tg_id, first_name: u.first_name, username: u.username }, 36, avaSrc(u.tg_id)));
@@ -306,6 +418,37 @@ function usersView() {
     UI.chips([{ value: '', label: 'Все' }, { value: 'active', label: 'С услугами' }, { value: 'balance', label: 'С балансом' }, { value: 'autopay', label: 'Автоплатёж' }, { value: 'banned', label: 'Заблокированы' }],
       userFilter, v => { userFilter = v; UI.nav.refresh(); }),
     list);
+}
+
+/* Наценка клиента: общая, своя или без наценки. Цены продления его серверов пересчитываются сразу. */
+function markupSheet(c, reload) {
+  UI.sheet('Наценка клиента', close => {
+    let mode = c.no_markup ? 'none' : c.own_markup_pct != null ? 'custom' : 'default';
+    const inp = h('input', { type: 'number', inputmode: 'decimal', step: '0.5', 'aria-label': 'Наценка, %', placeholder: String(c.markup_pct) });
+    inp.value = c.own_markup_pct != null ? c.own_markup_pct : '';
+    const field = h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'Наценка'), inp, h('span', { class: 'unit' }, '%'))));
+    const note = h('div', { class: 'group-f', style: 'margin:0 var(--gutter) 16px' });
+    const save = h('button', { class: 'btn', type: 'button' }, 'Сохранить');
+    const paint = () => {
+      field.style.display = mode === 'custom' ? '' : 'none';
+      note.textContent = mode === 'default' ? `Клиент платит по общим ценам магазина (наценка ${c.markup_pct}%).`
+        : mode === 'none' ? 'Клиент покупает и продлевает по себестоимости Astra, округлённой до рубля.'
+        : 'Своя наценка для этого клиента: каталог, покупка, апгрейд и продление. Фиксированная добавка и округление — общие.';
+      save.disabled = mode === 'custom' && (inp.value === '' || isNaN(+inp.value) || +inp.value < -50 || +inp.value > 1000);
+    };
+    inp.addEventListener('input', paint);
+    save.onclick = UI.busy(save, async () => {
+      const r = await UI.run(() => api(`users/${c.tg_id}/markup`, 'POST', { mode, pct: mode === 'custom' ? +inp.value : null }));
+      if (r === undefined) return;
+      close();
+      UI.toast(r.repriced.length ? `Сохранено, пересчитано серверов: ${r.repriced.length}` : 'Наценка сохранена');
+      reload();
+    });
+    paint();
+    return h('div', {},
+      h('div', { style: 'margin:0 var(--gutter) 16px' }, UI.segmented([{ value: 'default', label: 'Общая' }, { value: 'custom', label: 'Своя' }, { value: 'none', label: 'Без наценки' }], mode, v => { mode = v; paint(); if (v === 'custom') setTimeout(() => inp.focus(), 50); }, 'lg')),
+      field, note, h('div', { style: 'margin:0 var(--gutter)' }, save));
+  });
 }
 
 function clientView(id) {
@@ -331,16 +474,9 @@ function clientBody(c) {
     row({ title: 'Был в кабинете', detail: c.last_seen ? UI.date(c.last_seen) : '—' }),
     row({ title: 'Документы', right: h('span', { class: 'badge ' + (consentOk ? 'ok' : 'warn') }, consentOk ? 'Приняты' : (c.consent_version ? 'Старая редакция' : 'Не приняты')) }),
     c.promo_discount_pct ? row({ title: 'Скидка по промокоду', detail: `${c.promo_discount_pct}% (${c.promo_code})` }) : null,
-    row({ title: 'Наценка', sub: c.no_markup ? 'Выключена — по себестоимости' : `Включена, ${c.markup_pct}%`, right: UI.toggle(!c.no_markup, async (on, inp) => {
-      const ok = await UI.ask({ title: on ? 'Включить наценку?' : 'Выключить наценку?',
-        message: on ? 'Клиент снова будет платить обычные цены. Продление его серверов пересчитается.' : 'Клиент будет покупать и продлевать серверы по себестоимости Astra, без вашей наценки. Продление его текущих серверов тоже подешевеет.',
-        buttons: [{ id: 'y', text: on ? 'Включить' : 'Выключить' }] });
-      if (!ok) { inp.checked = !on; return; }
-      const r = await UI.run(() => api(`users/${c.tg_id}/markup`, 'POST', { no_markup: !on }));
-      if (r === undefined) { inp.checked = !on; return; }
-      UI.toast(r.repriced.length ? `Пересчитано серверов: ${r.repriced.length}` : (on ? 'Наценка включена' : 'Наценка выключена'));
-      reload();
-    }, 'Наценка') }),
+    row({ icon: 'tag', tile: c.no_markup || c.own_markup_pct != null ? '#FF9500' : '#8E8E93', title: 'Наценка',
+      sub: c.no_markup ? 'Без наценки — по себестоимости' : c.own_markup_pct != null ? `Своя: ${c.own_markup_pct}%` : `Общая: ${c.markup_pct}%`,
+      onClick: () => markupSheet(c, reload) }),
     row({ title: 'Открыть чат', cls: 'accent', onClick: () => { const url = c.username ? 'https://t.me/' + c.username : 'tg://user?id=' + c.tg_id; try { UI.tg ? UI.tg.openTelegramLink(url) : UI.openLink(url); } catch (e) { UI.openLink(url); } } }),
   ].filter(Boolean)));
 

@@ -22,6 +22,12 @@ async def _loop(name: str, every_s: int, fn: Callable[[svc.Ctx], Awaitable[None]
         await asyncio.sleep(every_s)
 
 
+async def _resume_broadcasts(ctx: svc.Ctx) -> None:
+    from . import broadcasts
+
+    await broadcasts.resume(ctx)
+
+
 def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
     jobs = [
         ("sync_servers", 45, svc.sync_servers, 5),
@@ -29,5 +35,6 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("autorenew", 600, svc.autorenew_and_remind, 20),
         ("receipts", 300, svc.process_receipts, 30),
         ("astra_balance", 900, svc.check_astra_balance, 15),
+        ("broadcasts", 60, _resume_broadcasts, 8),
     ]
     return [asyncio.create_task(_loop(n, t, f, ctx, d), name=n) for n, t, f, d in jobs]

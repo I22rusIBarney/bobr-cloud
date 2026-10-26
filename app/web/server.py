@@ -80,8 +80,23 @@ class StatusIn(BaseModel):
     status: str
 
 
+class BroadcastIn(BaseModel):
+    text: str
+    audience: str = "all"
+    kind: str = "news"
+    btn_text: str = ""
+    btn_url: str = ""
+    test: bool = False
+
+
+class ChatIn(BaseModel):
+    chat: str
+
+
 class MarkupIn(BaseModel):
-    no_markup: bool
+    no_markup: bool | None = None   # старый переключатель
+    mode: str | None = None         # default | custom | none
+    pct: float | None = None
 
 
 class EscalateIn(BaseModel):
@@ -394,12 +409,61 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
             await s.commit()
         return {"enabled": False}
 
+    # ───── рассылки ─────
+
+    @app.get("/api/admin/broadcasts")
+    async def bc_list(_: dict = Depends(admin)):
+        from .. import broadcasts as bc
+        counts = {}
+        for kind in bc.KINDS:
+            for aud in bc.AUDIENCES:
+                counts[f"{kind}:{aud}"] = await bc.audience_count(aud, kind)
+        return {"items": await bc.history(), "audiences": bc.AUDIENCES, "counts": counts, "unsubscribed": await bc.news_unsubscribed_count()}
+
+    @app.get("/api/admin/broadcasts/{bid}")
+    async def bc_get(bid: int, _: dict = Depends(admin)):
+        from .. import broadcasts as bc
+        b = await bc.get(bid)
+        if not b:
+            raise HTTPException(404, "Рассылка не найдена")
+        return b
+
+    @app.post("/api/admin/broadcasts")
+    async def bc_create(p: BroadcastIn, u: dict = Depends(admin)):
+        from .. import broadcasts as bc
+        try:
+            if p.test:
+                await bc.send_test(ctx, int(u["id"]), p.text, p.kind, p.btn_text, p.btn_url)
+                return {"test": True}
+            b = await bc.create(ctx, int(u["id"]), p.text, p.audience, p.kind, p.btn_text, p.btn_url)
+        except bc.BroadcastError as ex:
+            raise HTTPException(400, str(ex))
+        return bc.as_dict(b)
+
+    @app.post("/api/admin/broadcasts/{bid}/cancel")
+    async def bc_cancel(bid: int, _: dict = Depends(admin)):
+        from .. import broadcasts as bc
+        await bc.cancel(bid)
+        return await bc.get(bid)
+
+    @app.post("/api/admin/subscription/check")
+    async def sub_probe(p: ChatIn, _: dict = Depends(admin)):
+        from .. import subscription as sub
+        ref = sub.chat_ref(p.chat)
+        if not ref:
+            raise HTTPException(400, "Укажите @username канала или группы, либо ID вида -100…")
+        if ctx.probe_chat is None:
+            raise HTTPException(503, "Бот ещё не запущен")
+        return await ctx.probe_chat(ref)
+
     @app.post("/api/admin/users/{tg_id}/markup")
     async def user_markup(tg_id: int, p: MarkupIn, _: dict = Depends(admin)):
         try:
-            return await svc.set_no_markup(tg_id, p.no_markup)
+            if p.mode:
+                return await svc.set_markup(tg_id, p.mode, p.pct)
+            return await svc.set_no_markup(tg_id, bool(p.no_markup))
         except UserError as ex:
-            raise HTTPException(404, str(ex))
+            raise HTTPException(404 if "не найден" in str(ex) else 400, str(ex))
 
     @app.delete("/api/admin/users/{tg_id}/methods/{mid}")
     async def user_method_delete(tg_id: int, mid: int, _: dict = Depends(admin)):

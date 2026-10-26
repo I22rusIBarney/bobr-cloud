@@ -41,6 +41,11 @@ DEFAULTS: dict[str, Any] = {
     "period_3m_pct": 5,
     "period_6m_pct": 10,
     "period_1y_pct": 15,
+    # обязательная подписка на канал/группу (бот должен быть там администратором)
+    "sub_required": False,
+    "sub_chat": "",              # @username или -100… для закрытых
+    "sub_link": "",              # ссылка-приглашение (для закрытых каналов)
+    "sub_title": "",             # название — подставляется при проверке
     # реферальная программа (бонусы только на баланс)
     "ref_enabled": True,
     "ref_pct": 10,               # % от каждого пополнения приглашённого — пригласившему
@@ -123,6 +128,18 @@ def sell_price_kop(cost_rub: float, cfg: dict[str, Any]) -> int:
 def no_markup_cfg(cfg: dict[str, Any]) -> dict[str, Any]:
     """Настройки цен для клиента без наценки: себестоимость, округлённая вверх до рубля."""
     return {**cfg, "markup_pct": 0.0, "markup_fixed_rub": 0.0, "round_to_rub": 1}
+
+
+def user_price_cfg(cfg: dict[str, Any], user: Any) -> dict[str, Any]:
+    """Настройки цен для конкретного клиента: без наценки, своя наценка или общая."""
+    if user is None:
+        return cfg
+    if getattr(user, "no_markup", False):
+        return {**no_markup_cfg(cfg), "hidden_presets": cfg["hidden_presets"]}
+    pct = getattr(user, "markup_pct", None)
+    if pct is not None:
+        return {**cfg, "markup_pct": float(pct)}
+    return cfg
 
 
 def cost_kop(cost_rub: float) -> int:

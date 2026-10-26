@@ -24,6 +24,7 @@ from . import account as acc
 from . import services as svc
 from . import tickets as tk
 from . import referral
+from . import subscription as sub
 from .legal import DOCS, REQUIRED
 from .config import env
 from .db import Payment, Server, User, change_balance, get_or_create_user, session
@@ -71,6 +72,9 @@ class Guard(BaseMiddleware):
             if first and user.first_name != first:
                 user.first_name = first
                 await s.commit()
+            if user.bot_blocked:  # снова пишет боту — значит, разблокировал: рассылки возобновятся
+                user.bot_blocked = False
+                await s.commit()
         # пришёл по реферальной ссылке t.me/бот?start=ref_xxx — запоминаем пригласившего (только для новых)
         text = getattr(event, "text", None) or ""
         if is_new and isinstance(event, Message) and text.startswith("/start ") and not user.banned:
@@ -88,6 +92,12 @@ class Guard(BaseMiddleware):
             if isinstance(event, CallbackQuery) and (event.data or "").startswith("cs:"):
                 return await handler(event, data)
             await show_consent(event)
+            return None
+        if isinstance(event, CallbackQuery) and event.data in ("sub:check", "nw:off", "nw:on"):
+            return await handler(event, data)
+        info = await sub.required(ctx(), u.id)
+        if info:
+            await show_subscribe(event, info)
             return None
         return await handler(event, data)
 
@@ -131,6 +141,47 @@ async def show_consent(target: Message | CallbackQuery) -> None:
         await target.message.answer(CONSENT_TEXT, reply_markup=consent_kb(uid), parse_mode="HTML")
     else:
         await target.answer(CONSENT_TEXT, reply_markup=consent_kb(uid), parse_mode="HTML")
+
+
+# ───────────────────────── подписка на канал ─────────────────────────
+
+
+def subscribe_kb(info: dict) -> InlineKeyboardMarkup:
+    b = InlineKeyboardBuilder()
+    if info.get("link"):
+        b.row(InlineKeyboardButton(text="📢 Подписаться", url=info["link"]))
+    b.row(InlineKeyboardButton(text="✅ Я подписался", callback_data="sub:check"))
+    return b.as_markup()
+
+
+def subscribe_text(info: dict) -> str:
+    return (f"📢 <b>Подпишитесь на {e(info['title'])}</b>\n\n"
+            "Там новости сервиса, акции и статус работ.\n"
+            "После подписки вернитесь сюда и нажмите «Я подписался».")
+
+
+async def show_subscribe(target: Message | CallbackQuery, info: dict) -> None:
+    if isinstance(target, CallbackQuery):
+        await target.answer("Сначала подпишитесь на канал")
+        await target.message.answer(subscribe_text(info), reply_markup=subscribe_kb(info), parse_mode="HTML", disable_web_page_preview=True)
+    else:
+        await target.answer(subscribe_text(info), reply_markup=subscribe_kb(info), parse_mode="HTML", disable_web_page_preview=True)
+
+
+@router.callback_query(F.data == "sub:check")
+async def subscribe_check(c: CallbackQuery, state: FSMContext):
+    sub.forget(c.from_user.id)
+    info = await sub.required(ctx(), c.from_user.id)
+    if info:
+        await c.answer("Подписка пока не найдена. Подпишитесь и нажмите ещё раз.", show_alert=True)
+        return
+    await c.answer("✅ Спасибо за подписку!")
+    await state.clear()
+    try:
+        await c.message.edit_text("✅ <b>Подписка подтверждена</b>\n\nДобро пожаловать!", reply_markup=None, parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
+    await c.message.answer(await home_text(c.from_user.id), reply_markup=home_kb(c.from_user.id in env().admins), parse_mode="HTML", disable_web_page_preview=True)
 
 
 @router.callback_query(F.data.startswith("cs:t:"))
@@ -694,6 +745,103 @@ async def support_message(m: Message):
 @router.message(StateFilter(None), F.photo | F.document | F.video | F.voice)
 async def support_media(m: Message):
     await m.answer("⚠️ Пока принимаем обращения только текстом. Опишите проблему словами — при необходимости попросим скриншот.")
+
+
+def make_member_checker(bot: Bot):
+    """Проверка подписки и проверка канала для админки."""
+    async def check_member(chat, tg_id: int) -> bool | None:
+        try:
+            m = await bot.get_chat_member(chat, tg_id)
+        except TelegramBadRequest as ex:
+            if "user not found" in str(ex).lower() or "participant" in str(ex).lower():
+                return False
+            log.warning("getChatMember %s: %s", chat, ex)
+            return None
+        except Exception:
+            log.warning("getChatMember %s failed", chat, exc_info=True)
+            return None
+        st = getattr(m, "status", "")
+        st = getattr(st, "value", st)
+        if st in ("creator", "administrator", "member"):
+            return True
+        if st == "restricted":
+            return bool(getattr(m, "is_member", False))
+        return False
+
+    async def probe_chat(chat) -> dict:
+        try:
+            ch = await bot.get_chat(chat)
+        except Exception as ex:
+            return {"ok": False, "error": f"Бот не видит этот канал или группу: {ex}. Добавьте бота администратором."}
+        out = {"title": ch.title or "", "link": f"https://t.me/{ch.username}" if getattr(ch, "username", None) else (getattr(ch, "invite_link", None) or "")}
+        try:
+            me = await bot.get_me()
+            mm = await bot.get_chat_member(chat, me.id)
+            st = getattr(mm.status, "value", mm.status)
+        except Exception as ex:
+            return {**out, "ok": False, "error": f"Не удалось проверить права бота: {ex}"}
+        if st not in ("administrator", "creator"):
+            return {**out, "ok": False, "error": "Бот не администратор — без этого Telegram не даёт проверять подписчиков."}
+        if not out["link"]:
+            out["note"] = "Канал закрытый: укажите ссылку-приглашение, иначе клиентам некуда будет нажать."
+        return {**out, "ok": True}
+
+    return check_member, probe_chat
+
+
+def make_broadcast_sender(bot: Bot):
+    """Одно сообщение рассылки. Возвращает ok | blocked | error; при лимите Telegram ждёт и повторяет."""
+    import asyncio
+
+    from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
+
+    async def send(tg_id: int, text: str, buttons: list) -> str:
+        kb = None
+        if buttons:
+            kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, url=u) if u else InlineKeyboardButton(text=t, callback_data=cb)]
+                                                       for t, u, cb in buttons])
+        for _ in range(3):
+            try:
+                await bot.send_message(tg_id, text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=False)
+                return "ok"
+            except TelegramRetryAfter as ex:
+                await asyncio.sleep(ex.retry_after + 1)
+            except TelegramForbiddenError:
+                return "blocked"
+            except TelegramBadRequest as ex:
+                msg = str(ex).lower()
+                if "chat not found" in msg or "user is deactivated" in msg:
+                    return "blocked"
+                log.warning("broadcast %s: %s", tg_id, ex)
+                return "error"
+            except Exception:
+                log.warning("broadcast %s failed", tg_id, exc_info=True)
+                return "error"
+        return "error"
+
+    return send
+
+
+# ───────────────────────── новости: отписка ─────────────────────────
+
+
+@router.callback_query(F.data.in_({"nw:off", "nw:on"}))
+async def news_toggle(c: CallbackQuery):
+    on = c.data == "nw:on"
+    async with session() as s:
+        u = await s.get(User, c.from_user.id)
+        if u:
+            u.news_off = not on
+            await s.commit()
+    if on:
+        await c.answer("✅ Вы снова получаете новости", show_alert=True)
+    else:
+        await c.answer("🔕 Вы отписались от новостей и акций. Уведомления о серверах и оплате будут приходить как раньше.", show_alert=True)
+    try:
+        await c.message.edit_reply_markup(reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+            text="🔔 Снова получать новости" if not on else "🔕 Отписаться от новостей", callback_data="nw:on" if not on else "nw:off")]]))
+    except TelegramBadRequest:
+        pass
 
 
 def make_button_notifier(bot: Bot):

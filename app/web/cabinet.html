@@ -292,7 +292,7 @@ function renderTabbar() {
   }, icon(t.icon), t.label, t.id === 'profile' && D && D.tickets_unread ? h('span', { class: 'count' }, String(D.tickets_unread)) : null)));
 }
 document.addEventListener('navchange', e => {
-  document.body.classList.toggle('hidden-tabbar', e.detail.depth > 0 || !!(D && D.consent && D.consent.needed));
+  document.body.classList.toggle('hidden-tabbar', e.detail.depth > 0 || !!(D && ((D.consent && D.consent.needed) || (D.subscription && D.subscription.needed))));
   document.body.classList.toggle('has-buybar', e.detail.depth === 0 && tab === 'new');
   if (window.FX) FX.calm(!!(D && D.consent && D.consent.needed) || (e.detail.depth === 0 ? (tab === 'new' || tab === 'profile') : false));
 });
@@ -324,6 +324,7 @@ const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text)
 function root() {
   if (!D) return h('div', {}, h('div', { class: 'large-title' }, ' '), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   if (D.consent && D.consent.needed) return consentView();
+  if (D.subscription && D.subscription.needed) return subscribeView();
   if (tab === 'servers') return serversView();
   if (tab === 'new') return builderView();
   return profileView();
@@ -747,6 +748,32 @@ function docView(key) {
   return h('div', {}, UI.nav.backLink('Назад'), title, box);
 }
 
+// ───────── Подписка на канал ─────────
+function subscribeView() {
+  const sb = D.subscription;
+  const go = h('button', { class: 'btn', type: 'button', onclick: () => {
+    UI.haptic('light');
+    try { if (UI.tg) return UI.tg.openTelegramLink(sb.link); } catch (e) {}
+    UI.openLink(sb.link);
+  } }, icon('megaphone'), 'Подписаться');
+  if (!sb.link) go.disabled = true;
+  const check = h('button', { class: 'btn secondary', type: 'button' }, icon('check'), 'Я подписался');
+  check.onclick = UI.busy(check, async () => {
+    const r = await UI.run(() => api('/subscription/check', 'POST'));
+    if (r === undefined) return;
+    if (r.needed) { UI.haptic('error'); await UI.alert('Подписка пока не найдена. Подпишитесь на канал и нажмите ещё раз.'); return; }
+    UI.haptic('success'); UI.toast('Спасибо за подписку!');
+    await load(); goTab('servers'); loadCatalog().catch(() => {});
+  });
+  return h('div', {},
+    h('div', { style: 'text-align:center;padding:44px var(--gutter) 10px' },
+      h('div', { style: 'display:inline-grid;place-items:center;width:72px;height:72px;border-radius:22px;background:linear-gradient(180deg,var(--accent-hi),var(--accent-lo));color:#fff;margin-bottom:18px;box-shadow:var(--glow-accent)' }, icon('megaphone')),
+      h('h1', { style: 'font:700 26px/1.2 var(--font-display);letter-spacing:-.5px;margin:0 0 10px' }, 'Подпишитесь на ' + sb.title),
+      h('p', { style: 'margin:0 auto;color:var(--hint);font-size:15px;max-width:320px' }, 'Там новости сервиса, акции и статус работ. После подписки вернитесь сюда — кабинет откроется.')),
+    h('div', { style: 'display:grid;gap:10px;margin:22px var(--gutter) 12px' }, go, check),
+    h('div', { class: 'group-f', style: 'text-align:center;margin:0 var(--gutter) 30px' }, 'Если уже подписались — нажмите «Я подписался».'));
+}
+
 function consentView() {
   const checked = new Set();
   const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Продолжить');
@@ -972,6 +999,11 @@ function profileView() {
   wrap.append(group('Ещё', [
     row({ icon: 'lifebuoy', tile: '#34D399', title: 'Поддержка', sub: 'Ответим в приложении и в чате', right: D.tickets_unread ? h('span', { class: 'count' }, String(D.tickets_unread)) : null, onClick: () => UI.nav.push(ticketsView) }),
     row({ icon: 'sparkle', tile: '#C084FC', title: 'Оформление', sub: 'Фон и сезонные эффекты', onClick: () => UI.nav.push(appearanceView) }),
+    row({ icon: 'megaphone', tile: '#438CFF', title: 'Новости и акции', sub: 'Сообщения в боте', right: UI.toggle(!D.news_off, async (val, inp) => {
+      const r = await UI.run(() => api('/news', 'POST', { enabled: val }), val ? 'Новости включены' : 'Вы отписались от новостей');
+      if (r === undefined) { inp.checked = !val; return; }
+      D.news_off = !val;
+    }, 'Новости и акции') }),
     row({ icon: 'doc', tile: '#A3A8B4', title: 'Документы', sub: 'Оферта, правила, конфиденциальность', onClick: () => UI.nav.push(documentsView) }),
   ], `Клиент с ${UI.date(u.since).split(',')[0]}.`));
   return wrap;
@@ -1060,7 +1092,7 @@ setInterval(() => { if (D && !document.hidden && !D.consent.needed && D.servers.
     return;
   }
   UI.nav.refresh();
-  if (!D.consent.needed) {
+  if (!D.consent.needed && !(D.subscription && D.subscription.needed)) {
     loadCatalog().catch(() => {});
     const q = new URLSearchParams(location.search);
     if (q.get('ticket')) { goTab('profile'); UI.nav.push(ticketsView); UI.nav.push(() => ticketView(+q.get('ticket'))); }

@@ -55,10 +55,35 @@ class User(Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     # персональные цены без наценки (например, для друзей): себестоимость Astra, округление до рубля
     no_markup: Mapped[bool] = mapped_column(Boolean, default=False)
+    # индивидуальная наценка в %, None — общая из настроек (no_markup важнее)
+    markup_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # рассылки: отписался от новостей / заблокировал бота (не шлём, пока снова не напишет)
+    news_off: Mapped[bool] = mapped_column(Boolean, default=False)
+    bot_blocked: Mapped[bool] = mapped_column(Boolean, default=False)
     # реферальная программа: кто пригласил, когда, выдан ли приветственный бонус
     referrer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     referred_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     ref_welcome_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class Broadcast(Base):
+    """Массовая рассылка: текст, кнопка, аудитория и прогресс (продолжается после перезапуска)."""
+    __tablename__ = "broadcasts"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    text: Mapped[str] = mapped_column(Text)
+    btn_text: Mapped[str] = mapped_column(String(64), default="")
+    btn_url: Mapped[str] = mapped_column(String(512), default="")
+    audience: Mapped[str] = mapped_column(String(16), default="all")   # all | active | inactive
+    kind: Mapped[str] = mapped_column(String(16), default="news")      # news (с отпиской) | service
+    status: Mapped[str] = mapped_column(String(16), default="sending")  # sending | done | cancelled
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    sent: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    blocked: Mapped[int] = mapped_column(Integer, default=0)
+    cursor: Mapped[int] = mapped_column(BigInteger, default=0)  # последний обработанный tg_id
+    created_by: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class Setting(Base):

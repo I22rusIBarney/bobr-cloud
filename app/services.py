@@ -16,7 +16,7 @@ from .astra import Astra, AstraError, AstraUncertain, parse_dt
 from .config import env
 from .db import Consent, Payment, PaymentMethod, Server, User, change_balance, session, utcnow
 from .nalog import Nalog, NalogError
-from .settings import cost_kop, fmt_rub, load_settings, no_markup_cfg, sell_price_kop
+from .settings import cost_kop, fmt_rub, load_settings, no_markup_cfg, sell_price_kop, user_price_cfg
 from .yookassa import YooKassa, YooKassaError
 
 log = logging.getLogger(__name__)
@@ -38,6 +38,12 @@ class Ctx:
     bot_username: str = ""
     # сообщение с кнопкой, открывающей мини-приложение: (tg_id, text, button_text, url)
     notify_btn: Callable[[int, str, str, str], Awaitable[None]] | None = None
+    # проверка подписки: (chat, tg_id) → True/False, None — проверить нельзя
+    check_member: Callable[[Any, int], Awaitable[bool | None]] | None = None
+    # проверка канала для админки: chat → {ok, title, link, error}
+    probe_chat: Callable[[Any], Awaitable[dict]] | None = None
+    # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
+    send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None
     _catalog: tuple[float, dict] | None = None
     _alert_ts: dict[str, float] = field(default_factory=dict)
 
@@ -111,8 +117,7 @@ async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict
     async with session() as s:
         cfg = await load_settings(s)
         u = await s.get(User, tg_id) if tg_id else None
-    if u is not None and u.no_markup:
-        cfg = {**no_markup_cfg(cfg), "hidden_presets": cfg["hidden_presets"]}
+    cfg = user_price_cfg(cfg, u)
     out = []
     for p in cat.get("presets", []):
         if p["idx"] in cfg["hidden_presets"]:
@@ -210,7 +215,7 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         if opt is None:
             raise UserError("Этот срок аренды недоступен.")
         months = opt["months"]
-        price = sell_price_kop(cost_rub, no_markup_cfg(cfg) if user.no_markup else cfg)  # цена месяца = цена продления
+        price = sell_price_kop(cost_rub, user_price_cfg(cfg, user))  # цена месяца = цена продления
         discount_pct = max(0, min(100, int(user.promo_discount_pct or 0)))
         # промокод — скидка на первый месяц, скидка за срок — на весь срок
         charge = max(0, period_price(price, months, opt["pct"]) - (price - apply_discount(price, discount_pct)))
@@ -381,14 +386,26 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
 
 
 async def set_no_markup(tg_id: int, enabled: bool) -> dict:
-    """Включает/выключает клиенту цены без наценки и пересчитывает продление его серверов."""
+    """Включает/выключает клиенту цены без наценки (совместимость со старым переключателем)."""
+    return await set_markup(tg_id, "none" if enabled else "default")
+
+
+async def set_markup(tg_id: int, mode: str, pct: float | None = None) -> dict:
+    """Наценка клиента: default — общая, custom — своя (pct), none — по себестоимости.
+    Сразу пересчитывает цену продления его текущих серверов."""
+    if mode not in ("default", "custom", "none"):
+        raise UserError("Неизвестный режим наценки.")
+    if mode == "custom" and (pct is None or not (-50 <= float(pct) <= 1000)):
+        raise UserError("Укажите наценку от −50 до 1000%.")
     async with session() as s:
         u = await s.get(User, tg_id)
         if u is None:
             raise UserError("Клиент не найден.")
-        u.no_markup = bool(enabled)
+        u.no_markup = mode == "none"
+        u.markup_pct = float(pct) if mode == "custom" else None
         cfg = await load_settings(s)
-        pcfg = no_markup_cfg(cfg) if enabled else cfg
+        pcfg = user_price_cfg(cfg, u)
+        enabled = mode == "none"
         rows = (await s.execute(select(Server).where(Server.tg_id == tg_id, Server.status != "deleted"))).scalars().all()
         changed = []
         for srv in rows:
@@ -398,7 +415,7 @@ async def set_no_markup(tg_id: int, enabled: bool) -> dict:
                     changed.append({"name": srv.name, "old_rub": srv.price_kop / 100, "new_rub": new / 100})
                     srv.price_kop = new
         await s.commit()
-    return {"no_markup": bool(enabled), "repriced": changed}
+    return {"no_markup": bool(enabled), "mode": mode, "markup_pct": float(pct) if mode == "custom" else None, "repriced": changed}
 
 
 async def rename_server(ctx: Ctx, tg_id: int, server_id: int, name: str) -> str:
@@ -470,8 +487,7 @@ async def upgrade_quote(ctx: Ctx, tg_id: int, server_id: int, cpu: int | None = 
         srv = await get_user_server(s, tg_id, server_id)
         cfg = await load_settings(s)
         u = await s.get(User, tg_id)
-    if u is not None and u.no_markup:
-        cfg = no_markup_cfg(cfg)
+    cfg = user_price_cfg(cfg, u)
     if srv.status != "active":
         raise UserError("Апгрейд доступен только для активного сервера.")
     cat = await ctx.catalog()
@@ -503,8 +519,7 @@ async def upgrade_server(ctx: Ctx, tg_id: int, server_id: int, cpu: int, ram: in
         srv = await get_user_server(s, tg_id, server_id)
         cfg = await load_settings(s)
         u = await s.get(User, tg_id)
-        if u is not None and u.no_markup:
-            cfg = no_markup_cfg(cfg)
+        cfg = user_price_cfg(cfg, u)
         if not await change_balance(s, tg_id, -hold, "upgrade", str(srv.astra_id)):
             raise UserError(f"Для апгрейда нужно около {fmt_rub(hold)} на балансе.")
     try:

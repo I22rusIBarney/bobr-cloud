@@ -256,7 +256,7 @@ async def client_card(tg_id: int) -> dict:
         "tg_id": u.tg_id, "username": u.username, "first_name": u.first_name, "balance_rub": u.balance_kop / 100,
         "banned": u.banned, "created": u.created_at.isoformat(), "last_seen": u.last_seen_at.isoformat() if u.last_seen_at else None,
         "autopay_enabled": u.autopay_enabled, "promo_discount_pct": u.promo_discount_pct, "promo_code": u.promo_code,
-        "no_markup": u.no_markup, "markup_pct": cfg["markup_pct"],
+        "no_markup": u.no_markup, "markup_pct": cfg["markup_pct"], "own_markup_pct": u.markup_pct,
         "consent_version": u.consent_version, "docs_version": cfg["docs_version"], "consent_at": u.consent_at.isoformat() if u.consent_at else None,
         "paid_total_rub": spent / 100,
         "servers": [{"id": x.id, "astra_id": x.astra_id, "name": x.name, "status": x.status, "location": x.location,
@@ -294,4 +294,4 @@ async def search_clients(q: str = "", flt: str = "") -> list[dict]:
         cnt = dict((await s.execute(select(Server.tg_id, func.count()).where(Server.tg_id.in_(ids), Server.status != "deleted").group_by(Server.tg_id))).all()) if ids else {}
         mcnt = dict((await s.execute(select(PaymentMethod.tg_id, func.count()).where(PaymentMethod.tg_id.in_(ids), PaymentMethod.active.is_(True)).group_by(PaymentMethod.tg_id))).all()) if ids else {}
     return [{"tg_id": u.tg_id, "username": u.username, "first_name": u.first_name, "balance_rub": u.balance_kop / 100, "banned": u.banned,
-             "servers": cnt.get(u.tg_id, 0), "methods": mcnt.get(u.tg_id, 0), "autopay": u.autopay_enabled, "no_markup": u.no_markup} for u in rows]
+             "servers": cnt.get(u.tg_id, 0), "methods": mcnt.get(u.tg_id, 0), "autopay": u.autopay_enabled, "no_markup": u.no_markup, "own_markup_pct": u.markup_pct} for u in rows]

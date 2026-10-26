@@ -29,6 +29,8 @@ async def main() -> None:
     ctx = Ctx(astra=Astra(), yk=YooKassa(), nalog=Nalog(), notify=notify, alert_admin=alert_admin)
     botmod.set_ctx(ctx)
     ctx.notify_btn = botmod.make_button_notifier(bot)
+    ctx.check_member, ctx.probe_chat = botmod.make_member_checker(bot)
+    ctx.send_broadcast = botmod.make_broadcast_sender(bot)
     try:
         ctx.bot_username = (await bot.get_me()).username or ""
     except Exception:
@@ -49,7 +51,7 @@ async def main() -> None:
     workers = start_workers(ctx)
     web = asyncio.create_task(server.serve(), name="web")
     try:
-        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])
+        await dp.start_polling(bot, allowed_updates=["message", "callback_query"])  # подписку проверяем запросом, chat_member не нужен
     finally:
         server.should_exit = True
         for t in workers:
