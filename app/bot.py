@@ -58,6 +58,10 @@ class TopUp(StatesGroup):
     amount = State()
 
 
+class PromoInput(StatesGroup):
+    code = State()
+
+
 class Guard(BaseMiddleware):
     """Регистрирует пользователя, режет забаненных и не пускает дальше без принятия документов."""
 
@@ -293,7 +297,7 @@ def home_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
         admin_btn = InlineKeyboardButton(text="⚙️ Админка", web_app=WebAppInfo(url=env().public_url.rstrip("/") + "/admin"))
     else:
         admin_btn = None
-    b.row(InlineKeyboardButton(text="💬 Поддержка", callback_data="m:support"))
+    b.row(InlineKeyboardButton(text="👤 Профиль", callback_data="p:home"), InlineKeyboardButton(text="💬 Поддержка", callback_data="m:support"))
     if admin_btn:  # только администраторам, последней строкой
         b.row(admin_btn)
     return b.as_markup()
@@ -480,6 +484,9 @@ async def _choose_provider(target: Message | CallbackQuery, amount: int) -> None
     if len(provs) <= 1:
         if isinstance(target, CallbackQuery):
             await target.answer()
+        if provs and provs[0]["autopay"] and cfg["autopay_available"]:
+            await _ask_save_card(target, amount, provs[0]["code"])
+            return
         await _start_payment(target, amount, provs[0]["code"] if provs else None)
         return
     rows = [[(f"💳 {p['label']}", f"t:pv:{amount}:{p['code']}")] for p in provs]
@@ -490,13 +497,37 @@ async def _choose_provider(target: Message | CallbackQuery, amount: int) -> None
 async def topup_provider(c: CallbackQuery):
     _, _, amount, code = c.data.split(":")
     await c.answer()
+    async with session() as s:
+        cfg = await load_settings(s)
+    prov = next((p for p in svc.payment_providers(ctx(), cfg) if p["code"] == code), None)
+    if prov and prov["autopay"] and cfg["autopay_available"]:
+        await _ask_save_card(c, int(amount), code)
+        return
     await _start_payment(c, int(amount), code)
 
 
-async def _start_payment(target: Message | CallbackQuery, amount: int, provider: str | None = None) -> None:
+async def _ask_save_card(target: Message | CallbackQuery, amount: int, code: str) -> None:
+    base = env().public_url.rstrip("/")
+    rows = [[("💳 Оплатить без сохранения карты", f"t:go:{amount}:{code}:0")],
+            [("💾 Оплатить и сохранить карту", f"t:go:{amount}:{code}:1")]]
+    text = (f"💳 <b>Пополнение на {rub(amount * 100)}</b>\n\n"
+            "Можно сохранить карту для автоплатежей: если на продление сервера не хватит баланса, "
+            "спишем только недостающую сумму и сразу пришлём уведомление. Удалить карту можно в любой момент в «👤 Профиль → Способы оплаты».\n\n"
+            + (f'Сохраняя карту, вы соглашаетесь с <a href="{base}/legal/autopay">Правилами автоплатежей</a>.' if base.startswith("https://") else "Сохраняя карту, вы соглашаетесь с Правилами автоплатежей."))
+    await show(target, text, kb_rows(rows, back="m:topup"))
+
+
+@router.callback_query(F.data.startswith("t:go:"))
+async def topup_go(c: CallbackQuery):
+    _, _, amount, code, save = c.data.split(":")
+    await c.answer()
+    await _start_payment(c, int(amount), code, save == "1")
+
+
+async def _start_payment(target: Message | CallbackQuery, amount: int, provider: str | None = None, save: bool = False) -> None:
     tg_id = target.from_user.id
     try:
-        pay, url = await svc.create_topup(ctx(), tg_id, amount, provider=provider)
+        pay, url = await svc.create_topup(ctx(), tg_id, amount, save_method=save, provider=provider, source="bot")
     except UserError as ex:
         await show(target, f"❌ {e(ex)}", kb_rows([], back="m:topup"))
         return
@@ -735,6 +766,168 @@ def make_notifier(bot: Bot):
 
     return notify, alert_admin
 
+
+
+# ───────────────────────── профиль (аналог кабинета прямо в боте) ─────────────────────────
+
+
+async def _user(tg_id: int):
+    async with session() as s:
+        return await s.get(User, tg_id), await load_settings(s)
+
+
+@router.callback_query(F.data == "p:home")
+async def profile_home(c: CallbackQuery, state: FSMContext | None = None):
+    if state is not None:
+        await state.clear()
+    u, cfg = await _user(c.from_user.id)
+    ms = await acc.methods(c.from_user.id)
+    name = e(u.first_name or (("@" + u.username) if u.username else "Клиент"))
+    lines = [f"👤 <b>Профиль · {e(cfg['service_name'])}</b>", "",
+             f"{name}" + (f" · @{e(u.username)}" if u.username else "") + f"\nID <code>{u.tg_id}</code>", "",
+             f"💰 Баланс: <b>{rub(u.balance_kop)}</b>",
+             f"💳 Способы оплаты: {len(ms) if ms else 'нет сохранённых'}",
+             f"🔄 Автоплатёж: {'включён' if u.autopay_enabled else 'выключен'}"]
+    if u.promo_discount_pct:
+        lines.append(f"🎁 Скидка {u.promo_discount_pct}% по промокоду {e(u.promo_code or '')} на следующую покупку")
+    rows = [[("💳 Способы оплаты и автоплатёж", "p:methods")],
+            [("🧾 История операций", "p:hist"), ("🎁 Промокод", "p:promo")]]
+    if cfg["ref_enabled"]:
+        rows.append([("👥 Пригласить друга", "p:ref")])
+    rows.append([(("🔔 Новости: вкл" if u.ads_consent else "🔕 Новости: выкл"), "p:news"), ("📄 Документы", "p:docs")])
+    rows.append([("💳 Пополнить баланс", "m:topup")])
+    await show(c, "\n".join(lines), kb_rows(rows))
+
+
+@router.callback_query(F.data == "p:methods")
+async def profile_methods(c: CallbackQuery):
+    u, cfg = await _user(c.from_user.id)
+    ms = await acc.methods(c.from_user.id)
+    lines = [f"💳 <b>Способы оплаты · {e(cfg['service_name'])}</b>", ""]
+    if ms:
+        for m in ms:
+            lines.append(f"• {e(m['title'] or 'Карта')}" + (f" · до {e(m['expiry'])}" if m.get("expiry") else ""))
+    else:
+        lines.append("Сохранённых карт нет." + (" Карту можно сохранить при пополнении баланса." if cfg["autopay_available"] else ""))
+    lines += ["", f"🔄 Автоплатёж: <b>{'включён' if u.autopay_enabled else 'выключен'}</b>",
+              "<i>Спишем только недостающую сумму для продления сервера с включённым автопродлением и сразу пришлём уведомление.</i>"]
+    rows = [[(f"🗑 Удалить {m['title'] or 'карту'}", f"p:md:{m['id']}")] for m in ms]
+    rows.append([("🗑 Удалить все способы оплаты", "p:mda")])
+    rows.append([(("Выключить автоплатёж" if u.autopay_enabled else "Включить автоплатёж"), "p:ap")])
+    base = env().public_url.rstrip("/")
+    b = InlineKeyboardBuilder.from_markup(kb_rows(rows, back=None))
+    if base.startswith("https://"):
+        b.row(InlineKeyboardButton(text="📄 Правила автоплатежей", url=f"{base}/legal/autopay"))
+    b.row(InlineKeyboardButton(text="← Профиль", callback_data="p:home"))
+    await show(c, "\n".join(lines), b.as_markup())
+
+
+@router.callback_query(F.data.startswith("p:md:"))
+async def method_delete_ask(c: CallbackQuery):
+    mid = int(c.data.split(":")[2])
+    m = next((x for x in await acc.methods(c.from_user.id) if x["id"] == mid), None)
+    if not m:
+        return await c.answer("Карта уже удалена", show_alert=True)
+    await show(c, f"🗑 <b>Удалить {e(m['title'] or 'карту')}?</b>\n\nКарта больше не будет использоваться для автоплатежей.",
+               kb_rows([[("✅ Удалить", f"p:mdy:{mid}")]], back="p:methods", back_text="← Отмена"))
+
+
+@router.callback_query(F.data.startswith("p:mdy:"))
+async def method_delete(c: CallbackQuery):
+    n = await svc.deactivate_method(c.from_user.id, int(c.data.split(":")[2]), "user")
+    await c.answer("✅ Карта удалена" if n else "Карта уже удалена")
+    await profile_methods(c)
+
+
+@router.callback_query(F.data == "p:mda")
+async def method_delete_all_ask(c: CallbackQuery):
+    ms = await acc.methods(c.from_user.id)
+    text = ("🗑 <b>Удалить все способы оплаты?</b>\n\nВсе сохранённые карты будут отвязаны, автоплатёж выключится." if ms
+            else "🗑 <b>Удалить все способы оплаты?</b>\n\nСохранённых способов оплаты сейчас нет. Отвязать всё равно?")
+    await show(c, text, kb_rows([[("✅ Удалить все", "p:mday")]], back="p:methods", back_text="← Отмена"))
+
+
+@router.callback_query(F.data == "p:mday")
+async def method_delete_all(c: CallbackQuery):
+    n = await svc.deactivate_method(c.from_user.id, None, "user")
+    await c.answer(f"✅ Удалено: {n}" if n else "Сохранённых способов нет", show_alert=not n)
+    await profile_methods(c)
+
+
+@router.callback_query(F.data == "p:ap")
+async def autopay_toggle(c: CallbackQuery):
+    u, _ = await _user(c.from_user.id)
+    try:
+        on = await acc.set_autopay(c.from_user.id, not u.autopay_enabled)
+    except UserError as ex:
+        return await c.answer(str(ex)[:190], show_alert=True)
+    await c.answer("✅ Автоплатёж включён" if on else "Автоплатёж выключен")
+    await profile_methods(c)
+
+
+@router.callback_query(F.data == "p:hist")
+async def profile_history(c: CallbackQuery):
+    items = (await acc.history(c.from_user.id, 15))
+    lines = ["🧾 <b>История операций</b>", ""]
+    if not items:
+        lines.append("Операций пока нет.")
+    for x in items:
+        d = x["created"][:10].split("-")
+        sign = "+" if x["amount_rub"] > 0 else "−"
+        lines.append(f"{d[2]}.{d[1]} · {sign}{rub(int(round(abs(x['amount_rub']) * 100)))} · {e(x['title'])}" + (f" · {e(x['detail'])}" if x.get("detail") else "")
+                     + (f' · <a href="{e(x["receipt_url"])}">чек</a>' if x.get("receipt_url") else ""))
+    await show(c, "\n".join(lines), kb_rows([], back="p:home"))
+
+
+@router.callback_query(F.data == "p:promo")
+async def profile_promo(c: CallbackQuery, state: FSMContext):
+    await state.set_state(PromoInput.code)
+    await show(c, "🎁 <b>Промокод</b>\n\nОтправьте код сообщением. Бонус зачислится на баланс, скидка применится к следующей покупке сервера.",
+               kb_rows([], back="p:home"))
+
+
+@router.message(PromoInput.code)
+async def profile_promo_code(m: Message, state: FSMContext):
+    await state.clear()
+    try:
+        r = await acc.apply_promo(m.from_user.id, m.text or "")
+    except UserError as ex:
+        await m.answer(f"❌ {e(ex)}", parse_mode="HTML", reply_markup=kb_rows([[("🎁 Ввести другой", "p:promo")]], back="p:home"))
+        return
+    await m.answer(f"✅ {e(r.get('message', 'Промокод применён'))}", parse_mode="HTML", reply_markup=kb_rows([], back="p:home", back_text="← Профиль"))
+
+
+@router.callback_query(F.data == "p:ref")
+async def profile_ref(c: CallbackQuery):
+    r = await referral.stats(c.from_user.id, ctx().bot_username)
+    terms = f"{r['pct']}% с пополнений друга" + (f" в течение {r['months']} мес." if r["months"] else "") + (f", другу — {rub(r['welcome_rub'] * 100)} после первой оплаты" if r["welcome_rub"] else "")
+    text = (f"👥 <b>Пригласите друзей</b>\n\n{terms}. Бонусы — на баланс.\n\n"
+            f"Приглашено: <b>{r['invited']}</b> · оплатили: <b>{r['active']}</b>\nЗаработано: <b>{rub(int(round(r['earned_rub'] * 100)))}</b>\n\n"
+            f"Ваша ссылка:\n<code>{e(r['bot'] or r['web'])}</code>")
+    b = InlineKeyboardBuilder.from_markup(kb_rows([], back="p:home"))
+    if r["bot"]:
+        from urllib.parse import quote
+        b.row(InlineKeyboardButton(text="📤 Поделиться", url=f"https://t.me/share/url?url={quote(r['bot'])}&text={quote('Арендую VPS здесь — сервер за пару минут:')}"))
+    await show(c, text, b.as_markup())
+
+
+@router.callback_query(F.data == "p:news")
+async def profile_news(c: CallbackQuery):
+    u, _ = await _user(c.from_user.id)
+    on = await acc.set_ads_consent(c.from_user.id, not u.ads_consent, "bot")
+    await c.answer("🔔 Будем присылать новости и акции" if on else "🔕 Вы отписались от новостей и акций")
+    await profile_home(c, None)
+
+
+@router.callback_query(F.data == "p:docs")
+async def profile_docs(c: CallbackQuery):
+    base = env().public_url.rstrip("/")
+    b = InlineKeyboardBuilder()
+    if base.startswith("https://"):
+        for k in (*REQUIRED, "autopay", "ads"):
+            b.row(InlineKeyboardButton(text="📄 " + DOCS[k]["title"], url=f"{base}/legal/{k}"))
+    b.row(InlineKeyboardButton(text="← Назад", callback_data="p:home"))
+    await show(c, "📄 <b>Документы</b>\n\nОтзыв согласия на обработку данных — в личном кабинете (Профиль → Документы) или через поддержку.", b.as_markup())
 
 
 # ───────────────────────── поддержка ─────────────────────────

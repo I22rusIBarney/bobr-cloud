@@ -657,7 +657,7 @@ def provider_client(ctx: Ctx, code: str | None):
     return ctx.platega if code == "platega" else ctx.yk
 
 
-async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool = False, provider: str | None = None) -> tuple[Payment, str]:
+async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool = False, provider: str | None = None, source: str = "app") -> tuple[Payment, str]:
     async with session() as s:
         cfg = await load_settings(s)
     provs = payment_providers(ctx, cfg)
@@ -675,7 +675,7 @@ async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool 
         pay = Payment(tg_id=tg_id, amount_kop=amount_rub * 100, save_method=save_method)
         s.add(pay)
         if save_method:  # согласие с Правилами автоплатежей — отметка при пополнении
-            s.add(Consent(tg_id=tg_id, doc="autopay", version=cfg["docs_version"], source="app"))
+            s.add(Consent(tg_id=tg_id, doc="autopay", version=cfg["docs_version"], source=source))
         await s.commit()
     mode = cfg.get("yk_method", "all")
     kw = dict(
