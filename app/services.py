@@ -1039,6 +1039,59 @@ async def autorenew_and_remind(ctx: Ctx, only_tg: int | None = None) -> None:
                     await s.commit()
 
 
+async def watch_locations(ctx: Ctx) -> None:
+    """Воркер: сообщает о новых, снятых и вернувшихся локациях Astra. В продажу они попадают сами —
+    бот всегда показывает каталог из API; здесь только уведомление админу."""
+    import json as _json
+    from .db import Setting
+    from . import events
+    cat = await ctx.catalog(fresh=True)
+    async with session() as s:
+        cfg = await load_settings(s)
+        row = await s.get(Setting, "known_locations")
+    hidden = set(cfg["hidden_presets"])
+    now: dict[str, dict] = {}
+    for loc in cat.get("locations", []) or []:
+        code = loc.get("code")
+        if not code:
+            continue
+        n_offers = sum(1 for p in cat.get("presets", []) if p["idx"] not in hidden and p.get("price_month_rub", {}).get(code) is not None)
+        prices = [p["price_month_rub"][code] for p in cat.get("presets", []) if p["idx"] not in hidden and p.get("price_month_rub", {}).get(code) is not None]
+        now[code] = {"name": loc.get("name") or code.upper(), "on": bool(loc.get("available", True)) and n_offers > 0,
+                     "offers": n_offers, "from": min(prices) if prices else None, "channel": loc.get("channel") or ""}
+    try:
+        known = _json.loads(row.value) if row else None
+    except ValueError:
+        known = None
+    async with session() as s:
+        r = await s.get(Setting, "known_locations")
+        val = _json.dumps({k: v["on"] for k, v in now.items()})
+        if r is None:
+            s.add(Setting(key="known_locations", value=val))
+        else:
+            r.value = val
+        await s.commit()
+    if known is None:  # первый запуск — просто запоминаем
+        return
+    for code, v in now.items():
+        name = f"{flag(code)} {html.escape(v['name'])}"
+        if code not in known:
+            if v["on"]:
+                price = fmt_rub(sell_price_kop(v["from"], cfg)) if v["from"] is not None else "—"
+                await events.emit(ctx, "sales", f"🆕 <b>Новая локация в продаже: {name}</b>\n\nТарифов: {v['offers']}, цена клиенту от {price} в месяц"
+                                  + (f"\nКанал: {html.escape(v['channel'])}" if v["channel"] else "")
+                                  + "\n\nУже доступна в боте и кабинете. Проверьте наценку в «Тарифы и маржа».")
+            else:
+                await events.emit(ctx, "sales", f"🆕 <b>У Astra появилась локация {name}</b>\n\nПока без доступных тарифов — в продаже появится автоматически, как только Astra откроет заказы.")
+        elif v["on"] and not known.get(code):
+            await events.emit(ctx, "sales", f"✅ <b>Локация {name} снова в продаже</b> — тарифов: {v['offers']}.")
+        elif not v["on"] and known.get(code):
+            await events.emit(ctx, "sales", f"⚠️ <b>Локация {name} недоступна</b>\n\nAstra закрыла заказы или убрала тарифы — клиенты её не видят. Текущие серверы работают.")
+    for code in known:
+        if code not in now and known[code]:
+            await events.emit(ctx, "sales", f"⚠️ <b>Локация {flag(code)} {code.upper()} пропала из каталога Astra</b>\n\nКлиенты её больше не видят. Текущие серверы работают.")
+
+
 async def check_astra_balance(ctx: Ctx) -> None:
     try:
         b = await ctx.astra.balance()

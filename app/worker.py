@@ -53,6 +53,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("autorenew", 600, svc.autorenew_and_remind, 20),
         ("receipts", 300, svc.process_receipts, 30),
         ("astra_balance", 900, svc.check_astra_balance, 15),
+        ("locations", 600, svc.watch_locations, 25),
         ("broadcasts", 60, _resume_broadcasts, 8),
         ("backup", 600, _backup, 120),
         ("health", 30, _health, 40),
