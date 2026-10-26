@@ -32,6 +32,7 @@ async def main() -> None:
     ctx.check_member, ctx.probe_chat = botmod.make_member_checker(bot)
     ctx.send_broadcast = botmod.make_broadcast_sender(bot)
     ctx.post, ctx.post_file = botmod.make_poster(bot)
+    ctx.tg_ping = bot.get_me
     from app import events
     ctx.alert_admin = events.make_alert(ctx)  # системные алерты — в чат «Алерты» (или админам)
     try:

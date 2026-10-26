@@ -469,6 +469,12 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         err = await events.test(ctx, p.event, p.chat)
         return {"ok": err is None, "error": err and ("Бот не может писать в этот чат: добавьте его администратором канала или участником группы. " + err[:200])}
 
+    @app.get("/api/admin/health")
+    async def health_get(fresh: int = 0, _: dict = Depends(admin)):
+        from .. import health, security
+        h = await health.check_now(ctx) if fresh or not health.current()["checks"] else health.current()
+        return {**h, "security": security.info()}
+
     @app.post("/api/admin/backup")
     async def backup_now(_: dict = Depends(admin)):
         from .. import backup

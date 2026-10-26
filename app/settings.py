@@ -52,8 +52,11 @@ DEFAULTS: dict[str, Any] = {
     "ref_months": 6,             # сколько месяцев после приглашения начисляем (0 — всегда)
     "ref_welcome_rub": 100,      # бонус приглашённому после его первой оплаты
     # куда слать служебные события: чат (@канал или -100…), пусто — личка админов
-    **{f"ev_{k}_on": True for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups")},
-    **{f"ev_{k}_chat": "" for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups")},
+    **{f"ev_{k}_on": True for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups", "health", "security")},
+    **{f"ev_{k}_chat": "" for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups", "health", "security")},
+    "health_enabled": True,      # мониторинг сервисов
+    "health_interval_min": 5,    # как часто проверять, минут
+    "health_daily": True,        # сводка раз в сутки
     "backup_hours": 0,           # резервная копия базы в Telegram каждые N часов (0 — выключено)
     # оформление кабинета
     "theme_bg": "none",          # none | aurora | night | ocean | sunset | forest | image
@@ -106,6 +109,8 @@ async def save_settings(s: AsyncSession, patch: dict[str, Any]) -> dict[str, Any
             raise ValueError("неизвестный эффект")
         if k in ("period_3m_pct", "period_6m_pct", "period_1y_pct") and not (0 <= v <= 50):
             raise ValueError("Скидка за срок — от 0 до 50%")
+        if k == "health_interval_min" and not (1 <= v <= 60):
+            raise ValueError("Интервал проверок — от 1 до 60 минут")
         if k == "backup_hours" and v not in (0, 6, 12, 24, 48, 168):
             raise ValueError("Частота бэкапов: 0, 6, 12, 24, 48 или 168 часов")
         if k == "ref_pct" and not (0 <= v <= 50):

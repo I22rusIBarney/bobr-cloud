@@ -29,6 +29,154 @@ EOF
   chmod 755 /usr/local/bin/bcloud
 }
 
+# ───────── защита сервера ─────────
+ssh_port() { sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'; }
+
+harden() {
+  command -v apt-get >/dev/null || die "Поддерживаются Ubuntu и Debian"
+  local port dir keys pw_off="no"
+  port="$(ssh_port)"; port="${port:-22}"
+  dir="$(pwd)"
+  keys=0; [[ -s /root/.ssh/authorized_keys ]] && keys=$(grep -cE '^(ssh-|ecdsa-|sk-)' /root/.ssh/authorized_keys || true)
+  cat <<EOF
+${C_B}Защита сервера${C_0}
+  • Файрвол UFW: входящие закрыты, кроме SSH (порт ${port}), 80 и 443
+  • fail2ban: блокировка IP после 5 неудачных входов по SSH (на час, повторно — дольше)
+  • SSH: не больше 3 попыток за подключение, без пустых паролей и X11
+  • Автоматические обновления безопасности Ubuntu
+  • Защита сетевого стека (sysctl) и уведомления о входах по SSH в бота
+Текущую SSH-сессию не закрывайте, пока не проверите вход в новом окне.
+EOF
+  read -r -p "Продолжить? [y/N] " a; [[ "$a" =~ ^[yYдД] ]] || { say "Отменено"; return; }
+  if (( keys > 0 )); then
+    say; say "Найдено SSH-ключей у root: ${keys}. Можно запретить вход по паролю — это главная защита от взлома."
+    say "Перед этим убедитесь, что входите именно по ключу, иначе потеряете доступ."
+    read -r -p "Запретить вход по паролю? [y/N] " a; [[ "$a" =~ ^[yYдД] ]] && pw_off="yes"
+  else
+    warn "SSH-ключей у root нет — вход по паролю оставляю. Настройте ключ и запустите bcloud harden ещё раз."
+  fi
+
+  say "Устанавливаю пакеты…"
+  apt-get update -qq >/dev/null
+  DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ufw fail2ban unattended-upgrades >/dev/null || die "Не удалось установить пакеты"
+
+  # 1. файрвол: существующие правила не сбрасываем, только добавляем нужные
+  ufw default deny incoming >/dev/null
+  ufw default allow outgoing >/dev/null
+  ufw allow "${port}/tcp" comment 'SSH' >/dev/null
+  # страховка: открываем все порты, на которых реально слушает sshd, чтобы не потерять доступ
+  local ports="$port"
+  for p in $(ss -tlnpH 2>/dev/null | awk '/sshd/{n=split($4,a,":"); print a[n]}' | sort -u); do
+    if [[ "$p" =~ ^[0-9]+$ && "$p" != "$port" ]]; then ufw allow "${p}/tcp" comment 'SSH' >/dev/null; ports="${ports},${p}"; fi
+  done
+  ufw allow 80/tcp comment 'HTTP (Caddy)' >/dev/null
+  ufw allow 443/tcp comment 'HTTPS (Caddy)' >/dev/null
+  ufw --force enable >/dev/null
+  ok "Файрвол включён: открыты ${ports} (SSH), 80, 443"
+
+  # 2. хук событий: входы по SSH и блокировки → data/host-events.jsonl → бот
+  cat > /usr/local/sbin/bcloud-event <<EOF
+#!/bin/sh
+# Bobr Cloud: события сервера для бота (создано bcloud harden)
+F="${dir}/data/host-events.jsonl"
+clean() { printf '%s' "\$1" | tr -cd 'A-Za-z0-9._:@-' | cut -c1-64; }
+case "\$1" in
+  login) [ "\$PAM_TYPE" = "open_session" ] || exit 0
+         printf '{"type":"login","user":"%s","ip":"%s","ts":%s}\n' "\$(clean "\$PAM_USER")" "\$(clean "\$PAM_RHOST")" "\$(date +%s)" >> "\$F" ;;
+  ban)   printf '{"type":"ban","ip":"%s","jail":"%s","ts":%s}\n' "\$(clean "\$2")" "\$(clean "\$3")" "\$(date +%s)" >> "\$F" ;;
+esac
+exit 0
+EOF
+  chmod 755 /usr/local/sbin/bcloud-event
+  grep -qs bcloud-event /etc/pam.d/sshd || echo "session optional pam_exec.so quiet /usr/local/sbin/bcloud-event login" >> /etc/pam.d/sshd
+
+  # 3. fail2ban
+  mkdir -p /etc/fail2ban/action.d /etc/fail2ban/jail.d
+  cat > /etc/fail2ban/action.d/bcloud-notify.conf <<'EOF'
+[Definition]
+actionban = /usr/local/sbin/bcloud-event ban <ip> <name>
+actionunban =
+EOF
+  cat > /etc/fail2ban/jail.d/bcloud.conf <<EOF
+# Bobr Cloud (bcloud harden)
+[DEFAULT]
+bantime = 1h
+bantime.increment = true
+bantime.maxtime = 1w
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1
+
+[sshd]
+enabled = true
+port = ${ports}
+backend = systemd
+action = %(action_)s
+         bcloud-notify
+EOF
+  systemctl enable fail2ban >/dev/null 2>&1 || true
+  systemctl restart fail2ban || die "fail2ban не запустился: journalctl -u fail2ban"
+  ok "fail2ban следит за SSH"
+
+  # 4. SSH: отдельный файл, первые значения в sshd_config.d имеют приоритет
+  mkdir -p /etc/ssh/sshd_config.d
+  {
+    echo "# Bobr Cloud (bcloud harden). Удалите файл, чтобы вернуть прежние настройки."
+    echo "MaxAuthTries 3"
+    echo "LoginGraceTime 30"
+    echo "PermitEmptyPasswords no"
+    echo "X11Forwarding no"
+    echo "ClientAliveInterval 300"
+    echo "ClientAliveCountMax 2"
+    if [[ "$pw_off" == "yes" ]]; then
+      echo "PasswordAuthentication no"
+      echo "KbdInteractiveAuthentication no"
+      echo "PermitRootLogin prohibit-password"
+    fi
+  } > /etc/ssh/sshd_config.d/00-bcloud.conf
+  if sshd -t 2>/dev/null; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    ok "SSH усилен" ; [[ "$pw_off" == "yes" ]] && ok "Вход по паролю отключён — только по ключу"
+  else
+    rm -f /etc/ssh/sshd_config.d/00-bcloud.conf
+    warn "Проверка конфигурации SSH не прошла — SSH оставлен как был"
+  fi
+
+  # 5. автообновления безопасности и сетевой стек
+  printf 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n' > /etc/apt/apt.conf.d/20auto-upgrades
+  cat > /etc/sysctl.d/90-bcloud.conf <<'EOF'
+# Bobr Cloud (bcloud harden)
+net.ipv4.tcp_syncookies = 1
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.conf.default.rp_filter = 1
+net.ipv4.conf.all.accept_redirects = 0
+net.ipv4.conf.default.accept_redirects = 0
+net.ipv6.conf.all.accept_redirects = 0
+net.ipv4.conf.all.send_redirects = 0
+net.ipv4.conf.all.accept_source_route = 0
+net.ipv4.icmp_echo_ignore_broadcasts = 1
+EOF
+  sysctl --system >/dev/null 2>&1 || true
+  ok "Автообновления безопасности включены"
+
+  mkdir -p data
+  printf '{"ts":%s,"ssh_port":%s,"password_login":%s}\n' "$(date +%s)" "$port" "$([[ "$pw_off" == yes ]] && echo false || echo true)" > data/.hardened
+  say
+  ok "Готово. О входах по SSH и атаках бот сообщит в событие «Безопасность»."
+  warn "Не закрывайте эту сессию: откройте новое окно и проверьте, что входите на сервер."
+}
+
+security_status() {
+  say "${C_B}Файрвол${C_0}"; ufw status 2>/dev/null | sed -n '1,12p' || warn "UFW не установлен — bcloud harden"
+  say; say "${C_B}fail2ban (SSH)${C_0}"
+  if command -v fail2ban-client >/dev/null; then fail2ban-client status sshd 2>/dev/null | grep -E 'Currently|Total' || warn "fail2ban не запущен"; else warn "fail2ban не установлен — bcloud harden"; fi
+  say; say "${C_B}SSH${C_0}"
+  sshd -T 2>/dev/null | grep -E '^(port|passwordauthentication|permitrootlogin|maxauthtries) ' || true
+  [[ "$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')" == "yes" ]] && warn "Вход по паролю разрешён: настройте SSH-ключ и запустите bcloud harden"
+  say; say "${C_B}Обновления безопасности${C_0}"
+  grep -q 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null && ok "Автообновления включены" || warn "Автообновления выключены"
+}
+
 usage() {
   cat <<EOF
 ${C_B}bcloud${C_0} — управление Bobr Cloud
@@ -39,6 +187,8 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud status    состояние сервисов и версия
   bcloud backup    резервная копия базы и настроек в /root/bcloud-backups
   bcloud restore Ф восстановить базу из копии (файл из Telegram *.db.gz или bot.db)
+  bcloud harden    защитить сервер: файрвол, fail2ban, SSH, автообновления
+  bcloud security  состояние защиты: файрвол, блокировки, вход по паролю
   bcloud setup     повторная настройка (токен, домен, ключи)
   bcloud help      эта справка
 EOF
@@ -89,6 +239,8 @@ case "${1:-install}" in
     compose start bot
     ok "База восстановлена. Если копия из Telegram — введите заново ключи ЮKassa и «Мой налог» в админке."
     exit 0 ;;
+  harden)   harden; exit 0 ;;
+  security) security_status; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   setup|install) ;;
   *) usage; die "Неизвестная команда: $1" ;;

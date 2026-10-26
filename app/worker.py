@@ -28,6 +28,18 @@ async def _resume_broadcasts(ctx: svc.Ctx) -> None:
     await broadcasts.resume(ctx)
 
 
+async def _health(ctx: svc.Ctx) -> None:
+    from . import health
+
+    await health.tick(ctx)
+
+
+async def _security(ctx: svc.Ctx) -> None:
+    from . import security
+
+    await security.tick(ctx)
+
+
 async def _backup(ctx: svc.Ctx) -> None:
     from . import backup
 
@@ -43,5 +55,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("astra_balance", 900, svc.check_astra_balance, 15),
         ("broadcasts", 60, _resume_broadcasts, 8),
         ("backup", 600, _backup, 120),
+        ("health", 30, _health, 40),
+        ("security", 30, _security, 15),
     ]
     return [asyncio.create_task(_loop(n, t, f, ctx, d), name=n) for n, t, f, d in jobs]

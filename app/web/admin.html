@@ -134,6 +134,7 @@ function rootView() {
   v.append(group('Подключения', [
     row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
     row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
+    row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
   ]));
@@ -257,9 +258,38 @@ function subView() {
       row({ cls: 'wrap', title: '3. Нажмите «Проверить канал» и сохраните', sub: 'Если бот потеряет права, клиентов пропустит без подписки, а вам придёт предупреждение.' })]));
 }
 
+// ───────── состояние и безопасность ─────────
+function healthView() {
+  const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  const draw = r => {
+    const ok = r.checks.filter(c => c.ok === true).length, active = r.checks.filter(c => c.ok !== null).length;
+    const checks = group(`Сервисы · ${ok}/${active}`, r.checks.map(c => row({ title: c.title, cls: 'wrap', sub: c.detail || null,
+      right: h('span', { class: 'badge ' + (c.ok === true ? 'ok' : c.ok === false ? 'bad' : '') }, c.ok === true ? (c.ms != null ? c.ms + ' ms' : 'OK') : c.ok === false ? 'Сбой' : 'Не настроено') })),
+      r.checked_at ? 'Проверено ' + UI.date(new Date(r.checked_at * 1000).toISOString()) + '. О сбоях и восстановлении бот пишет в событие «Мониторинг».' : null);
+    const sec = r.security || {}, hd = sec.hardened;
+    const secRows = [row({ icon: 'shield', tile: hd ? '#34C759' : '#FF3B30', title: hd ? 'Защита включена' : 'Защита не настроена', cls: 'wrap',
+      sub: hd ? `bcloud harden от ${UI.date(new Date(hd.ts * 1000).toISOString()).split(',')[0]} · SSH-порт ${hd.ssh_port} · вход по паролю ${hd.password_login ? 'разрешён' : 'запрещён'}` : 'Выполните на сервере: bcloud harden' })];
+    if (hd) {
+      secRows.push(row({ title: 'Заблокировано IP за сутки', detail: String(sec.bans_24h || 0) }));
+      (sec.logins || []).slice(0, 5).forEach(l => secRows.push(row({ title: `Вход: ${l.user}`, sub: l.ip + (l.new ? ' · новый IP' : ''), detail: UI.date(new Date(l.ts * 1000).toISOString()) })));
+    }
+    box.replaceChildren(checks,
+      group('Безопасность сервера', secRows, hd ? (hd.password_login ? 'Вход по паролю разрешён. Надёжнее настроить SSH-ключ и снова запустить bcloud harden — он предложит отключить пароль.' : null)
+        : 'bcloud harden включит файрвол, защиту от подбора паролей (fail2ban), усилит SSH и автообновления, а бот начнёт сообщать о входах на сервер.'),
+      group('Настройки мониторинга', [toggleRow('Проверять сервисы', 'health_enabled'),
+        h('div', { style: 'padding:10px 12px' }, UI.segmented([[1, 'Раз в минуту'], [5, 'Раз в 5 мин'], [15, 'Раз в 15 мин']].map(([v, l]) => ({ value: v, label: l })), S.settings.health_interval_min, v => setVal('health_interval_min', v))),
+        toggleRow('Сводка раз в сутки', 'health_daily')], 'Куда приходят сообщения — в «Уведомления и бэкапы» → «Мониторинг» и «Безопасность».'));
+  };
+  const load = fresh => api('health' + (fresh ? '?fresh=1' : '')).then(draw).catch(e => box.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  const btn = h('button', { class: 'btn tinted', type: 'button' }, icon('restart'), 'Проверить сейчас');
+  btn.onclick = UI.busy(btn, () => load(true));
+  load(false);
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Состояние'), h('div', { style: 'margin:0 var(--gutter) 22px' }, btn), box);
+}
+
 // ───────── уведомления и бэкапы ─────────
 const BK_LABEL = { 6: 'каждые 6 ч', 12: 'каждые 12 ч', 24: 'раз в сутки', 168: 'раз в неделю' };
-const EV_ICON = { alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
+const EV_ICON = { health: ['stack', '#34C759'], security: ['shield', '#FF9500'], alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
 function eventsView() {
   const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   api('events').then(info => {
