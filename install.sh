@@ -45,6 +45,14 @@ $2 {
 		header_up Host vnc.astravps.co
 		header_up Origin https://vnc.astravps.co
 		header_up Referer https://vnc.astravps.co/
+		header_up -X-Forwarded-For
+		header_up -X-Forwarded-Host
+		header_up -X-Forwarded-Proto
+		# cookie и редиректы Astra — на наш домен, иначе браузер их отбросит
+		header_down Set-Cookie "(?i)domain=\.?vnc\.astravps\.co" "Domain=$2"
+		header_down Set-Cookie "(?i)domain=\.?astravps\.co" "Domain=$2"
+		header_down Location "https://vnc\.astravps\.co" "https://$2"
+		header_down -Content-Security-Policy
 		transport http {
 			tls_server_name vnc.astravps.co
 		}
@@ -270,7 +278,13 @@ case "${1:-install}" in
       exec ./install.sh _rebuild
     fi
     compose up -d --build; install_cli; ok "Обновлено"; exit 0 ;;
-  _rebuild) compose up -d --build; install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
+  _rebuild)
+    # свой домен консоли: пересобираем Caddyfile, чтобы исправления прокси приходили с обновлением
+    vd="$(env_get VNC_DOMAIN)"
+    if [[ -n "$vd" ]]; then m="$(env_get PUBLIC_URL)"; m="${m#https://}"; m="${m%%/*}"; write_caddyfile "$m" "$vd"; fi
+    compose up -d --build
+    [[ -n "$vd" ]] && { compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy; }
+    install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
   restart) compose restart bot; ok "Бот перезапущен"; exit 0 ;;
   logs)    compose logs -f --tail=100 bot; exit 0 ;;
   status)
