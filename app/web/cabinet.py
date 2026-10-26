@@ -187,7 +187,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "tickets_unread": await tk.unread_for_client(m["id"]) if m["consented"] else 0,
             "balance_rub": user.balance_kop / 100,
             "servers": ([{**server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))),
-                          "role": "owner", "members": await shr.members(x.id, m["id"])} for x in rows]
+                          **({"astra_id": x.astra_id} if m["id"] in env().admins else {}), "role": "owner", "members": await shr.members(x.id, m["id"])} for x in rows]
                         + [{**server_dict(x, 0, svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))), "refund_rub": 0, "role": "member",
                             "owner": {"tg_id": o.tg_id, "username": o.username, "first_name": o.first_name} if o else None} for x, o in shared])
                        if m["consented"] else [],

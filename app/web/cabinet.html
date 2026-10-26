@@ -458,7 +458,9 @@ function serverView(id) {
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать пароль', onclick: () => UI.copy(s.password, 'Пароль') }, icon('copy'))) : null }),
     row({ title: 'Скопировать всё', cls: 'accent', onClick: () => UI.copy((L && L.conn_info) || `IP: ${s.ip || '—'}\nОС: ${s.os_label || s.os}\nЛогин: root\nПароль: ${s.password || '—'}`, 'Доступ') }),
     row({ icon: 'info', tile: '#34AADC', title: 'Как подключиться', sub: 'Windows, Mac, Linux, телефон', onClick: () => UI.nav.push(() => howtoView(s)) }),
-  ], s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
+    s.astra_id ? row({ title: 'ID у Astra', sub: 'Видите только вы как админ', detail: h('span', { class: 'mono' }, '#' + s.astra_id),
+      right: h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать ID', onclick: () => UI.copy(String(s.astra_id), 'ID') }, icon('copy')) }) : null,
+  ].filter(Boolean), s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
 
   v.append(h('div', { class: 'power' },
     h('button', { type: 'button', disabled: !live || power === 'running', onclick: act('start', { done: 'Сервер включается' }) }, h('span', {}, icon('power')), 'Включить'),

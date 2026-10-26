@@ -297,8 +297,10 @@ async def search_clients(q: str = "", flt: str = "") -> list[dict]:
         stmt = select(User)
         if q:
             cond = [User.username.ilike(f"%{q}%"), User.first_name.ilike(f"%{q}%")]
-            if q.isdigit():
-                cond.append(User.tg_id == int(q))
+            if q.lstrip("#").isdigit():  # Telegram ID или ID сервера у Astra (#4675)
+                n = int(q.lstrip("#"))
+                cond.append(User.tg_id == n)
+                cond.append(User.tg_id.in_(select(Server.tg_id).where(Server.astra_id == n)))
             stmt = stmt.where(or_(*cond))
         if flt == "active":
             stmt = stmt.where(User.tg_id.in_(select(Server.tg_id).where(Server.status.in_(["active", "suspended", "provisioning"]))))

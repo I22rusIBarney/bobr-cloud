@@ -766,7 +766,7 @@ function clientBody(c) {
     const [t, cl] = SRV[x.status] || [x.status, ''];
     const left = x.expires_at ? Math.ceil((new Date(x.expires_at) - Date.now()) / 864e5) : null;
     return row({ flag: UI.flag(x.location), title: x.name, cls: 'wrap',
-      sub: `${x.ip || '—'}, ${x.cpu} vCPU, ${x.ram} ГБ, ${x.disk} ГБ\n${rub(x.price_rub)} в месяц, ${left == null ? '' : left >= 0 ? 'ещё ' + left + ' дн.' : 'истёк'}${x.auto_renew ? ', автопродление' : ''}`,
+      sub: `#${x.astra_id} у Astra · ${x.ip || '—'}, ${x.cpu} vCPU, ${x.ram} ГБ, ${x.disk} ГБ\n${rub(x.price_rub)} в месяц, ${left == null ? '' : left >= 0 ? 'ещё ' + left + ' дн.' : 'истёк'}${x.auto_renew ? ', автопродление' : ''}`,
       right: h('span', { class: 'badge ' + cl }, t) });
   }) : [row({ title: 'Нет активных услуг' })], gone.length ? `Удалённых серверов: ${gone.length}.` : null));
 

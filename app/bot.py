@@ -684,7 +684,8 @@ def _uname(u: dict | User | None) -> str:
     return e(g("first_name") or "") + (f" @{e(g('username'))}" if g("username") else f" (ID {g('tg_id')})")
 
 
-async def _card(srv: Server, role: str = "owner") -> tuple[str, InlineKeyboardMarkup]:
+async def _card(srv: Server, role: str = "owner", viewer: int | None = None) -> tuple[str, InlineKeyboardMarkup]:
+    """Карточка сервера. Админу дополнительно показываем ID сервера у Astra."""
     async with session() as s:
         cfg = await load_settings(s)
         owner = await s.get(User, srv.tg_id) if role == "member" else None
@@ -693,6 +694,8 @@ async def _card(srv: Server, role: str = "owner") -> tuple[str, InlineKeyboardMa
     except Exception:  # Astra недоступна — карточку всё равно показываем
         channel = ""
     text = card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk, channel))
+    if viewer is not None and viewer in env().admins:
+        text = text.replace("\n\n🛡 <b>Доступ</b>", f"\n🆔 У Astra: <code>{srv.astra_id}</code> <i>(видите только вы)</i>\n\n🛡 <b>Доступ</b>", 1)
     if role == "member":
         text = text.rsplit("\nАвтопродление:", 1)[0] + f"\n\n👥 <b>Общий доступ</b> · владелец {_uname(owner)}\n<i>Можно включать, выключать, перезагружать сервер и продлевать его со своего баланса.</i>"
         return text, member_kb(srv)
@@ -733,12 +736,12 @@ async def server_card(c: CallbackQuery, state: FSMContext | None = None):
         await state.clear()
     acc_ = await _access(c, int(c.data.split(":")[2]))
     if acc_ and acc_[1] == "member":
-        await show(c, *await _card(acc_[0], "member"))
+        await show(c, *await _card(acc_[0], "member", c.from_user.id))
         return
     srv = acc_[0] if acc_ else None
     if srv:
         out = await _outgoing(c.from_user.id, srv.id)
-        text, kb = await _card(srv)
+        text, kb = await _card(srv, viewer=c.from_user.id)
         if out:
             u = out["user"] or {}
             text += f"\n\n🔁 <b>Ожидает подтверждения</b> от {e(u.get('first_name') or '')}" + (f" @{e(u['username'])}" if u.get("username") else f" (ID {u.get('tg_id')})")
@@ -1039,7 +1042,7 @@ async def toggle_autorenew(c: CallbackQuery):
         srv = row
     from . import serverlog
     await serverlog.add(srv.id, c.from_user.id, "autorenew_on" if srv.auto_renew else "autorenew_off")
-    await show(c, *await _card(srv))
+    await show(c, *await _card(srv, viewer=c.from_user.id))
 
 
 @router.callback_query(F.data.startswith("s:rn:"))
@@ -1058,7 +1061,7 @@ async def renew_now(c: CallbackQuery):
         async with session() as s:
             me = await s.get(User, c.from_user.id)
         await ctx().notify(srv.tg_id, f"👥 {_uname(me)} продлил(а) сервер <b>{e(srv.name)}</b> на 30 дней со своего баланса.")
-    await show(c, *await _card(srv, role))
+    await show(c, *await _card(srv, role, c.from_user.id))
 
 
 @router.callback_query(F.data.startswith("s:a:"))
