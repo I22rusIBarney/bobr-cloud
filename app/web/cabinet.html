@@ -796,14 +796,26 @@ const uniq = a => [...new Set(a)].sort((x, y) => x - y);
 function axes(loc) {
   const o = offersFor(loc), c = CAT && CAT.configurator;
   const ax = { cpu: o.map(x => x.cpu), ram: o.map(x => x.ram), disk: o.map(x => x.disk) };
-  if (c) for (const k of ['cpu', 'ram', 'disk']) for (let v = c[k].min; v <= c[k].max; v += c[k].step) ax[k].push(v);
+  if (c) for (const k of ['cpu', 'ram', 'disk']) {
+    for (let v = c[k].min; v <= c[k].max; v += c[k].step) ax[k].push(v);
+    if (c[k].max_is_allowed) ax[k].push(c[k].max);  // максимум разрешён, даже если не попадает в шаг (диск 1024)
+  }
   return { cpu: uniq(ax.cpu), ram: uniq(ax.ram), disk: uniq(ax.disk) };
 }
 /* Своя конфигурация: попадает ли в диапазоны и шаги конструктора Astra. */
 function fitsConf(cpu, ram, disk) {
   const c = CAT && CAT.configurator;
   if (!c) return false;
-  return [['cpu', cpu], ['ram', ram], ['disk', disk]].every(([k, v]) => v >= c[k].min && v <= c[k].max && (v - c[k].min) % c[k].step === 0);
+  return [['cpu', cpu], ['ram', ram], ['disk', disk]].every(([k, v]) => v >= c[k].min && v <= c[k].max
+    && ((v - c[k].min) % c[k].step === 0 || (v === c[k].max && c[k].max_is_allowed)));
+}
+/* Ближайшая своя конфигурация не меньше выбранной: значения ниже минимума конструктора поднимаем до минимума. */
+function confUp(cpu, ram, disk) {
+  const c = CAT && CAT.configurator;
+  if (!c) return null;
+  const up = (k, v) => { const r = c[k]; if (v <= r.min) return r.min; const n = r.min + Math.ceil((v - r.min) / r.step) * r.step; return n > r.max ? (r.max_is_allowed && v <= r.max ? r.max : null) : n; };
+  const o = { cpu: up('cpu', cpu), ram: up('ram', ram), disk: up('disk', disk) };
+  return o.cpu && o.ram && o.disk ? o : null;
 }
 /* Цена своей конфигурации: из кэша или запрос с задержкой (ползунки двигают часто). */
 const QUOTES = {};
@@ -824,6 +836,8 @@ function match() {
   const exact = offersFor(B.loc).find(o => o.cpu === B.cpu && o.ram === B.ram && o.disk === B.disk);
   if (exact) return exact;
   if (fitsConf(B.cpu, B.ram, B.disk)) return customOffer(B.loc, B.cpu, B.ram, B.disk);
+  const up = confUp(B.cpu, B.ram, B.disk);  // например, диск 10 ГБ (есть только в тарифе) → 20 ГБ своей конфигурации
+  if (up && fitsConf(up.cpu, up.ram, up.disk)) return customOffer(B.loc, up.cpu, up.ram, up.disk);
   const c = offersFor(B.loc).filter(o => o.cpu >= B.cpu && o.ram >= B.ram && o.disk >= B.disk);
   c.sort((a, b) => a.price_kop - b.price_kop || (a.cpu + a.ram + a.disk) - (b.cpu + b.ram + b.disk));
   return c[0] || null;
@@ -980,7 +994,9 @@ function builderView() {
     priceB.style.opacity = '';
     const over = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
     note.className = 'match-note' + (over.length ? '' : ' ok');
-    note.textContent = (over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : m.idx == null ? 'Своя конфигурация — ровно под ваши параметры.' : 'Точно под ваши параметры.')
+    const UNIT = { cpu: ' vCPU', ram: ' ГБ памяти', disk: ' ГБ диска' };
+    note.textContent = (over.length && m.idx == null ? `Своя конфигурация — от ${over.map(k => m[k] + UNIT[k]).join(', ')}: подняли до минимума.`
+      : over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : m.idx == null ? 'Своя конфигурация — ровно под ваши параметры.' : 'Точно под ваши параметры.')
       + (m.speed ? ` Скорость канала — до ${m.speed}.` : '');
     const full = m.price_kop / 100;
     const opt = periodOpts().find(o => o.code === B.period) || periodOpts()[0];

@@ -163,14 +163,16 @@ def configurator(cat: dict) -> dict | None:
             return None
         if mn <= 0 or mx < mn:
             return None
-        out[k] = {"min": mn, "max": mx, "step": st}
+        out[k] = {"min": mn, "max": mx, "step": st, "max_is_allowed": bool(r.get("max_is_allowed", True))}
     return out
 
 
 def fits(conf: dict, cpu: int, ram: int, disk: int) -> bool:
     for k, v in (("cpu", cpu), ("ram", ram), ("disk", disk)):
         r = conf[k]
-        if not (r["min"] <= v <= r["max"]) or (v - r["min"]) % r["step"]:
+        if not (r["min"] <= v <= r["max"]):
+            return False
+        if (v - r["min"]) % r["step"] and not (v == r["max"] and r.get("max_is_allowed")):
             return False
     return True
 
