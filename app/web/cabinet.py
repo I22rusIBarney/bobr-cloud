@@ -148,6 +148,10 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 await s.execute(select(Server).where(Server.tg_id == m["id"], Server.status != "deleted").order_by(Server.id))
             ).scalars().all()
         n_methods = len(await acc.methods(m["id"]))
+        try:
+            cat = await ctx.catalog() if rows else {}
+        except Exception:  # Astra недоступна — скорость покажем только ручную
+            cat = {}
         sub_info = await sub.required(ctx, m["id"]) if m["consented"] else None
         return {
             "subscription": {"needed": True, **sub_info} if sub_info else {"needed": False},
@@ -165,7 +169,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "theme": {"bg": cfg["theme_bg"], "image": cfg["theme_bg_image"], "effect": cfg["theme_effect"], "client_choice": cfg["theme_client_choice"]},
             "tickets_unread": await tk.unread_for_client(m["id"]) if m["consented"] else 0,
             "balance_rub": user.balance_kop / 100,
-            "servers": [server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk)) for x in rows] if m["consented"] else [],
+            "servers": [server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))) for x in rows] if m["consented"] else [],
             "cfg": {
                 "providers": svc.payment_providers(ctx, cfg),
                 "min_topup_rub": cfg["min_topup_rub"],

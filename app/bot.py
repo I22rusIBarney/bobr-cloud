@@ -359,8 +359,12 @@ async def buy_tariffs(c: CallbackQuery):
         await show(c, f"⚠️ <b>{svc.flag(loc)} {e(name)}</b>\n\nВ этой локации сейчас нет доступных тарифов.", kb_rows([], back="m:buy"))
         return
     rows = [[(f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — {rub(o['price_kop'])}", f"b:p:{loc}:{o['idx']}")] for o in offs]
-    limited = [f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — до {e(o['speed'])}" for o in offs if o.get("speed")]
-    speed_note = ("\n\n🌐 <b>Скорость канала</b>\n" + "\n".join(limited)) if limited else ""
+    limited = [f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — до {e(o['speed'])}" for o in offs if o.get("speed_limited")]
+    base = svc.channel_speed(svc.loc_channel(await ctx().catalog(), loc))
+    if limited:
+        speed_note = "\n\n🌐 <b>Скорость канала</b>\n" + "\n".join(limited) + (f"\nОстальные тарифы — до {e(base)}" if base and len(limited) < len(offs) else "")
+    else:
+        speed_note = f"\n\n🌐 Канал: до {e(base)} на всех тарифах" if base else ""
     await show(c, f"🖥 <b>Конфигурация · {svc.flag(loc)} {e(name)}</b>\n\nПроцессор · память · диск NVMe.\nЦены — за 30 дней.{speed_note}", kb_rows(rows, back="m:buy"))
 
 
@@ -627,7 +631,11 @@ def card_kb(srv: Server, transfers: bool = True) -> InlineKeyboardMarkup:
 async def _card(srv: Server) -> tuple[str, InlineKeyboardMarkup]:
     async with session() as s:
         cfg = await load_settings(s)
-    return (card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk)),
+    try:
+        channel = svc.loc_channel(await ctx().catalog(), srv.location)
+    except Exception:  # Astra недоступна — карточку всё равно показываем
+        channel = ""
+    return (card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk, channel)),
             card_kb(srv, bool(cfg.get("transfers_enabled", True))))
 
 

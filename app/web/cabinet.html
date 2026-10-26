@@ -656,7 +656,7 @@ function builderView() {
       h('span', { class: 'from' }, min == null ? 'Нет мест' : 'от ' + rub(min) + ' / мес'));
     locGrid.append(b);
   });
-  const someLimited = loc && loc.offers.some(o => o.speed);
+  const someLimited = loc && loc.offers.some(o => o.speed_limited);
   wrap.append(UI.section('Локация', locGrid, loc && loc.channel ? `Канал в локации ${loc.name}: ${loc.channel}.` + (someLimited ? ' На отдельных тарифах скорость ограничена — она указана в тарифе.' : '') : null));
 
   // 2. готовые тарифы

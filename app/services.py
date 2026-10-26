@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import html
+import re
 import math
 import logging
 import secrets
@@ -122,12 +123,27 @@ def spec_key(cpu, ram, disk) -> str:
     return f"{n(cpu)}-{n(ram)}-{n(disk)}"
 
 
-def speed_of(cfg: dict, cpu, ram, disk) -> str:
-    """Ограничение скорости тарифа из настроек («200 Мбит/с») или пустая строка."""
+def manual_speed(cfg: dict, cpu, ram, disk) -> str:
+    """Ограничение скорости тарифа из админки («200 Мбит/с») или пустая строка."""
     try:
         return (cfg.get("preset_speeds") or {}).get(spec_key(cpu, ram, disk), "")
     except (TypeError, ValueError):
         return ""
+
+
+def channel_speed(channel: str) -> str:
+    """Канал локации от Astra в коротком виде: «до 25 Гбит/с · shared, не гарантирован» → «25 Гбит/с»."""
+    c = re.split(r"\s*[·,;(|]\s*", (channel or "").strip())[0]
+    return re.sub(r"^до\s+", "", c, flags=re.I).strip()[:30]
+
+
+def speed_of(cfg: dict, cpu, ram, disk, channel: str = "") -> str:
+    """Скорость для клиента: ручная из админки, иначе канал локации от Astra."""
+    return manual_speed(cfg, cpu, ram, disk) or channel_speed(channel)
+
+
+def loc_channel(cat: dict, code: str) -> str:
+    return next((l.get("channel") or "" for l in cat.get("locations", []) if l.get("code") == code), "")
 
 
 async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict]:
@@ -137,6 +153,7 @@ async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict
         cfg = await load_settings(s)
         u = await s.get(User, tg_id) if tg_id else None
     cfg = user_price_cfg(cfg, u)
+    channel = loc_channel(cat, location)
     out = []
     for p in cat.get("presets", []):
         if p["idx"] in cfg["hidden_presets"]:
@@ -152,7 +169,8 @@ async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict
                 "disk": p["disk"],
                 "cost_rub": cost,
                 "price_kop": sell_price_kop(cost, cfg),
-                "speed": speed_of(cfg, p["cpu"], p["ram"], p["disk"]),
+                "speed": speed_of(cfg, p["cpu"], p["ram"], p["disk"], channel),
+                "speed_limited": bool(manual_speed(cfg, p["cpu"], p["ram"], p["disk"])),
             }
         )
     return out
