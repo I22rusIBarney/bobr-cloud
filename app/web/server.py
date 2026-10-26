@@ -90,6 +90,11 @@ class BroadcastIn(BaseModel):
     test: bool = False
 
 
+class EventTestIn(BaseModel):
+    event: str
+    chat: str = ""
+
+
 class ChatIn(BaseModel):
     chat: str
 
@@ -446,6 +451,33 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         from .. import broadcasts as bc
         await bc.cancel(bid)
         return await bc.get(bid)
+
+    # ───── события и бэкапы ─────
+
+    @app.get("/api/admin/events")
+    async def ev_info(_: dict = Depends(admin)):
+        from .. import backup, events
+        return {"events": [{"key": k, "title": t, "sub": d} for k, (t, d) in events.EVENTS.items()], "backup_last_ts": await backup.last_ts()}
+
+    @app.post("/api/admin/events/test")
+    async def ev_test(p: EventTestIn, _: dict = Depends(admin)):
+        from .. import events
+        if p.event not in events.EVENTS:
+            raise HTTPException(400, "Неизвестное событие")
+        if ctx.post is None:
+            raise HTTPException(503, "Бот ещё не запущен")
+        err = await events.test(ctx, p.event, p.chat)
+        return {"ok": err is None, "error": err and ("Бот не может писать в этот чат: добавьте его администратором канала или участником группы. " + err[:200])}
+
+    @app.post("/api/admin/backup")
+    async def backup_now(_: dict = Depends(admin)):
+        from .. import backup
+        if ctx.post_file is None:
+            raise HTTPException(503, "Бот ещё не запущен")
+        try:
+            return await backup.run(ctx, "вручную")
+        except backup.BackupError as ex:
+            raise HTTPException(400, str(ex))
 
     @app.post("/api/admin/subscription/check")
     async def sub_probe(p: ChatIn, _: dict = Depends(admin)):

@@ -2,6 +2,7 @@
 # Установщик Bobr Cloud. Запуск на чистом VPS (Ubuntu/Debian) от root: sudo ./install.sh
 # После установки доступна короткая команда bcloud (bcloud help — список команд).
 set -euo pipefail
+CALLER_PWD="${BCLOUD_CWD:-$PWD}"  # откуда запустили — для относительных путей (bcloud restore файл)
 cd "$(dirname "$(readlink -f "$0")")"
 
 C_B=$'\e[1m'; C_G=$'\e[32m'; C_Y=$'\e[33m'; C_R=$'\e[31m'; C_0=$'\e[0m'
@@ -21,6 +22,7 @@ install_cli() {
 #!/usr/bin/env bash
 # Bobr Cloud — управление ботом. Создано установщиком из ${dir}
 if [[ \$EUID -ne 0 ]]; then exec sudo "\$0" "\$@"; fi
+export BCLOUD_CWD="\$PWD"
 cd "${dir}" || { echo "Папка бота ${dir} не найдена — запустите install.sh из новой папки"; exit 1; }
 exec ./install.sh "\${@:-help}"
 EOF
@@ -36,6 +38,7 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud logs      логи бота (выход — Ctrl+C)
   bcloud status    состояние сервисов и версия
   bcloud backup    резервная копия базы и настроек в /root/bcloud-backups
+  bcloud restore Ф восстановить базу из копии (файл из Telegram *.db.gz или bot.db)
   bcloud setup     повторная настройка (токен, домен, ключи)
   bcloud help      эта справка
 EOF
@@ -68,6 +71,24 @@ case "${1:-install}" in
     chmod 600 "$f"
     ls -1t /root/bcloud-backups/bcloud-*.tar.gz | tail -n +11 | xargs -r rm -f  # храним 10 последних
     ok "Копия: $f"; exit 0 ;;
+  restore)
+    f="${2:-}"
+    [[ -n "$f" ]] || die "Укажите файл: bcloud restore /root/bcloud-20261026-1200.db.gz"
+    [[ "$f" = /* ]] || f="$CALLER_PWD/$f"
+    [[ -f "$f" ]] || die "Файл не найден: $f"
+    tmp="$(mktemp)"
+    if [[ "$f" == *.gz ]]; then gzip -dc "$f" > "$tmp" || die "Файл повреждён"; else cp "$f" "$tmp"; fi
+    head -c 15 "$tmp" | grep -q "SQLite format 3" || { rm -f "$tmp"; die "Это не файл базы SQLite"; }
+    read -r -p "Текущая база будет заменена (её копия сохранится). Продолжить? [y/N] " a
+    [[ "$a" =~ ^[yYдД] ]] || { rm -f "$tmp"; say "Отменено"; exit 0; }
+    compose stop bot
+    mkdir -p data
+    [[ -f data/bot.db ]] && cp data/bot.db "data/bot.db.before-restore-$(date +%Y%m%d-%H%M%S)"
+    rm -f data/bot.db-wal data/bot.db-shm
+    mv "$tmp" data/bot.db
+    compose start bot
+    ok "База восстановлена. Если копия из Telegram — введите заново ключи ЮKassa и «Мой налог» в админке."
+    exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   setup|install) ;;
   *) usage; die "Неизвестная команда: $1" ;;

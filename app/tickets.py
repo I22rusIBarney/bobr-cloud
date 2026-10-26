@@ -60,11 +60,8 @@ def _client_link(tid: int) -> str:
 
 
 async def _ping_admins(ctx: Ctx, text: str, tid: int) -> None:
-    if ctx.notify_btn:
-        for aid in env().admins:
-            await ctx.notify_btn(aid, text, "Открыть обращение", _admin_link(tid))
-    else:
-        await ctx.alert_admin(text)
+    from . import events
+    await events.emit(ctx, "tickets", text, admin_url=_admin_link(tid))
 
 
 # ───────────────────────── клиент ─────────────────────────

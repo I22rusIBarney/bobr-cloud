@@ -42,6 +42,9 @@ class Ctx:
     check_member: Callable[[Any, int], Awaitable[bool | None]] | None = None
     # проверка канала для админки: chat → {ok, title, link, error}
     probe_chat: Callable[[Any], Awaitable[dict]] | None = None
+    # отправка в произвольный чат (канал событий): → None или текст ошибки
+    post: Callable[[Any, str], Awaitable[str | None]] | None = None
+    post_file: Callable[[Any, str, str], Awaitable[str | None]] | None = None
     # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
     send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None
     _catalog: tuple[float, dict] | None = None
@@ -260,10 +263,14 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
     )
     async with session() as s:
         s.add(srv)
+        u = await s.get(User, tg_id)
         if discount_pct:
-            u = await s.get(User, tg_id)
             u.promo_discount_pct, u.promo_code = 0, None
         await s.commit()
+    from . import events
+    term = {1: "1 мес", 3: "3 мес", 6: "6 мес", 12: "1 год"}.get(months, f"{months} мес")
+    await events.emit(ctx, "sales", f"🛒 <b>Покупка · {fmt_rub(charge)}</b>\n\n👤 {events.who(u)}\n🖥 {flag(location)} {srv.cpu} vCPU · {srv.ram} ГБ · {srv.disk} ГБ · {html.escape(os_label(srv.os))}\n"
+                      f"🔄 {term}" + (f" · промокод −{discount_pct}%" if discount_pct else "") + f"\n💰 Маржа в месяц: {fmt_rub(price - srv.cost_kop)}")
     return srv
 
 
@@ -577,6 +584,10 @@ async def upgrade_server(ctx: Ctx, tg_id: int, server_id: int, cpu: int, ram: in
             row.price_kop = q["new_price_kop"]
         await s.commit()
         new_price = row.price_kop
+        u = await s.get(User, tg_id)
+        name = row.name
+    from . import events
+    await events.emit(ctx, "sales", f"⬆️ <b>Апгрейд · {fmt_rub(final)}</b>\n\n👤 {events.who(u)}\n🖥 {html.escape(name)}: {cpu} vCPU · {ram} ГБ\n💳 Продление теперь {fmt_rub(new_price)}")
     return {"charged_kop": final, "new_price_kop": new_price, "cpu": cpu, "ram": ram}
 
 
@@ -768,7 +779,11 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
         if saved_title:
             msg += f"\n💳 Карта {html.escape(saved_title)} сохранена, автоплатежи включены. Отключить можно в личном кабинете."
         await ctx.notify(tg_id, msg)
-    from . import referral  # бонусы за приглашение — только с реальных оплат
+    from . import events, referral  # бонусы за приглашение — только с реальных оплат
+    async with session() as s:
+        payer = await s.get(User, tg_id)
+    await events.emit(ctx, "payments", f"💳 <b>{'Автоплатёж' if autopay else 'Пополнение'} · {fmt_rub(amount)}</b>\n\n👤 {events.who(payer)}"
+                      + (f"\n💳 {html.escape(title)}" if autopay and title else "") + (f"\n💾 Карта сохранена: {html.escape(saved_title)}" if saved_title else ""))
     await referral.reward(ctx, tg_id, amount, pay_id)
     if receipt == "pending":
         await process_receipts(ctx)

@@ -134,6 +134,7 @@ function rootView() {
   v.append(group('Подключения', [
     row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
     row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
+    row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
   ]));
 
@@ -254,6 +255,49 @@ function subView() {
     group('Как подключить', [row({ cls: 'wrap', title: '1. Добавьте бота в канал или группу администратором', sub: 'Права можно не давать — Telegram разрешает проверять подписчиков только администраторам.' }),
       row({ cls: 'wrap', title: '2. Укажите @username канала', sub: 'Для закрытого — ID вида -100… и ссылку-приглашение.' }),
       row({ cls: 'wrap', title: '3. Нажмите «Проверить канал» и сохраните', sub: 'Если бот потеряет права, клиентов пропустит без подписки, а вам придёт предупреждение.' })]));
+}
+
+// ───────── уведомления и бэкапы ─────────
+const BK_LABEL = { 6: 'каждые 6 ч', 12: 'каждые 12 ч', 24: 'раз в сутки', 168: 'раз в неделю' };
+const EV_ICON = { alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
+function eventsView() {
+  const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('events').then(info => {
+    const out = [];
+    info.events.forEach(ev => {
+      const chat = textField('Куда', `ev_${ev.key}_chat`, 'Личка админов или @канал');
+      const st = statusLine();
+      const test = h('button', { class: 'btn small tinted', type: 'button' }, 'Проверить');
+      test.onclick = UI.busy(test, async () => {
+        try {
+          const r = await api('events/test', 'POST', { event: ev.key, chat: chat.input.value.trim() });
+          showStatus(st, { ok: r.ok, message: r.ok ? (chat.input.value.trim() ? '✓ Тестовое сообщение отправлено в чат' : '✓ Отправили вам в бота') : r.error });
+        } catch (e) { showStatus(st, { ok: false, message: e.message }); }
+      });
+      const [ic, col] = EV_ICON[ev.key] || ['chat', '#8E8E93'];
+      const rows = [row({ icon: ic, tile: col, title: ev.title, sub: ev.sub, right: UI.toggle(S.settings[`ev_${ev.key}_on`], v => setVal(`ev_${ev.key}_on`, v), ev.title) }),
+        h('div', { class: 'field', style: 'gap:10px' }, chat.input, test)];
+      chat.input.style.textAlign = 'left';
+      if (ev.key === 'backups') {
+        rows.push(h('div', { style: 'padding:10px 12px' }, UI.segmented([[0, 'Выкл'], [6, 'Каждые 6 ч'], [24, 'Раз в сутки'], [168, 'Неделя']].map(([n, l]) => ({ value: n, label: l })),
+          S.settings.backup_hours || 0, v => setVal('backup_hours', v))));
+        const now = h('button', { class: 'btn small', type: 'button' }, 'Сделать копию сейчас');
+        now.onclick = UI.busy(now, async () => {
+          const r = await UI.run(() => api('backup', 'POST'));
+          if (r === undefined) return;
+          if (r.ok) UI.toast(`Копия отправлена · ${r.size_kb} КБ`); else UI.alert('Копия создана, но не дошла: ' + r.error);
+        });
+        rows.push(row({ title: 'Последняя копия', sub: info.backup_last_ts ? UI.date(new Date(info.backup_last_ts * 1000).toISOString()) : 'ещё не было', right: now }));
+      }
+      out.push(group(null, rows, h('span', {}, st, ev.key === 'backups'
+        ? 'Копия базы без ключей ЮKassa и «Мой налог», сжатая. Восстановление на сервере: bcloud restore файл. Канал для бэкапов — только закрытый: в копии данные клиентов.'
+        : null)));
+    });
+    box.replaceChildren(...out);
+  }).catch(e => box.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Уведомления'),
+    h('div', { class: 'subtitle', style: 'white-space:normal' }, 'Каждое событие можно отправлять в свой канал или группу. Бот должен быть там администратором (в группе — участником). Пустое поле — сообщения приходят вам в бота.'),
+    box);
 }
 
 // ───────── рассылки ─────────

@@ -82,6 +82,10 @@ class Guard(BaseMiddleware):
                 inviter = await referral.attach(u.id, text.split(maxsplit=1)[1])
                 if inviter:
                     await ctx().notify(inviter, referral.joined_text(user))
+                    from . import events
+                    async with session() as s:
+                        inv = await s.get(User, inviter)
+                    await events.emit(ctx(), "referrals", f"👋 <b>Новый реферал</b>\n\n{events.who(user)}\nпо ссылке {events.who(inv)}")
             except Exception:
                 log.exception("referral attach")
         if user.banned:
@@ -789,6 +793,27 @@ def make_member_checker(bot: Bot):
         return {**out, "ok": True}
 
     return check_member, probe_chat
+
+
+def make_poster(bot: Bot):
+    """Отправка в любой чат (каналы событий). Возвращает None или текст ошибки."""
+    from aiogram.types import FSInputFile
+
+    async def post(chat, text: str) -> str | None:
+        try:
+            await bot.send_message(chat, text, parse_mode="HTML", disable_web_page_preview=True)
+            return None
+        except Exception as ex:
+            return str(ex)
+
+    async def post_file(chat, path: str, caption: str) -> str | None:
+        try:
+            await bot.send_document(chat, FSInputFile(path), caption=caption[:1000])
+            return None
+        except Exception as ex:
+            return str(ex)
+
+    return post, post_file
 
 
 def make_broadcast_sender(bot: Bot):

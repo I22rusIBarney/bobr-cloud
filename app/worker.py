@@ -28,6 +28,12 @@ async def _resume_broadcasts(ctx: svc.Ctx) -> None:
     await broadcasts.resume(ctx)
 
 
+async def _backup(ctx: svc.Ctx) -> None:
+    from . import backup
+
+    await backup.scheduled(ctx)
+
+
 def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
     jobs = [
         ("sync_servers", 45, svc.sync_servers, 5),
@@ -36,5 +42,6 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("receipts", 300, svc.process_receipts, 30),
         ("astra_balance", 900, svc.check_astra_balance, 15),
         ("broadcasts", 60, _resume_broadcasts, 8),
+        ("backup", 600, _backup, 120),
     ]
     return [asyncio.create_task(_loop(n, t, f, ctx, d), name=n) for n, t, f, d in jobs]

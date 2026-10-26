@@ -103,6 +103,13 @@ async def _reward(ctx, tg_id: int, paid_kop: int, pay_id: int) -> None:
         await ctx.notify(tg_id, f"💰 <b>Бонус за приглашение</b>\n\nЗачислили <b>{fmt_rub(welcome)}</b> на баланс.")
     if paid_bonus:
         await ctx.notify(ref_id, f"💰 <b>Бонус за друга</b>\n\nВаш друг пополнил баланс — начислили <b>{fmt_rub(bonus)}</b>.")
+    if paid_bonus or got_welcome:
+        from . import events
+        async with session() as s:
+            inv, fr = await s.get(User, ref_id), await s.get(User, tg_id)
+        await events.emit(ctx, "referrals", "💰 <b>Реферальные бонусы</b>\n\n"
+                          + (f"Пригласившему {events.who(inv)}: <b>{fmt_rub(bonus)}</b>\n" if paid_bonus else "")
+                          + (f"Приглашённому {events.who(fr)}: <b>{fmt_rub(welcome)}</b> (первая оплата)" if got_welcome else ""))
 
 
 async def stats(tg_id: int, bot_username: str | None) -> dict:
