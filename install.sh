@@ -41,6 +41,10 @@ write_caddyfile() {  # $1 — домен бота, $2 — домен консо�
 
 # консоль VNC под своим доменом: прозрачный прокси на Astra (страница и WebSocket)
 $2 {
+	log {
+		output stdout
+		format console
+	}
 	reverse_proxy https://vnc.astravps.co {
 		header_up Host vnc.astravps.co
 		header_up Origin https://vnc.astravps.co
