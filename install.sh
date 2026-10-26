@@ -45,20 +45,29 @@ $2 {
 		output stdout
 		format console
 	}
-	reverse_proxy https://vnc.astravps.co {
-		header_up Host vnc.astravps.co
-		header_up Origin https://vnc.astravps.co
-		header_up Referer https://vnc.astravps.co/
-		header_up -X-Forwarded-For
-		header_up -X-Forwarded-Host
-		header_up -X-Forwarded-Proto
-		# cookie и редиректы Astra — на наш домен, иначе браузер их отбросит
-		header_down Set-Cookie "(?i)domain=\.?vnc\.astravps\.co" "Domain=$2"
-		header_down Set-Cookie "(?i)domain=\.?astravps\.co" "Domain=$2"
-		header_down Location "https://vnc\.astravps\.co" "https://$2"
-		header_down -Content-Security-Policy
-		transport http {
-			tls_server_name vnc.astravps.co
+	# страница консоли — через бота: в ней адрес подключения Astra заменяется на наш домен
+	@page path_regexp ^/[A-Za-z0-9_-]{16,128}$
+	handle @page {
+		rewrite * /_vnc{path}
+		reverse_proxy bot:8080
+	}
+	# файлы консоли и поток /vnc-ws/ — напрямую на Astra
+	handle {
+		reverse_proxy https://vnc.astravps.co {
+			header_up Host vnc.astravps.co
+			header_up Origin https://vnc.astravps.co
+			header_up Referer https://vnc.astravps.co/
+			header_up -X-Forwarded-For
+			header_up -X-Forwarded-Host
+			header_up -X-Forwarded-Proto
+			# cookie и редиректы Astra — на наш домен, иначе браузер их отбросит
+			header_down Set-Cookie "(?i)domain=\.?vnc\.astravps\.co" "Domain=$2"
+			header_down Set-Cookie "(?i)domain=\.?astravps\.co" "Domain=$2"
+			header_down Location "https://vnc\.astravps\.co" "https://$2"
+			header_down -Content-Security-Policy
+			transport http {
+				tls_server_name vnc.astravps.co
+			}
 		}
 	}
 }

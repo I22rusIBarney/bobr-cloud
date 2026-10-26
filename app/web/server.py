@@ -127,6 +127,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     # ───── публичное ─────
 
+    from .vnc_page import router as vnc_router
+    app.include_router(vnc_router())
+
     @app.get("/paid", response_class=HTMLResponse)
     async def paid():
         return "<meta name=viewport content='width=device-width'><body style='font-family:sans-serif;text-align:center;padding:48px'><h2>Оплата принята ✅</h2><p>Вернитесь в Telegram — баланс пополнится автоматически.</p>"
