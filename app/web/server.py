@@ -31,6 +31,11 @@ HERE = Path(__file__).parent
 # FastAPI ищет аннотации в глобальной области, локальные классы он не видит (→ 422).
 
 
+class PlategaIn(BaseModel):
+    merchant_id: str
+    secret: str = ""  # пусто = оставить текущий
+
+
 class YkIn(BaseModel):
     shop_id: str
     secret_key: str = ""  # пусто = оставить текущий
@@ -155,6 +160,24 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
                 raise HTTPException(500)  # ЮKassa повторит
         return {"ok": True}
 
+    @app.post("/platega/webhook")
+    async def platega_webhook(request: Request):
+        """Уведомление Platega: заголовки X-MerchantId/X-Secret должны совпасть с нашими, статус перепроверяем запросом."""
+        if ctx.platega is None or not ctx.platega.verify_callback(request.headers.get("X-MerchantId"), request.headers.get("X-Secret")):
+            raise HTTPException(401)
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400)
+        tid = str(body.get("id") or body.get("transactionId") or "")
+        if tid:
+            try:
+                await svc.credit_payment(ctx, tid)
+            except Exception:
+                log.exception("platega webhook credit failed")
+                raise HTTPException(500)  # Platega повторит
+        return {"ok": True}
+
     # ───── общие стили и скрипты Mini App ─────
 
     STATIC = {"ui.css": "text/css; charset=utf-8", "ui.js": "application/javascript; charset=utf-8", "fx.js": "application/javascript; charset=utf-8"}
@@ -249,7 +272,41 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
                 "secret_hint": ("••••" + yk_secret[-4:]) if yk_secret else "",
             },
             "nalog": {"configured": ctx.nalog.enabled, "inn": ctx.nalog.inn, "from_env": not sec["nalog_inn"] and ctx.nalog.enabled},
+            "platega": {
+                "configured": bool(ctx.platega and ctx.platega.configured),
+                "merchant_id": ctx.platega.merchant_id if ctx.platega else "",
+                # последние 4 символа показываем только у длинного ключа, короткий не раскрываем
+                "secret_hint": ("••••" + (ctx.platega._secret[-4:] if len(ctx.platega._secret) >= 12 else "")) if ctx.platega and ctx.platega._secret else "",
+                "callback_url": f"{env().public_url.rstrip('/')}/platega/webhook",
+            },
         }
+
+    @app.post("/api/admin/integrations/platega")
+    async def save_platega(p: PlategaIn, _: dict = Depends(admin)):
+        mid = p.merchant_id.strip()
+        secret = p.secret.strip() or (ctx.platega._secret if ctx.platega else "")
+        if not mid or not secret:
+            raise HTTPException(400, "Укажите MerchantId и секретный ключ")
+        async with session() as s:
+            await set_secrets(s, {"platega_merchant_id": mid, "platega_secret": secret})
+        ctx.platega.configure(mid, secret)
+        ok, msg = await ctx.platega.check()
+        return {"ok": ok, "message": msg}
+
+    @app.post("/api/admin/integrations/platega/test")
+    async def test_platega(_: dict = Depends(admin)):
+        if not (ctx.platega and ctx.platega.configured):
+            return {"ok": False, "message": "Не настроено"}
+        ok, msg = await ctx.platega.check()
+        return {"ok": ok, "message": msg}
+
+    @app.delete("/api/admin/integrations/platega")
+    async def disable_platega(_: dict = Depends(admin)):
+        async with session() as s:
+            await set_secrets(s, {"platega_merchant_id": "", "platega_secret": ""})
+            await save_settings(s, {"pay_platega_on": False})
+        ctx.platega.configure("", "")
+        return {"ok": True}
 
     @app.post("/api/admin/integrations/yookassa")
     async def save_yk(p: YkIn, _: dict = Depends(admin)):

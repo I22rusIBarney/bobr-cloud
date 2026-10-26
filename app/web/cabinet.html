@@ -71,6 +71,17 @@
   .save-card { display: flex; gap: 10px; align-items: flex-start; margin: 12px 0 14px; }
   .save-card button { border: 0; background: none; padding: 0; cursor: pointer; }
   .save-card span { font-size: 13px; line-height: 18px; color: var(--hint); }
+  .prov-list { display: grid; gap: 8px; margin: 12px 0 14px; }
+  .prov-list + .save-card { margin-top: 0; }
+  .prov-list button {
+    display: flex; align-items: center; gap: 12px; width: 100%; padding: 12px 14px; border: 0; border-radius: var(--r-md); cursor: pointer; text-align: left; color: var(--text);
+    background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); font-size: 15px; font-weight: 500;
+    transition: box-shadow var(--t-fast) var(--ease), background var(--t-fast) var(--ease), transform var(--t-fast) var(--ease);
+  }
+  .prov-list button:active { transform: scale(.98); }
+  .prov-list .radio { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--hint-2); flex: none; transition: box-shadow var(--t) var(--ease-spring); }
+  .prov-list button[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .prov-list button[aria-pressed="true"] .radio { box-shadow: inset 0 0 0 6px var(--accent); }
   .pay-note { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 12px; color: var(--hint); margin-top: 12px; }
   .pay-note svg { width: 14px; height: 14px; color: var(--ok); }
 
@@ -929,7 +940,13 @@ function profileView() {
     else go.textContent = amount > D.cfg.max_topup_rub ? 'Не больше ' + rub(D.cfg.max_topup_rub) : 'От ' + rub(D.cfg.min_topup_rub);
   }
   input.addEventListener('input', () => { amount = Math.round(+input.value || 0); sync(); });
-  go.onclick = UI.busy(go, async () => { const r = await UI.run(() => api('/topup', 'POST', { amount_rub: amount, save_method: save })); if (r) UI.openLink(r.url); });
+  const provs = D.cfg.providers || [];
+  let provider = (provs.find(p => p.code === pref.get('prov')) || provs[0] || {}).code;
+  go.onclick = UI.busy(go, async () => {
+    const pv = provs.find(p => p.code === provider);
+    const r = await UI.run(() => api('/topup', 'POST', { amount_rub: amount, save_method: save && !!(pv && pv.autopay), provider }));
+    if (r) UI.openLink(r.url);
+  });
   sync();
   let saveRow = null;
   if (D.autopay.available) {
@@ -939,9 +956,27 @@ function profileView() {
       h('span', {}, 'Сохранить карту для автоплатежей. Соглашаюсь с ',
         h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правилами автоплатежей'), '.'));
   }
-  wrap.append(UI.section('Пополнение', h('div', { class: 'card' }, chips, h('label', { class: 'input' }, input, h('span', { class: 'unit' }, '₽')), saveRow || h('div', { style: 'height:14px' }), go,
-    h('div', { class: 'pay-note' }, icon('shield'), 'Карта или СБП через ЮKassa')),
+  // способ оплаты: если включено несколько — выбор, карта сохраняется только там, где есть автоплатежи
+  let provBox = null;
+  const note = h('div', { class: 'pay-note' }, icon('shield'), h('span'));
+  const paintProv = () => {
+    const pv = provs.find(p => p.code === provider);
+    if (saveRow) saveRow.style.display = pv && pv.autopay ? '' : 'none';
+    note.lastChild.textContent = pv ? pv.label : 'Оплата временно недоступна';
+    if (!pv) go.disabled = true;
+    if (provBox) [...provBox.children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.code === provider)));
+  };
+  if (provs.length > 1) {
+    provBox = h('div', { class: 'prov-list', role: 'group', 'aria-label': 'Способ оплаты' }, provs.map(p => {
+      const b = h('button', { type: 'button', 'data-code': p.code, onclick: () => { provider = p.code; pref.set('prov', p.code); UI.haptic('select'); paintProv(); } },
+        h('span', { class: 'radio', 'aria-hidden': 'true' }), h('span', { class: 'pl' }, p.label));
+      return b;
+    }));
+  }
+  wrap.append(UI.section('Пополнение', h('div', { class: 'card' }, chips, h('label', { class: 'input' }, input, h('span', { class: 'unit' }, '₽')),
+    provBox, saveRow || h('div', { style: 'height:14px' }), go, note),
     `От ${rub(D.cfg.min_topup_rub)} до ${rub(D.cfg.max_topup_rub)}. После оплаты вернитесь сюда — баланс обновится сам.`));
+  paintProv();
 
   // промокод
   const code = h('input', { type: 'text', placeholder: 'Промокод', autocapitalize: 'characters', spellcheck: false, 'aria-label': 'Промокод' });

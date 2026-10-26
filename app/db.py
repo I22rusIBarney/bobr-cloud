@@ -98,7 +98,8 @@ class Setting(Base):
 class Payment(Base):
     __tablename__ = "payments"
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    yk_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    yk_id: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)  # id платежа у провайдера
+    provider: Mapped[str] = mapped_column(String(16), default="yookassa")  # yookassa | platega
     tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
     amount_kop: Mapped[int] = mapped_column(Integer)
     # pending | succeeded | canceled

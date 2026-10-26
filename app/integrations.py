@@ -16,3 +16,5 @@ async def load_integrations(ctx: Ctx) -> None:
     e = env()
     ctx.yk.configure(sec["yk_shop_id"] or e.yookassa_shop_id, sec["yk_secret"] or e.yookassa_secret_key)
     ctx.nalog.configure(sec["nalog_inn"] or e.nalog_inn, sec["nalog_password"] or e.nalog_password)
+    if ctx.platega is not None:
+        ctx.platega.configure(sec["platega_merchant_id"], sec["platega_secret"])

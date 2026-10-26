@@ -77,6 +77,15 @@ async def _check_yookassa(ctx) -> dict:
     return _res(st == 200, ms, "" if st == 200 else f"ответ {st} — проверьте ключи")
 
 
+async def _check_platega(ctx) -> dict:
+    p = getattr(ctx, "platega", None)
+    if p is None or not p.configured:
+        return _res(None, detail="не настроена")
+    t = time.perf_counter()
+    ok, msg = await asyncio.wait_for(p.check(), TIMEOUT)
+    return _res(ok, (time.perf_counter() - t) * 1000, "" if ok else msg)
+
+
 async def _check_nalog(ctx) -> dict:
     global _nalog_cache
     if not ctx.nalog.enabled:
@@ -129,6 +138,7 @@ async def _check_memory(ctx) -> dict:
 CHECKS = {
     "astra": ("Astra API", _check_astra),
     "yookassa": ("ЮKassa", _check_yookassa),
+    "platega": ("Platega", _check_platega),
     "moynalog": ("Мой налог", _check_nalog),
     "telegram": ("Telegram Bot API", _check_telegram),
     "database": ("База данных", _check_db),

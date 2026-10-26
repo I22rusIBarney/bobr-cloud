@@ -36,6 +36,7 @@ class Ctx:
     notify: Notify
     alert_admin: Callable[[str], Awaitable[None]]
     bot_username: str = ""
+    platega: Any = None  # второй платёжный провайдер (Platega), настраивается в админке
     # сообщение с кнопкой, открывающей мини-приложение: (tg_id, text, button_text, url)
     notify_btn: Callable[[int, str, str, str], Awaitable[None]] | None = None
     # проверка подписки: (chat, tg_id) → True/False, None — проверить нельзя
@@ -637,14 +638,34 @@ def refund_amount(price_kop: int, expires_at, refund_pct: float, max_months: flo
 # ───────────────────────── платежи ─────────────────────────
 
 
-async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool = False) -> tuple[Payment, str]:
-    if not ctx.yk.configured:
-        raise UserError("Оплата временно недоступна. Попробуйте позже.")
+def payment_providers(ctx: Ctx, cfg: dict) -> list[dict]:
+    """Включённые и настроенные способы пополнения в порядке показа клиенту."""
+    out = []
+    if cfg.get("pay_yookassa_on", True) and ctx.yk.configured:
+        out.append({"code": "yookassa", "label": cfg.get("pay_yookassa_label") or "ЮKassa", "autopay": True})
+    if cfg.get("pay_platega_on") and ctx.platega is not None and ctx.platega.configured:
+        out.append({"code": "platega", "label": cfg.get("pay_platega_label") or "Platega", "autopay": False})
+    return out
+
+
+def provider_client(ctx: Ctx, code: str | None):
+    return ctx.platega if code == "platega" else ctx.yk
+
+
+async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool = False, provider: str | None = None) -> tuple[Payment, str]:
     async with session() as s:
         cfg = await load_settings(s)
+    provs = payment_providers(ctx, cfg)
+    if not provs:
+        raise UserError("Оплата временно недоступна. Попробуйте позже.")
+    prov = next((p for p in provs if p["code"] == provider), None) if provider else provs[0]
+    if prov is None:
+        raise UserError("Этот способ оплаты сейчас недоступен — выберите другой.")
     if not (cfg["min_topup_rub"] <= amount_rub <= cfg["max_topup_rub"]):
         raise UserError(f"Сумма пополнения: от {cfg['min_topup_rub']} до {cfg['max_topup_rub']} ₽.")
-    save_method = bool(save_method and cfg["autopay_available"])
+    save_method = bool(save_method and cfg["autopay_available"] and prov["autopay"])
+    if prov["code"] == "platega":
+        return await _create_platega_topup(ctx, tg_id, amount_rub)
     async with session() as s:
         pay = Payment(tg_id=tg_id, amount_kop=amount_rub * 100, save_method=save_method)
         s.add(pay)
@@ -670,6 +691,30 @@ async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool 
             row = await s.get(Payment, pay.id)
             row.save_method = False
             await s.commit()
+    async with session() as s:
+        row = await s.get(Payment, pay.id)
+        row.yk_id = data["id"]
+        await s.commit()
+    return pay, data["confirmation"]["confirmation_url"]
+
+
+async def _create_platega_topup(ctx: Ctx, tg_id: int, amount_rub: int) -> tuple[Payment, str]:
+    from .platega import PlategaError
+    async with session() as s:
+        pay = Payment(tg_id=tg_id, amount_kop=amount_rub * 100, provider="platega")
+        s.add(pay)
+        await s.commit()
+    try:
+        data = await ctx.platega.create_payment(amount_kop=pay.amount_kop, description=f"Пополнение баланса #{pay.id}",
+                                                return_url=env().public_url.rstrip("/") + "/paid", metadata={"payment_id": pay.id, "tg_id": tg_id})
+    except PlategaError as ex:
+        async with session() as s:
+            row = await s.get(Payment, pay.id)
+            row.status, row.cancel_reason = "canceled", "create_failed"
+            await s.commit()
+        log.warning("platega create: %s", ex)
+        await ctx.alert_once("platega_create", f"⚠️ Platega не создала платёж: {ex}")
+        raise UserError("Не удалось создать платёж в Platega. Попробуйте другой способ оплаты или чуть позже.") from ex
     async with session() as s:
         row = await s.get(Payment, pay.id)
         row.yk_id = data["id"]
@@ -728,8 +773,12 @@ async def deactivate_method(tg_id: int, method_id: int | None, by: str) -> int:
 
 
 async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
-    """Идемпотентно проверяет платёж в ЮKassa и зачисляет. True — если зачислили сейчас."""
-    data = await ctx.yk.get_payment(yk_id)  # источник истины — API, а не тело вебхука
+    """Идемпотентно проверяет платёж у провайдера (ЮKassa или Platega) и зачисляет. True — если зачислили сейчас."""
+    async with session() as s:
+        found = (await s.execute(select(Payment).where(Payment.yk_id == yk_id))).scalar_one_or_none()
+    if found is None:
+        return False
+    data = await provider_client(ctx, found.provider).get_payment(yk_id)  # источник истины — API провайдера, а не тело уведомления
     async with session() as s:
         pay = (await s.execute(select(Payment).where(Payment.yk_id == yk_id))).scalar_one_or_none()
         if pay is None:
@@ -844,6 +893,8 @@ async def poll_pending_payments(ctx: Ctx) -> None:
             )
         ).scalars().all()
     for p in rows:
+        if provider_client(ctx, p.provider) is None or not provider_client(ctx, p.provider).configured:
+            continue
         try:
             await credit_payment(ctx, p.yk_id)
         except Exception:

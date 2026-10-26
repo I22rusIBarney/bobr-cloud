@@ -133,6 +133,8 @@ function rootView() {
   const badge = ok => h('span', { class: 'badge ' + (ok ? 'ok' : 'bad') }, ok ? 'Подключено' : 'Не настроено');
   v.append(group('Подключения', [
     row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
+    row({ icon: 'bolt', tile: '#30B0C7', title: 'Platega', right: INT ? badge(INT.platega && INT.platega.configured) : null, onClick: () => UI.nav.push(plategaView) }),
+    row({ icon: 'wallet', tile: '#AF52DE', title: 'Способы оплаты', detail: [S.settings.pay_yookassa_on && 'ЮKassa', S.settings.pay_platega_on && 'Platega'].filter(Boolean).join(' + ') || 'выключены', onClick: () => UI.nav.push(payMethodsView) }),
     row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
     row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
@@ -412,6 +414,46 @@ function composeView() {
     group('Кнопка (необязательно)', [h('label', { class: 'field stack' }, h('label', {}, 'Текст'), bt), h('label', { class: 'field stack' }, h('label', {}, 'Ссылка'), bu)]),
     h('div', { class: 'actions' }, test, send),
     h('div', { class: 'group-f', style: 'margin:-18px var(--gutter) 30px' }, 'Отправка идёт в фоне, примерно 20 сообщений в секунду. По окончании пришлём отчёт в бота.'));
+}
+
+// ───────── Platega и выбор провайдера ─────────
+function plategaView() {
+  const p = (INT && INT.platega) || { configured: false, merchant_id: '', secret_hint: '', callback_url: '' };
+  const mid = h('input', { type: 'text', placeholder: 'MerchantId', autocomplete: 'off', autocapitalize: 'off', spellcheck: false }); mid.value = p.merchant_id || '';
+  const sec = h('input', { type: 'password', placeholder: p.configured ? 'оставить ' + p.secret_hint : 'секретный ключ', autocomplete: 'off' });
+  const status = statusLine();
+  const saveBtn = h('button', { class: 'btn', type: 'button' }, 'Сохранить');
+  saveBtn.onclick = UI.busy(saveBtn, async () => {
+    const r = await UI.run(() => api('integrations/platega', 'POST', { merchant_id: mid.value, secret: sec.value }));
+    if (!r) return; showStatus(status, r); sec.value = ''; await loadInt();
+  });
+  const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить');
+  testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/platega/test', 'POST')); if (r) showStatus(status, r); });
+  const out = [UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Platega'),
+    h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Ключи API'),
+      h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'MerchantId'), mid), h('label', { class: 'field' }, h('span', {}, 'Секретный ключ'), sec)),
+      h('div', { class: 'group-f' }, 'Личный кабинет Platega → настройки API. После сохранения ключи сразу проверяются.'), status),
+    h('div', { class: 'actions' }, testBtn, saveBtn),
+    group('Уведомления о платежах', [
+      row({ title: h('span', { class: 'mono' }, p.callback_url), right: h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать', onclick: () => UI.copy(p.callback_url, 'Адрес') }, icon('copy')) }),
+    ], 'Укажите этот адрес как Callback URL в кабинете Platega. Уведомления проверяются по вашим MerchantId и секрету, а статус платежа бот всё равно перепроверяет запросом.'),
+    group('Важно', [row({ cls: 'wrap', title: 'Отключите криптовалюту в кабинете Platega', sub: 'Резидентам РФ нельзя принимать оплату криптовалютой за товары и услуги (259-ФЗ).' }),
+      row({ cls: 'wrap', title: 'Чеки «Мой налог»', sub: 'Платежи через Platega попадают в чеки так же, как через ЮKassa, — если подключён «Мой налог».' }),
+      row({ cls: 'wrap', title: 'Автоплатежи и сохранение карт', sub: 'Работают только через ЮKassa.' })])];
+  if (p.configured) out.push(group(null, [row({ title: 'Отключить Platega', cls: 'destructive', onClick: async () => {
+    const ok = await UI.ask({ title: 'Отключить Platega?', message: 'Ключи будут удалены, клиенты перестанут видеть этот способ оплаты.', buttons: [{ id: 'y', text: 'Отключить', type: 'destructive' }] });
+    if (ok && await UI.run(() => api('integrations/platega', 'DELETE'), 'Platega отключена') !== undefined) { await loadInt(); await reloadState(); UI.nav.back(); }
+  } })]));
+  return h('div', {}, ...out);
+}
+
+function payMethodsView() {
+  const yk = INT && INT.yookassa && INT.yookassa.configured, pg = INT && INT.platega && INT.platega.configured;
+  const label = (key, ph) => { const i = h('input', { type: 'text', maxlength: 40, placeholder: ph, style: 'text-align:left', 'aria-label': 'Подпись' }); i.value = S.settings[key] || ''; i.addEventListener('input', () => setVal(key, i.value)); return h('label', { class: 'field stack' }, h('label', {}, 'Как видит клиент'), i); };
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Способы оплаты'),
+    group('ЮKassa', [toggleRow('Показывать клиентам', 'pay_yookassa_on', yk ? 'Карты и СБП, автоплатежи' : 'Сначала подключите ключи ЮKassa'), label('pay_yookassa_label', 'Карта или СБП · ЮKassa')]),
+    group('Platega', [toggleRow('Показывать клиентам', 'pay_platega_on', pg ? 'СБП, карты и другие методы на странице Platega' : 'Сначала подключите ключи Platega'), label('pay_platega_label', 'СБП или карта · Platega')]),
+    h('div', { class: 'group-f', style: 'margin:-12px var(--gutter) 30px' }, 'Включите один способ или оба — тогда клиент выберет при пополнении. Способ без ключей клиентам не показывается, даже если включён.'));
 }
 
 function statusLine() { return h('div', { class: 'status-line', role: 'status' }); }
@@ -869,6 +911,7 @@ function paymentsView() {
 
 // ───────── старт ─────────
 async function loadInt() { try { INT = await api('integrations'); } catch (e) {} }
+async function reloadState() { try { S = await api('state'); SAVED = JSON.parse(JSON.stringify(S.settings)); dirty = {}; } catch (e) {} }
 (async () => {
   UI.nav.mount(document.getElementById('root'), rootView);
   try { S = await api('state'); SAVED = JSON.parse(JSON.stringify(S.settings)); }

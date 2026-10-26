@@ -24,6 +24,11 @@ DEFAULTS: dict[str, Any] = {
     "maintenance": False,        # закрыть продажи
     "hidden_presets": [],        # индексы тарифов Astra, скрытые из продажи
     "welcome_text": "🌍 Серверы в Европе\n⚡ Автоматическая выдача за 1–3 минуты\n🛡 Простое управление и удобная оплата",
+    # платёжные провайдеры: можно включить один или оба — клиент выберет при пополнении
+    "pay_yookassa_on": True,
+    "pay_yookassa_label": "Карта или СБП · ЮKassa",
+    "pay_platega_on": False,
+    "pay_platega_label": "СБП или карта · Platega",
     # автоплатежи: включайте после того, как ЮKassa подключит рекуррентные платежи магазину
     "autopay_available": False,
     # реквизиты исполнителя и документы
@@ -165,7 +170,7 @@ def fmt_rub(kop: int) -> str:
 # ───────── секреты интеграций (ЮKassa, Мой налог) ─────────
 # Хранятся в той же таблице под префиксом "secret:", наружу через load_settings не попадают.
 
-SECRET_KEYS = ("yk_shop_id", "yk_secret", "nalog_inn", "nalog_password")
+SECRET_KEYS = ("yk_shop_id", "yk_secret", "nalog_inn", "nalog_password", "platega_merchant_id", "platega_secret")
 
 
 async def get_secrets(s: AsyncSession) -> dict[str, str]:

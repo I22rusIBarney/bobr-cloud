@@ -54,6 +54,7 @@ def server_dict(srv: Server, refund_pct: float) -> dict:
 class TopupIn(BaseModel):
     amount_rub: int
     save_method: bool = False
+    provider: str | None = None  # yookassa | platega; пусто — первый включённый
 
 
 class ConsentIn(BaseModel):
@@ -158,6 +159,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "balance_rub": user.balance_kop / 100,
             "servers": [server_dict(x, cfg["refund_pct"]) for x in rows] if m["consented"] else [],
             "cfg": {
+                "providers": svc.payment_providers(ctx, cfg),
                 "min_topup_rub": cfg["min_topup_rub"],
                 "max_topup_rub": cfg["max_topup_rub"],
                 "change_ip_price_rub": cfg["change_ip_price_rub"],
@@ -311,7 +313,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     @r.post("/topup")
     async def topup(p: TopupIn, m: dict = Depends(me_ok)):
         try:
-            _, url = await svc.create_topup(ctx, m["id"], p.amount_rub, p.save_method)
+            _, url = await svc.create_topup(ctx, m["id"], p.amount_rub, p.save_method, p.provider)
         except UserError as ex:
             raise wrap(ex)
         except Exception:

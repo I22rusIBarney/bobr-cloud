@@ -448,7 +448,7 @@ async def topup_menu(c: CallbackQuery, state: FSMContext):
     rows = [[("100 ₽", "t:100"), ("300 ₽", "t:300"), ("500 ₽", "t:500")], [("1 000 ₽", "t:1000"), ("3 000 ₽", "t:3000")], [("Другая сумма", "t:custom")]]
     async with session() as s:
         user = await s.get(User, c.from_user.id)
-    await show(c, f"💳 <b>Пополнение баланса</b>\n\n💰 Сейчас: <b>{rub(user.balance_kop)}</b>\n\nВыберите сумму. Оплата картой или через СБП — в ЮKassa.", kb_rows(rows))
+    await show(c, f"💳 <b>Пополнение баланса</b>\n\n💰 Сейчас: <b>{rub(user.balance_kop)}</b>\n\nВыберите сумму. Оплата картой или через СБП.", kb_rows(rows))
 
 
 @router.callback_query(F.data == "t:custom")
@@ -464,19 +464,39 @@ async def topup_amount(m: Message, state: FSMContext):
         await m.answer("⚠️ Нужна сумма целым числом, например <b>500</b>.", parse_mode="HTML")
         return
     await state.clear()
-    await _start_payment(m, int(txt))
+    await _choose_provider(m, int(txt))
 
 
 @router.callback_query(F.data.regexp(r"^t:\d+$"))
 async def topup_preset(c: CallbackQuery):
+    await _choose_provider(c, int(c.data.split(":")[1]))
+
+
+async def _choose_provider(target: Message | CallbackQuery, amount: int) -> None:
+    """Если включено несколько способов оплаты — спрашиваем, каким платить."""
+    async with session() as s:
+        cfg = await load_settings(s)
+    provs = svc.payment_providers(ctx(), cfg)
+    if len(provs) <= 1:
+        if isinstance(target, CallbackQuery):
+            await target.answer()
+        await _start_payment(target, amount, provs[0]["code"] if provs else None)
+        return
+    rows = [[(f"💳 {p['label']}", f"t:pv:{amount}:{p['code']}")] for p in provs]
+    await show(target, f"💳 <b>Пополнение на {rub(amount * 100)}</b>\n\nВыберите способ оплаты.", kb_rows(rows, back="m:topup"))
+
+
+@router.callback_query(F.data.startswith("t:pv:"))
+async def topup_provider(c: CallbackQuery):
+    _, _, amount, code = c.data.split(":")
     await c.answer()
-    await _start_payment(c, int(c.data.split(":")[1]))
+    await _start_payment(c, int(amount), code)
 
 
-async def _start_payment(target: Message | CallbackQuery, amount: int) -> None:
+async def _start_payment(target: Message | CallbackQuery, amount: int, provider: str | None = None) -> None:
     tg_id = target.from_user.id
     try:
-        pay, url = await svc.create_topup(ctx(), tg_id, amount)
+        pay, url = await svc.create_topup(ctx(), tg_id, amount, provider=provider)
     except UserError as ex:
         await show(target, f"❌ {e(ex)}", kb_rows([], back="m:topup"))
         return
@@ -490,7 +510,7 @@ async def _start_payment(target: Message | CallbackQuery, amount: int) -> None:
     b.row(InlineKeyboardButton(text="← Назад", callback_data="m:home"))
     msg = target.message if isinstance(target, CallbackQuery) else target
     await msg.answer(
-        f"💳 <b>Счёт на {rub(amount * 100)}</b>\n\nНажмите «Оплатить» — откроется страница ЮKassa.\nБаланс пополнится автоматически сразу после оплаты.",
+        f"💳 <b>Счёт на {rub(amount * 100)}</b>\n\nНажмите «Оплатить» — откроется страница {'Platega' if provider == 'platega' else 'ЮKassa'}.\nБаланс пополнится автоматически сразу после оплаты.",
         reply_markup=b.as_markup(), parse_mode="HTML")
 
 

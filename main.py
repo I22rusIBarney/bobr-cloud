@@ -13,6 +13,7 @@ from app.config import env
 from app.db import init_db
 from app.integrations import load_integrations
 from app.nalog import Nalog
+from app.platega import Platega
 from app.services import Ctx
 from app.web.server import build_app
 from app.worker import start_workers
@@ -26,7 +27,7 @@ async def main() -> None:
 
     bot = Bot(e.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
     notify, alert_admin = botmod.make_notifier(bot)
-    ctx = Ctx(astra=Astra(), yk=YooKassa(), nalog=Nalog(), notify=notify, alert_admin=alert_admin)
+    ctx = Ctx(astra=Astra(), yk=YooKassa(), nalog=Nalog(), notify=notify, alert_admin=alert_admin, platega=Platega())
     botmod.set_ctx(ctx)
     ctx.notify_btn = botmod.make_button_notifier(bot)
     ctx.check_member, ctx.probe_chat = botmod.make_member_checker(bot)
@@ -64,6 +65,7 @@ async def main() -> None:
         await ctx.astra.close()
         await ctx.yk.close()
         await ctx.nalog.close()
+        await ctx.platega.close()
         await bot.session.close()
 
 
