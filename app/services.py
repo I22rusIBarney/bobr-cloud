@@ -49,6 +49,7 @@ class Ctx:
     tg_ping: Callable[[], Awaitable[Any]] | None = None
     send_transfer_offer: Callable[[int, str, int], Awaitable[None]] | None = None
     send_share_offer: Callable[[int, str, int], Awaitable[None]] | None = None
+    notify_kb: Callable[[int, str, list], Awaitable[None]] | None = None
     post_file: Callable[[Any, str, str], Awaitable[str | None]] | None = None
     # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
     send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None
@@ -256,6 +257,8 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         months = opt["months"]
         price = sell_price_kop(cost_rub, user_price_cfg(cfg, user))  # цена месяца = цена продления
         discount_pct = max(0, min(100, int(user.promo_discount_pct or 0)))
+        if user.promo_until and user.promo_until < utcnow():
+            discount_pct = 0
         # промокод — скидка на первый месяц, скидка за срок — на весь срок
         charge = max(0, period_price(price, months, opt["pct"]) - (price - apply_discount(price, discount_pct)))
         if not await change_balance(s, tg_id, -charge, "purchase", f"{location}:{idx}"):
@@ -301,8 +304,10 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int, location: str, os_: str, pa
         s.add(srv)
         u = await s.get(User, tg_id)
         if discount_pct:
-            u.promo_discount_pct, u.promo_code = 0, None
+            u.promo_discount_pct, u.promo_code, u.promo_until = 0, None, None
         await s.commit()
+    from . import serverlog
+    await serverlog.add(srv.id, tg_id, "purchase", f"{months} мес" if months > 1 else "")
     from . import events
     term = {1: "1 мес", 3: "3 мес", 6: "6 мес", 12: "1 год"}.get(months, f"{months} мес")
     await events.emit(ctx, "sales", f"🛒 <b>Покупка · {fmt_rub(charge)}</b>\n\n👤 {events.who(u)}\n🖥 {flag(location)} {srv.cpu} vCPU · {srv.ram} ГБ · {srv.disk} ГБ · {html.escape(os_label(srv.os))}\n"
@@ -325,6 +330,7 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Se
         if srv is None or srv.status in ("deleted", "provisioning"):
             raise UserError("Сервер недоступен для продления.")
         price = srv.price_kop
+        explicit_payer = payer
         payer = payer or srv.tg_id
         if not await change_balance(s, payer, -price, "renew", str(srv.astra_id)):
             raise UserError("Недостаточно средств для продления.")
@@ -354,6 +360,8 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Se
         row.notified_stage = 0
         row.renew_try_at = now
         await s.commit()
+    from . import serverlog
+    await serverlog.add(server_id, payer if explicit_payer else 0, "renew" if explicit_payer else "autorenew")
     await refresh_server(ctx, srv.astra_id)  # точная дата от Astra, если доступна
     async with session() as s:
         srv = await s.get(Server, server_id)
@@ -440,6 +448,14 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог действия {action} #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте статус сервера через минуту.") from ex
+    from . import serverlog
+    quiet = {"start": 5, "stop": 10, "reboot": 10, "reinstall": 20, "password": 20, "change-ip": 20}.get(action)
+    if quiet:  # мониторинг не будит клиента, пока сервер перезапускается
+        async with session() as s:
+            row = await s.get(Server, server_id)
+            row.mon_quiet_until, row.mon_fail = utcnow() + timedelta(minutes=quiet), 0
+            await s.commit()
+    await serverlog.add(server_id, tg_id, action, os_label(body["os"]) if action == "reinstall" and body and body.get("os") else "")
     if action in ("reinstall", "password", "change-ip"):
         await refresh_server(ctx, srv.astra_id)
     return resp
@@ -496,6 +512,8 @@ async def rename_server(ctx: Ctx, tg_id: int, server_id: int, name: str) -> str:
         row = await s.get(Server, server_id)
         row.name = name
         await s.commit()
+    from . import serverlog
+    await serverlog.add(server_id, tg_id, "rename", name)
     return name
 
 
@@ -637,6 +655,8 @@ async def upgrade_server(ctx: Ctx, tg_id: int, server_id: int, cpu: int, ram: in
             row.price_kop = q["new_price_kop"]
         await s.commit()
         new_price = row.price_kop
+        from . import serverlog
+        await serverlog.add(server_id, tg_id, "upgrade", f"{row.cpu} vCPU, {row.ram} ГБ")
         u = await s.get(User, tg_id)
         name = row.name
     from . import events
@@ -661,10 +681,13 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
         row = await s.get(Server, server_id)
         row.status = "deleted"
         row.auto_renew = False
+        row.deleted_at = utcnow()
         await s.commit()
         if refund > 0:
             await change_balance(s, tg_id, refund, "refund_cancel", str(srv.astra_id))
     from .shares import revoke_all
+    from . import serverlog
+    await serverlog.add(server_id, tg_id, "delete")
     await revoke_all(ctx, server_id, "владелец удалил сервер")
     return refund
 
@@ -1024,9 +1047,11 @@ async def sync_servers(ctx: Ctx) -> None:
                 if srv.status == "provisioning" and utcnow() - srv.created_at > timedelta(minutes=4):
                     srv.status = "deleted"
                     srv.auto_renew = False
+                    srv.deleted_at = utcnow()
                     events.append(("failed", srv))
                 elif srv.status != "provisioning":
                     srv.status = "deleted"
+                    srv.deleted_at = utcnow()
                     events.append(("vanished", srv))
                 continue
             was = srv.status

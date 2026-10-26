@@ -114,6 +114,8 @@ async def accept(ctx, tid: int, to_tg: int) -> dict:
         await s.commit()
         name = srv.name
     from .shares import revoke_all
+    from . import serverlog
+    await serverlog.add(t.server_id, t.from_tg, "transfer", (b.first_name or "") if b else "")
     await revoke_all(ctx, t.server_id, "сервер передан другому владельцу")
     await ctx.notify(t.from_tg, f"✅ <b>Сервер {html.escape(name)} передан</b>\n\nПолучатель: {_who(b)}. Сервер больше не отображается у вас.")
     await events.emit(ctx, "sales", f"🔁 <b>Передача сервера</b>\n\n🖥 {html.escape(name)}\n👤 {events.who(a)} → {events.who(b)}")

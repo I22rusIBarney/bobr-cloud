@@ -375,6 +375,11 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
     async def admin_page():
         return FileResponse(HERE / "admin.html", headers={"Cache-Control": "no-store"})
 
+    @app.get("/api/admin/analytics")
+    async def analytics_view(_: dict = Depends(admin)):
+        from .. import analytics
+        return await analytics.build()
+
     @app.get("/api/admin/state")
     async def state(_: dict = Depends(admin)):
         async with session() as s:

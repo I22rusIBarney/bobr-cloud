@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
-from datetime import timezone
+from datetime import datetime, timezone
 
 from aiogram import BaseMiddleware, Bot, F, Router
 from aiogram.exceptions import TelegramBadRequest
@@ -31,7 +31,7 @@ from .legal import DOCS, REQUIRED
 from .config import env
 from .db import Payment, Server, ServerShare, User, change_balance, get_or_create_user, session
 from .services import Ctx, UserError
-from .settings import fmt_rub, load_settings
+from .settings import announcement, fmt_rub, load_settings
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -286,12 +286,22 @@ async def home_text(tg_id: int) -> str:
     if body.strip() == _OLD_WELCOME:
         from .settings import DEFAULTS
         body = DEFAULTS["welcome_text"]
+    ann = announcement(cfg)
+    head = (("⚠️ " if ann["level"] == "warn" else "📢 ") + f"<b>{e(ann['text'])}</b>\n\n") if ann else ""
     return (
-        f"🦫 <b>{e(cfg['service_name'])}</b>\n"
+        head + f"🦫 <b>{e(cfg['service_name'])}</b>\n"
         f"<i>Облачная инфраструктура для ваших проектов.</i>\n\n"
         f"{e(body)}\n\n"
-        f"💰 Баланс: <b>{rub(user.balance_kop)}</b>"
+        f"💰 Баланс: <b>{rub(user.balance_kop)}</b>" + _discount_line(user)
     )
+
+
+def _discount_line(u: User, lead: str = "\n") -> str:
+    if not u.promo_discount_pct or (u.promo_until and u.promo_until < svc.utcnow()):
+        return ""
+    if u.promo_until:
+        return f"{lead}🎁 Персональная скидка {u.promo_discount_pct}% на новый сервер до {u.promo_until.astimezone(timezone.utc):%d.%m}"
+    return f"{lead}🎁 Скидка {u.promo_discount_pct}% по промокоду {e(u.promo_code or '')} на следующую покупку"
 
 
 def home_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
@@ -613,6 +623,7 @@ def card_text(srv: Server, speed: str = "") -> str:
     return (
         f"🖥 <b>{e(srv.name)}</b>\n"
         f"{STATUS.get(srv.status, e(srv.status))} · {svc.flag(srv.location)} {e(srv.location.upper())}\n"
+        + (f"🔴 <b>Не отвечает</b> с {srv.mon_down_at.astimezone(timezone.utc):%d.%m %H:%M} UTC\n" if srv.mon_down_at else "") +
         f"{srv.cpu} vCPU · {srv.ram} ГБ RAM · {srv.disk} ГБ · {e(svc.os_label(srv.os))}\n"
         + (f"🌐 Канал: до {e(speed)}\n" if speed else "") + "\n"
         f"🛡 <b>Доступ</b>\n"
@@ -630,6 +641,7 @@ def member_kb(srv: Server) -> InlineKeyboardMarkup:
         [("🔄 Продлить со своего баланса", f"s:rn:{i}")],
         [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
         [("🖥 Консоль VNC", f"s:a:{i}:vnc")],
+        [("📖 Как подключиться", f"s:hw:{i}"), ("📜 Журнал", f"s:lg:{i}")],
         [("🚪 Выйти из доступа", f"sh:l:{i}")],
     ]
     return kb_rows(rows, back="s:list", back_text="← Мои серверы")
@@ -642,6 +654,7 @@ def card_kb(srv: Server, transfers: bool = True, shares: bool = True) -> InlineK
         [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
         [("🖥 Консоль VNC", f"s:a:{i}:vnc"), ("🌍 Сменить IP", f"s:c:{i}:change-ip")],
         [("⚙️ Переустановить ОС", f"s:ri:{i}"), ("🛡 Сбросить пароль", f"s:c:{i}:password")],
+        [("📖 Как подключиться", f"s:hw:{i}"), ("📜 Журнал", f"s:lg:{i}")],
         ([("👥 Общий доступ", f"s:sh:{i}")] if shares else []) + ([("🔁 Передать другу", f"s:tr:{i}")] if transfers else []),
         [("❌ Удалить сервер", f"s:d:{i}")],
     ]
@@ -799,6 +812,69 @@ async def transfer_answer(c: CallbackQuery):
         await show(c, "✖️ <b>Передача отменена</b>\n\nСервер остаётся у вас.", kb_rows([], back="s:list", back_text="← Мои серверы"))
 
 
+# ───────────────────────── журнал, инструкция, мониторинг ─────────────────────────
+
+
+def howto_text(srv: Server) -> str:
+    ip = e(srv.ip or "IP-адрес")
+    return (f"📖 <b>Как подключиться к {e(srv.name)}</b>\n\n"
+            f"<b>Windows 10/11</b> — откройте «Терминал» (или PowerShell) и введите:\n<code>ssh root@{ip}</code>\n"
+            "На вопрос о ключе ответьте <code>yes</code>, затем вставьте пароль — при вводе он не отображается, это нормально.\n\n"
+            f"<b>macOS и Linux</b> — откройте «Терминал», команда та же:\n<code>ssh root@{ip}</code>\n\n"
+            "<b>Телефон</b> — приложение Termius (iOS, Android): New Host → адрес "
+            f"<code>{ip}</code>, пользователь <code>root</code>, пароль из карточки сервера.\n\n"
+            "🆘 <b>Сервер не отвечает?</b>\n"
+            "1. Проверьте, что он оплачен и включён — статус в карточке.\n"
+            "2. Перезагрузите его кнопкой «Перезагрузить».\n"
+            "3. Откройте «Консоль VNC» — там видно, что происходит на экране.\n"
+            "4. Не помогло — напишите в поддержку, укажите IP.")
+
+
+@router.callback_query(F.data.startswith("s:hw:"))
+async def server_howto(c: CallbackQuery):
+    a = await _access(c, int(c.data.split(":")[2]))
+    if a:
+        await show(c, howto_text(a[0]), kb_rows([[("💬 Поддержка", "m:support")]], back=f"s:v:{a[0].id}", back_text="← К серверу"))
+
+
+@router.callback_query(F.data.startswith("s:lg:"))
+async def server_log_view(c: CallbackQuery, sid: int | None = None):
+    a = await _access(c, sid or int(c.data.split(":")[2]))
+    if not a:
+        return
+    srv, role = a
+    from . import serverlog
+    items = await serverlog.recent(srv.id, srv.tg_id, 15)
+    lines = [f"{it['icon']} {datetime.fromisoformat(it['at']).astimezone(timezone.utc):%d.%m %H:%M} · {e(it['title'])}"
+             + (f" — {e(it['detail'])}" if it["detail"] else "") + ("" if it["role"] == "system" else f" · <i>{e(it['who'])}</i>") for it in items]
+    body = "\n".join(lines) if lines else "Пока пусто — здесь появятся включения, перезагрузки, продления и другие действия."
+    rows = []
+    if role == "owner":
+        async with session() as s:
+            mon_on = (await load_settings(s)).get("monitor_enabled", True)
+        if mon_on:
+            rows.append([(("🔔 Следим за доступностью: вкл" if srv.monitor else "🔕 Следим за доступностью: выкл"), f"mon:{'off' if srv.monitor else 'on'}:{srv.id}")])
+    await show(c, f"📜 <b>Журнал · {e(srv.name)}</b>\n<i>Время — UTC, последние 15 событий</i>\n\n{body}", kb_rows(rows, back=f"s:v:{srv.id}", back_text="← К серверу"))
+
+
+@router.callback_query(F.data.startswith("mon:"))
+async def monitor_toggle(c: CallbackQuery):
+    _, act, sid = c.data.split(":")
+    from . import monitor
+    try:
+        on = await monitor.set_monitor(c.from_user.id, int(sid), act == "on")
+    except UserError as ex:
+        return await c.answer(str(ex)[:190], show_alert=True)
+    await c.answer("Следим за доступностью" if on else "Больше не следим за этим сервером")
+    if c.message and c.message.text and c.message.text.startswith("📜"):
+        await server_log_view(c, int(sid))
+    else:
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+
+
 # ───────────────────────── общий доступ ─────────────────────────
 
 SHARE_RIGHTS = ("Участник видит IP и пароль, может включать, выключать и перезагружать сервер, открывать VNC и продлевать его со своего баланса. "
@@ -946,6 +1022,8 @@ async def toggle_autorenew(c: CallbackQuery):
         row.auto_renew = not row.auto_renew
         await s.commit()
         srv = row
+    from . import serverlog
+    await serverlog.add(srv.id, c.from_user.id, "autorenew_on" if srv.auto_renew else "autorenew_off")
     await show(c, *await _card(srv))
 
 
@@ -1098,8 +1176,8 @@ async def profile_home(c: CallbackQuery, state: FSMContext | None = None):
              f"💰 Баланс: <b>{rub(u.balance_kop)}</b>",
              f"💳 Способы оплаты: {len(ms) if ms else 'нет сохранённых'}",
              f"🔄 Автоплатёж: {'включён' if u.autopay_enabled else 'выключен'}"]
-    if u.promo_discount_pct:
-        lines.append(f"🎁 Скидка {u.promo_discount_pct}% по промокоду {e(u.promo_code or '')} на следующую покупку")
+    if _discount_line(u):
+        lines.append(_discount_line(u, ""))
     rows = [[("💳 Способы оплаты и автоплатёж", "p:methods")],
             [("🧾 История операций", "p:hist"), ("🎁 Промокод", "p:promo")]]
     if cfg["ref_enabled"]:
@@ -1337,6 +1415,17 @@ def make_poster(bot: Bot):
             return str(ex)
 
     return post, post_file
+
+
+def make_kb_notifier(bot: Bot):
+    """Сообщение с кнопками-действиями: rows = [[(текст, callback), …], …]."""
+    async def notify_kb(tg_id: int, text: str, rows: list) -> None:
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=t, callback_data=d) for t, d in r] for r in rows]) if rows else None
+        try:
+            await bot.send_message(tg_id, text, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
+        except Exception:
+            log.warning("не удалось отправить сообщение %s", tg_id, exc_info=True)
+    return notify_kb
 
 
 def make_transfer_offer(bot: Bot, prefix: str = "tr"):

@@ -40,6 +40,18 @@ async def _security(ctx: svc.Ctx) -> None:
     await security.tick(ctx)
 
 
+async def _monitor(ctx: svc.Ctx) -> None:
+    from . import monitor
+
+    await monitor.tick(ctx)
+
+
+async def _retention(ctx: svc.Ctx) -> None:
+    from . import retention
+
+    await retention.tick(ctx)
+
+
 async def _backup(ctx: svc.Ctx) -> None:
     from . import backup
 
@@ -58,5 +70,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("backup", 600, _backup, 120),
         ("health", 30, _health, 40),
         ("security", 30, _security, 15),
+        ("monitor", 60, _monitor, 90),
+        ("retention", 600, _retention, 180),
     ]
     return [asyncio.create_task(_loop(n, t, f, ctx, d), name=n) for n, t, f, d in jobs]

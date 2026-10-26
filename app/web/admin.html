@@ -25,6 +25,23 @@
   .mono { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 13px; letter-spacing: 0; word-break: break-all; }
   .actions { display: flex; gap: 10px; margin: 0 var(--gutter) 30px; }
   .actions .btn { flex: 1; }
+.chart { padding: 14px 16px 10px; }
+  .chart .cap { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; min-height: 40px; }
+  .chart .cap b { font: 700 22px/1.15 var(--font-display); font-variant-numeric: tabular-nums; }
+  .chart .cap span { color: var(--hint); font-size: 13px; text-align: right; }
+  .chart .plot { position: relative; height: 132px; margin-top: 10px; display: flex; align-items: flex-end; gap: 4px; border-bottom: 1px solid var(--line-strong); }
+  .chart .bar { flex: 1; min-width: 0; height: 100%; display: flex; align-items: flex-end; border: 0; padding: 0; background: none; cursor: pointer; }
+  .chart .bar i { display: block; width: 100%; min-height: 2px; border-radius: 4px 4px 0 0; background: var(--accent); opacity: .45; transition: opacity var(--t-fast); }
+  .chart .bar.neg i { background: var(--danger); }
+  .chart .bar[aria-pressed="true"] i { opacity: 1; }
+  .chart .axis { display: flex; gap: 4px; margin-top: 6px; }
+  .chart .axis span { flex: 1; min-width: 0; text-align: center; font-size: 10.5px; color: var(--hint); overflow: hidden; white-space: nowrap; }
+  .chart .max { position: absolute; left: 0; top: -2px; font-size: 11px; color: var(--hint); background: var(--cell); padding-right: 4px; }
+  .an-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .an-table th, .an-table td { padding: 7px 10px; text-align: right; border-bottom: 1px solid var(--sep); white-space: nowrap; }
+  .an-table th:first-child, .an-table td:first-child { text-align: left; }
+  .an-table th { color: var(--hint); font-weight: 500; }
+  .an-wrap { overflow-x: auto; }
 </style>
 </head>
 <body>
@@ -121,6 +138,8 @@ function rootView() {
     row({ icon: 'megaphone', tile: '#5856D6', title: 'Рассылки', onClick: () => UI.nav.push(broadcastsView) }),
     row({ icon: 'gift', tile: '#FF2D55', title: 'Промокоды', onClick: () => UI.nav.push(promosView) }),
     row({ icon: 'wallet', tile: '#AF52DE', title: 'Платежи и чеки', onClick: () => UI.nav.push(paymentsView) }),
+    row({ icon: 'sparkle', tile: '#FF9500', title: 'Аналитика', onClick: () => UI.nav.push(analyticsView) }),
+    row({ icon: 'alert', tile: '#FFCC00', title: 'Объявление', right: h('span', { class: 'badge ' + (S.settings.announce_text ? 'ok' : '') }, S.settings.announce_text ? 'Показывается' : 'Нет'), onClick: () => UI.nav.push(announceView) }),
   ]));
 
   // документы
@@ -168,7 +187,21 @@ function rootView() {
     toggleRow('Автоплатежи', 'autopay_available', 'Включайте, когда ЮKassa подключит рекуррентные платежи'),
     toggleRow('Передача серверов', 'transfers_enabled', 'Клиенты могут передать сервер другому клиенту бота'),
     toggleRow('Общий доступ к серверам', 'shares_enabled', 'Владелец может открыть доступ к серверу другим клиентам'),
+    toggleRow('Мониторинг серверов клиентов', 'monitor_enabled', 'Сообщать клиенту, если сервер не отвечает 3 минуты'),
+    toggleRow('Код для опасных действий', 'confirm_codes', 'Удаление, переустановка, сброс пароля в кабинете — с кодом из бота'),
   ], S.settings.maintenance ? 'Заказы закрыты: клиенты видят сообщение о паузе. Текущие серверы работают.' : 'Раздел «Способы оплаты» с удалением карт и переключателем автоплатежа клиенты видят всегда — это нужно для проверки ЮKassa.'));
+
+  v.append(group('Незавершённая оплата', [
+    toggleRow('Напоминать через час', 'abandon_enabled'),
+    numField('Скидка через сутки', 'abandon_promo_pct', '%'),
+    numField('Срок скидки', 'abandon_promo_days', 'дн.'),
+  ], 'Клиент начал пополнение и не оплатил: через час — напоминание. Через сутки, если у него нет серверов и есть согласие на рекламу, — персональная скидка на первый месяц нового сервера (не чаще раза в 30 дней). Скидка 0 — только напоминание.'));
+  v.append(group('Возврат ушедших', [
+    toggleRow('Предлагать вернуться', 'winback_enabled'),
+    numField('Через сколько после ухода', 'winback_after_days', 'дн.'),
+    numField('Скидка', 'winback_promo_pct', '%'),
+    numField('Срок скидки', 'winback_promo_days', 'дн.'),
+  ], 'Серверов больше нет, последний закончился N дней назад (но не больше 90): клиент с согласием на рекламу получает персональную скидку на новый сервер — не чаще раза в 90 дней. Скидка не должна быть больше наценки.'));
 
   v.append(group('Покупка на срок', [
     toggleRow('Срок 3 / 6 / 12 месяцев', 'periods_enabled'),
@@ -252,6 +285,84 @@ function speedSheet(key, title, cur) {
         h('button', { class: 'btn', type: 'button', onclick: () => apply(i.value) }, 'Сохранить'),
         cur ? h('button', { class: 'btn plain', type: 'button', onclick: () => apply('') }, 'Как у локации') : null));
   });
+}
+
+// ───────── объявление ─────────
+function announceView() {
+  const ta = h('textarea', { rows: 4, maxlength: 500, 'aria-label': 'Текст объявления', placeholder: 'Например: 28.10 с 02:00 до 04:00 мск — плановые работы в Германии, возможны перерывы связи.' });
+  ta.value = S.settings.announce_text || '';
+  ta.addEventListener('input', () => setVal('announce_text', ta.value.trim()));
+  const date = h('input', { type: 'date', 'aria-label': 'Показывать до', style: 'text-align:right' });
+  date.value = S.settings.announce_until || '';
+  date.addEventListener('change', () => setVal('announce_until', date.value || ''));
+  const seg = UI.segmented([{ value: 'info', label: 'Информация' }, { value: 'warn', label: 'Важно' }], S.settings.announce_level || 'info', v => setVal('announce_level', v));
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Объявление'),
+    group(null, [h('label', { class: 'field stack' }, h('label', {}, 'Текст'), ta)], 'Показывается вверху кабинета и над главным меню бота. Клиент может скрыть его крестиком. Рассылку не отправляет.'),
+    group(null, [h('div', { style: 'padding:10px 12px' }, seg), h('label', { class: 'field' }, h('span', {}, 'Показывать до'), date)], 'Включительно. Пусто — пока не уберёте.'),
+    group(null, [row({ title: 'Убрать объявление', cls: 'destructive', onClick: () => { ta.value = ''; date.value = ''; setVal('announce_text', ''); setVal('announce_until', ''); } })]));
+}
+
+// ───────── аналитика ─────────
+let AN = null;
+function barChart(title, series, valueOf, fmt, detailOf) {
+  const vals = series.map(valueOf);
+  const max = Math.max(1, ...vals.map(Math.abs));
+  let sel = series.length - 1;
+  const capB = h('b'), capS = h('span');
+  const bars = series.map((m, i) => {
+    const b = h('button', { class: 'bar' + (vals[i] < 0 ? ' neg' : ''), type: 'button', 'aria-label': `${m.label}: ${fmt(vals[i])}`, 'aria-pressed': 'false', onclick: () => pick(i) },
+      h('i', { style: `height:${Math.max(1.5, Math.abs(vals[i]) / max * 100)}%` }));
+    b.addEventListener('mouseenter', () => pick(i));
+    return b;
+  });
+  function pick(i) {
+    sel = i;
+    bars.forEach((b, k) => b.setAttribute('aria-pressed', String(k === i)));
+    capB.textContent = fmt(vals[i]);
+    capS.textContent = series[i].label + (detailOf ? ' · ' + detailOf(series[i]) : '');
+  }
+  pick(sel);
+  return group(title, [h('div', { class: 'chart' }, h('div', { class: 'cap' }, capB, capS),
+    h('div', { class: 'plot', role: 'group', 'aria-label': title }, h('span', { class: 'max' }, fmt(max)), ...bars),
+    h('div', { class: 'axis', 'aria-hidden': 'true' }, series.map(m => h('span', {}, m.label.split(' ')[0]))))]);
+}
+function analyticsView() {
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Аналитика'));
+  const box = h('div');
+  v.append(box);
+  const paint = a => {
+    const k = a.kpi, src = a.sources;
+    // пустые месяцы до начала работы не показываем (но не меньше полугода)
+    const first = a.series.findIndex(m => m.revenue_rub || m.topups_rub || m.new_clients || m.churned);
+    const ser = a.series.slice(first < 0 ? a.series.length - 6 : Math.min(first, a.series.length - 6));
+    const stat = (val, lbl, cls) => h('div', { class: cls || '' }, h('b', {}, val), h('span', {}, lbl));
+    box.replaceChildren(
+      group('Сейчас', [h('div', { class: 'stats' },
+        stat(rub(k.mrr_rub), 'выручка в месяц (MRR)', 'lead'), stat(rub(k.margin_month_rub), 'маржа в месяц'),
+        stat(String(k.active_clients), UI.plural(k.active_clients, 'платящий клиент', 'платящих клиента', 'платящих клиентов')), stat(rub(k.arpu_rub), 'в среднем с клиента'),
+        stat(k.churn_30d_pct + '%', 'отток серверов за 30 дней'), stat(k.avg_lifetime_days == null ? '—' : k.avg_lifetime_days + ' дн.', 'живёт сервер в среднем'))],
+        `Всего клиентов ${k.clients_total}, хоть раз платили ${k.paying_total}. Отток — доля серверов, удалённых за 30 дней, от работавших месяц назад.`),
+      barChart('Выручка по месяцам', ser, m => m.revenue_rub, rub, m => `маржа ≈ ${rub(m.margin_rub)} · пополнения ${rub(m.topups_rub)}`),
+      barChart('Новые клиенты', ser, m => m.new_clients, n => String(n), m => `первая оплата: ${m.new_payers} · ушло серверов: ${m.churned}`),
+      group('Таблицей', [h('div', { class: 'an-wrap' }, h('table', { class: 'an-table' },
+        h('thead', {}, h('tr', {}, ['Месяц', 'Выручка', 'Маржа ≈', 'Пополнения', 'Новые', 'Оплатили', 'Ушло'].map(t => h('th', {}, t)))),
+        h('tbody', {}, [...ser].reverse().map(m => h('tr', {}, h('td', {}, m.label), h('td', {}, rub(m.revenue_rub)), h('td', {}, rub(m.margin_rub)), h('td', {}, rub(m.topups_rub)),
+          h('td', {}, String(m.new_clients)), h('td', {}, String(m.new_payers)), h('td', {}, String(m.churned)))))))],
+        'Выручка — списания с баланса за услуги минус возвраты. Маржа — оценка: минус себестоимость Astra по тем же операциям.'),
+      group('Откуда клиенты', [
+        row({ title: 'По реферальным ссылкам', detail: `${src.referred} · ${src.referred_pct}%` }),
+        row({ title: 'Активировали промокод', detail: String(src.promo_users) }),
+        ...src.promos.map(p => row({ icon: 'gift', tile: '#FF2D55', title: p.code, detail: p.uses + ' ' + UI.plural(p.uses, 'активация', 'активации', 'активаций') })),
+      ]),
+      group('Удержание за 90 дней', [
+        row({ title: 'Незавершённая оплата', detail: `${src.abandon.sent} → купили ${src.abandon.won}` }),
+        row({ title: 'Возврат ушедших', detail: `${src.winback.sent} → вернулись ${src.winback.won}` }),
+      ], 'Сколько клиентов получили персональную скидку и сколько из них потом купили сервер.'),
+    );
+  };
+  if (AN) paint(AN); else box.append(group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api('analytics').then(a => { AN = a; paint(a); }).catch(e => box.replaceChildren(group(null, [row({ title: 'Не удалось загрузить', sub: e.message })])));
+  return v;
 }
 
 // ───────── тексты ─────────

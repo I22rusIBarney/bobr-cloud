@@ -19,8 +19,9 @@ from .. import referral
 from .. import subscription as sub
 from .. import transfers as trf
 from .. import shares as shr
+from .. import serverlog, monitor as mon, confirm as cfm
 from ..legal import DOCS, REQUIRED, render_fragment
-from ..settings import load_settings
+from ..settings import announcement, load_settings
 from .auth import validate_init_data
 
 log = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ def server_dict(srv: Server, refund_pct: float, speed: str = "") -> dict:
         "ram": srv.ram,
         "disk": srv.disk,
         "speed": speed,
+        "monitor": bool(srv.monitor),
+        "down_since": srv.mon_down_at.isoformat() if srv.mon_down_at else None,
         "os": srv.os,
         "os_label": svc.os_label(srv.os),
         "flag": svc.flag(srv.location),
@@ -86,6 +89,10 @@ class BuyIn(BaseModel):
     period: str = "1m"
 
 
+class CodeIn(BaseModel):
+    action: str
+
+
 class TransferIn(BaseModel):
     to: str
 
@@ -106,6 +113,7 @@ class UpgradeIn(BaseModel):
 class ActionIn(BaseModel):
     action: str
     os: str | None = None
+    code: str | None = None
 
 
 class AutoIn(BaseModel):
@@ -165,7 +173,11 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "user": {"id": user.tg_id, "username": user.username, "first_name": user.first_name, "since": user.created_at.isoformat()},
             "consent": {"needed": not m["consented"], "version": cfg["docs_version"], "date": cfg["docs_date"],
                         "docs": [{"key": k, **DOCS[k]} for k in REQUIRED], "optional": [{"key": "ads", **DOCS["ads"]}]},
-            "discount": {"pct": user.promo_discount_pct, "code": user.promo_code} if user.promo_discount_pct else None,
+            "discount": {"pct": user.promo_discount_pct, "code": user.promo_code, "until": user.promo_until.isoformat() if user.promo_until else None}
+                        if user.promo_discount_pct and not (user.promo_until and user.promo_until < utcnow()) else None,
+            "announce": announcement(cfg),
+            "monitor_enabled": bool(cfg.get("monitor_enabled", True)),
+            "confirm_codes": bool(cfg.get("confirm_codes", True)),
             "autopay": {"available": cfg["autopay_available"], "enabled": user.autopay_enabled, "methods": n_methods},
             "service_name": cfg["service_name"],
             "theme": {"bg": cfg["theme_bg"], "image": cfg["theme_bg_image"], "effect": cfg["theme_effect"], "client_choice": cfg["theme_client_choice"]},
@@ -409,10 +421,48 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             raise HTTPException(404, "Сервер не найден")
         return srv
 
+    async def _need_code(m: dict, sid: int, action: str, code: str | None) -> None:
+        async with session() as s:
+            cfg = await load_settings(s)
+            srv = await s.get(Server, sid)
+        if srv is None or srv.tg_id != m["id"]:
+            return  # не владелец — откажет проверка прав в самом действии
+        if action in cfm.DANGEROUS and cfg.get("confirm_codes", True):
+            try:
+                cfm.check(m["id"], sid, action, code)
+            except UserError as ex:
+                raise HTTPException(428, str(ex))
+
+    @r.post("/servers/{sid}/code")
+    async def request_code(sid: int, p: CodeIn, m: dict = Depends(me_ok)):
+        async with session() as s:
+            srv = await _own(s, m, sid)
+        try:
+            return await cfm.request(ctx, m["id"], sid, srv.name, p.action)
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.get("/servers/{sid}/log")
+    async def server_log(sid: int, m: dict = Depends(me_ok)):
+        try:
+            async with session() as s:
+                srv, _ = await svc.get_server_access(s, m["id"], sid)
+        except UserError as ex:
+            raise wrap(ex)
+        return await serverlog.recent(sid, srv.tg_id)
+
+    @r.post("/servers/{sid}/monitor")
+    async def server_monitor(sid: int, p: AutoIn, m: dict = Depends(me_ok)):
+        try:
+            return {"monitor": await mon.set_monitor(m["id"], sid, p.value)}
+        except UserError as ex:
+            raise wrap(ex)
+
     @r.post("/servers/{sid}/action")
     async def action(sid: int, p: ActionIn, m: dict = Depends(me_ok)):
         if p.action not in ACTIONS:
             raise HTTPException(400, "Неизвестное действие")
+        await _need_code(m, sid, p.action, p.code)
         body = {"os": p.os} if p.action == "reinstall" else None
         if p.action == "reinstall" and not p.os:
             raise HTTPException(400, "Не указана ОС")
@@ -446,6 +496,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             srv = await _own(s, m, sid)
             srv.auto_renew = p.value
             await s.commit()
+        from .. import serverlog
+        await serverlog.add(sid, m["id"], "autorenew_on" if p.value else "autorenew_off")
         return {"auto_renew": p.value}
 
     @r.post("/servers/{sid}/rename")
@@ -477,7 +529,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             raise wrap(ex)
 
     @r.delete("/servers/{sid}")
-    async def delete(sid: int, m: dict = Depends(me_ok)):
+    async def delete(sid: int, code: str | None = None, m: dict = Depends(me_ok)):
+        await _need_code(m, sid, "delete", code)
         try:
             refund = await svc.cancel_server(ctx, m["id"], sid)
         except UserError as ex:

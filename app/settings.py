@@ -55,6 +55,20 @@ DEFAULTS: dict[str, Any] = {
     "sub_title": "",             # название — подставляется при проверке
     "transfers_enabled": True,
     "shares_enabled": True,      # общий доступ к серверу для других клиентов
+    "monitor_enabled": True,     # следить за доступностью серверов клиентов и сообщать о сбоях
+    "confirm_codes": True,       # код из бота для удаления / переустановки / сброса пароля в кабинете
+    # удержание
+    "abandon_enabled": True,     # напоминать о незавершённой оплате через час
+    "abandon_promo_pct": 10,     # скидка через сутки (0 — без скидки)
+    "abandon_promo_days": 3,
+    "winback_enabled": True,     # предложение вернуться ушедшим клиентам
+    "winback_after_days": 14,
+    "winback_promo_pct": 15,
+    "winback_promo_days": 7,
+    # объявление в кабинете и боте
+    "announce_text": "",
+    "announce_level": "info",    # info | warn
+    "announce_until": "",        # YYYY-MM-DD включительно, пусто — пока не уберёте
     # ограничение скорости канала по тарифам: "cpu-ram-disk" → "200 Мбит/с" (Astra не отдаёт это в API)
     "preset_speeds": {"1-1-10": "200 Мбит/с"},   # клиенты могут передавать серверы друг другу
     # реферальная программа (бонусы только на баланс)
@@ -133,6 +147,18 @@ async def save_settings(s: AsyncSession, patch: dict[str, Any]) -> dict[str, Any
             raise ValueError("Интервал проверок — от 1 до 60 минут")
         if k == "backup_hours" and v not in (0, 6, 12, 24, 48, 168):
             raise ValueError("Частота бэкапов: 0, 6, 12, 24, 48 или 168 часов")
+        if k in ("abandon_promo_pct", "winback_promo_pct") and not (0 <= v <= 50):
+            raise ValueError("Скидка — от 0 до 50%")
+        if k in ("abandon_promo_days", "winback_promo_days") and not (1 <= v <= 30):
+            raise ValueError("Срок скидки — от 1 до 30 дней")
+        if k == "winback_after_days" and not (3 <= v <= 60):
+            raise ValueError("Через сколько дней предлагать вернуться — от 3 до 60")
+        if k == "announce_level" and v not in ("info", "warn"):
+            raise ValueError("Тип объявления: info или warn")
+        if k == "announce_until" and v and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v):
+            raise ValueError("Дата объявления в формате ГГГГ-ММ-ДД")
+        if k == "announce_text" and len(v) > 500:
+            raise ValueError("Объявление — до 500 символов")
         if k == "ref_pct" and not (0 <= v <= 50):
             raise ValueError("Реферальный процент — от 0 до 50")
         if k in ("ref_months", "ref_welcome_rub") and v < 0:
@@ -207,3 +233,19 @@ async def set_secrets(s: AsyncSession, patch: dict[str, str]) -> None:
         else:
             row.value = v
     await s.commit()
+
+
+def announcement(cfg: dict[str, Any]) -> dict | None:
+    """Действующее объявление для кабинета и бота или None."""
+    text = (cfg.get("announce_text") or "").strip()
+    if not text:
+        return None
+    until = cfg.get("announce_until") or ""
+    if until:
+        from datetime import date
+        try:
+            if date.today() > date.fromisoformat(until):
+                return None
+        except ValueError:
+            pass
+    return {"text": text, "level": cfg.get("announce_level") or "info", "until": until or None}

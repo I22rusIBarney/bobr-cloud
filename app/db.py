@@ -66,6 +66,11 @@ class User(Base):
     referrer_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     referred_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     ref_welcome_paid: Mapped[bool] = mapped_column(Boolean, default=False)
+    # персональная скидка (брошенная оплата, возврат) действует до этой даты; None — бессрочно
+    promo_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # когда последний раз отправляли предложение вернуться / промокод за брошенную оплату
+    winback_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    abandon_promo_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class Broadcast(Base):
@@ -116,6 +121,8 @@ class Payment(Base):
     method_yk_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     method_title: Mapped[str | None] = mapped_column(String(64), nullable=True)
     cancel_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # напоминания о незавершённой оплате: 0 — нет, 1 — напомнили, 2 — предложили скидку / закрыто
+    remind_stage: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class Server(Base):
@@ -146,6 +153,24 @@ class Server(Base):
     period_paid_kop: Mapped[int] = mapped_column(Integer, default=0)
     # сколько месяцев покрывает period_paid_kop (1 — помесячно; 3/6/12 — покупка на срок; дробное после досрочного продления)
     period_months: Mapped[float] = mapped_column(Float, default=1.0)
+    deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # мониторинг доступности: следить ли, сколько проверок подряд неудачны, с какого момента не отвечает,
+    # до какого времени не проверять (после перезагрузки/переустановки)
+    monitor: Mapped[bool] = mapped_column(Boolean, default=True)
+    mon_fail: Mapped[int] = mapped_column(Integer, default=0)
+    mon_down_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    mon_quiet_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class ServerLog(Base):
+    """Журнал действий по серверу: кто и что сделал (actor 0 — система)."""
+    __tablename__ = "server_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    actor: Mapped[int] = mapped_column(BigInteger, default=0)
+    action: Mapped[str] = mapped_column(String(24))
+    detail: Mapped[str] = mapped_column(String(200), default="")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
 class ServerShare(Base):

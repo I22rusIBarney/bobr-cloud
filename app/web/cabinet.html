@@ -160,6 +160,25 @@
   .preset .pname { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 6px; }
   .preset .pspec { font-size: 15px; font-weight: 600; white-space: nowrap; }
   .preset .pdisk { font-size: 13px; color: var(--hint); }
+  .announce { display: flex; gap: 12px; align-items: flex-start; margin: 0 var(--gutter) 16px; padding: 13px 14px; border-radius: var(--r-lg);
+    background: var(--accent-soft); box-shadow: inset 0 0 0 1px var(--line); font-size: 14px; line-height: 1.4; }
+  .announce.warn { background: var(--warn-soft); }
+  .announce > svg { flex: none; width: 20px; height: 20px; margin-top: 1px; color: var(--accent-text); }
+  .announce.warn > svg { color: var(--warn); }
+  .announce p { margin: 0; flex: 1; white-space: pre-line; }
+  .announce button { flex: none; border: 0; background: none; color: var(--hint); padding: 0 2px; font-size: 18px; line-height: 1; cursor: pointer; }
+  .down-alert { margin: 0 var(--gutter) 16px; padding: 13px 14px; border-radius: var(--r-lg); background: var(--danger-soft); font-size: 14px; line-height: 1.4; }
+  .down-alert b { color: var(--danger); }
+  .log-item { display: grid; grid-template-columns: 26px 1fr; gap: 2px 8px; padding: 11px 16px; border-bottom: 1px solid var(--sep); }
+  .log-item:last-child { border-bottom: 0; }
+  .log-item .i { grid-row: span 2; font-size: 16px; line-height: 22px; }
+  .log-item b { font-weight: 500; }
+  .log-item span { color: var(--hint); font-size: 13px; }
+  .howto pre { margin: 6px 0 0; padding: 10px 12px; border-radius: var(--r-md); background: var(--fill); font: 14px/1.4 var(--mono); white-space: pre-wrap; word-break: break-all; }
+  .howto ol { margin: 6px 0 0; padding-left: 20px; }
+  .howto li { margin: 4px 0; }
+  .howto .step { padding: 13px 16px; border-bottom: 1px solid var(--sep); font-size: 15px; line-height: 1.45; }
+  .howto .step:last-child { border-bottom: 0; }
   .preset .pspeed { font-size: 12px; color: var(--hint); margin-top: 2px; }
   .preset .pprice { font: 700 18px/1.2 var(--font-display); letter-spacing: -0.3px; margin-top: auto; padding-top: 10px; font-variant-numeric: tabular-nums; }
   .preset .pprice small { font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
@@ -327,8 +346,18 @@ function header(title, opts = {}) {
     h('div', { class: 'right' },
       h('button', { class: 'pill bal num', type: 'button', 'aria-label': 'Баланс', onclick: () => goTab('profile') }, icon('wallet'), rub(D.balance_rub)),
       adminBtn()));
-  return h('div', {}, top, h('h1', { class: 'large-title' }, title), opts.sub ? h('div', { class: 'subtitle' }, opts.sub) : null);
+  return h('div', {}, top, announceBanner(), h('h1', { class: 'large-title' }, title), opts.sub ? h('div', { class: 'subtitle' }, opts.sub) : null);
 }
+function announceBanner() {
+  const a = D.announce;
+  if (!a) return null;
+  const key = 'ann:' + a.text.length + ':' + a.text.slice(0, 40);
+  try { if (localStorage.getItem(key)) return null; } catch (e) {}
+  const el = h('div', { class: 'announce' + (a.level === 'warn' ? ' warn' : ''), role: 'status' }, icon(a.level === 'warn' ? 'alert' : 'megaphone'), h('p', {}, a.text),
+    h('button', { type: 'button', 'aria-label': 'Скрыть объявление', onclick: () => { try { localStorage.setItem(key, '1'); } catch (e) {} el.remove(); } }, '×'));
+  return el;
+}
+const discountNote = () => D.discount ? (D.discount.until ? `персональная скидка ${D.discount.pct}% до ${shortDate(D.discount.until)}` : `скидка ${D.discount.pct}% по промокоду ${D.discount.code}`) : '';
 const adminBtn = () => D.is_admin ? h('button', { class: 'pill icon-only', type: 'button', 'aria-label': 'Управление', onclick: () => location.href = '/admin' }, icon('gear')) : null;
 const shortDate = iso => iso ? new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—';
 const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text);
@@ -357,7 +386,7 @@ function serversView() {
     return wrap;
   }
   D.servers.forEach(s => {
-    const st = ST[s.status] || { t: s.status, c: '' };
+    const st = s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
     const days = s.days_left == null ? null : Math.max(0, Math.ceil(s.days_left));
     const pct = days == null ? 0 : Math.max(3, Math.min(100, days / 30 * 100));
     const bar = days == null ? '' : days < 3 ? 'bad' : days < 7 ? 'warn' : '';
@@ -410,6 +439,7 @@ function serverView(id) {
     v.append(group(null, [row({ title: 'Сервер создаётся', sub: 'Обычно это 1–3 минуты. Адрес и пароль появятся здесь и придут в чат.' })]));
     return v;
   }
+  if (s.down_since) v.append(h('div', { class: 'down-alert', role: 'alert' }, h('b', {}, 'Сервер не отвечает'), ` с ${UI.date(s.down_since)}. Попробуйте перезагрузить его — если не поможет, откройте «Как подключиться» или напишите в поддержку.`));
   v.append(group('Подключение', [
     row({ title: 'IP-адрес', detail: h('span', { class: 'mono' }, s.ip || '—'), right: s.ip ? h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать IP', onclick: () => UI.copy(s.ip, 'IP') }, icon('copy')) : null }),
     row({ title: 'Пользователь', detail: h('span', { class: 'mono' }, 'root') }),
@@ -417,6 +447,7 @@ function serverView(id) {
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': revealed.has(s.id) ? 'Скрыть пароль' : 'Показать пароль', onclick: () => { revealed.has(s.id) ? revealed.delete(s.id) : revealed.add(s.id); UI.nav.refresh(); } }, icon(revealed.has(s.id) ? 'eyeOff' : 'eye')),
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать пароль', onclick: () => UI.copy(s.password, 'Пароль') }, icon('copy'))) : null }),
     row({ title: 'Скопировать всё', cls: 'accent', onClick: () => UI.copy((L && L.conn_info) || `IP: ${s.ip || '—'}\nОС: ${s.os_label || s.os}\nЛогин: root\nПароль: ${s.password || '—'}`, 'Доступ') }),
+    row({ icon: 'info', tile: '#34AADC', title: 'Как подключиться', sub: 'Windows, Mac, Linux, телефон', onClick: () => UI.nav.push(() => howtoView(s)) }),
   ], s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
 
   v.append(h('div', { class: 'power' },
@@ -446,14 +477,26 @@ function serverView(id) {
     row({ icon: 'text', tile: '#8E8E93', title: 'Переименовать', onClick: () => renameSheet(s) }),
     row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
     row({ icon: 'globe', tile: '#34AADC', title: 'Сменить IP', detail: rub(D.cfg.change_ip_price_rub), onClick: act('change-ip', { done: 'IP-адрес меняется', ask: { title: 'Сменить IP?', message: `Сервер получит новый адрес, старый перестанет работать. Спишем ${rub(D.cfg.change_ip_price_rub)}.`, buttons: [{ id: 'y', text: 'Сменить' }] } }) }),
-    row({ icon: 'key', tile: '#FF9500', title: 'Сбросить пароль', onClick: act('password', { done: 'Пароль сбрасывается', ask: { title: 'Сбросить пароль?', message: 'Данные на диске будут стёрты, IP-адрес сохранится.', buttons: [{ id: 'y', text: 'Сбросить и стереть', type: 'destructive' }] } }) }),
-    row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Переустановка', async code => {
-      const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(code)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
+    row({ icon: 'key', tile: '#FF9500', title: 'Сбросить пароль', onClick: async () => {
+      const ok = await UI.ask({ title: 'Сбросить пароль?', message: 'Данные на диске будут стёрты, IP-адрес сохранится.', buttons: [{ id: 'y', text: 'Сбросить и стереть', type: 'destructive' }] });
       if (!ok) return;
-      if (await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os: code }), 'Переустановка запущена') !== undefined) await refresh();
+      await withCode(s, 'password', 'сброс пароля', code => api(`/servers/${s.id}/action`, 'POST', { action: 'password', code }), 'Пароль сбрасывается');
+    } }),
+    row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Переустановка', async os => {
+      const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(os)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
+      if (!ok) return;
+      await withCode(s, 'reinstall', 'переустановку', code => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os, code }), 'Переустановка запущена');
     }) }),
   ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
 
+  const extra = [row({ icon: 'doc', tile: '#8E8E93', title: 'Журнал действий', sub: 'Кто и что делал с сервером', onClick: () => UI.nav.push(() => logView(s)) })];
+  if (D.monitor_enabled) extra.push(row({ icon: 'bolt', tile: '#FF3B30', title: 'Следить за доступностью', sub: 'Сообщим, если не отвечает',
+    right: UI.toggle(s.monitor, async (val, input) => {
+      const r = await UI.run(() => api(`/servers/${s.id}/monitor`, 'POST', { value: val }), val ? 'Следим за сервером' : 'Больше не следим');
+      if (r === undefined) { input.checked = !val; return; }
+      s.monitor = val;
+    }, 'Следить за доступностью') }));
+  v.append(group(null, extra, D.monitor_enabled ? 'Проверяем каждую минуту снаружи. Если сервер не отвечает 3 минуты, присылаем сообщение с кнопкой перезагрузки — вам и тем, у кого есть общий доступ.' : null));
   v.append(group(null, [row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', sub: 'Вопрос по этому серверу', onClick: () => UI.nav.push(() => newTicketView(s.id)) })]));
 
   // общий доступ
@@ -491,12 +534,81 @@ function serverView(id) {
   v.append(group(null, [row({ title: 'Удалить сервер', cls: 'destructive', onClick: async () => {
     const ok = await UI.ask({ title: 'Удалить ' + s.name + '?', message: `Сервер и данные будут удалены безвозвратно. Вернём ${rub(s.refund_rub)} на баланс за неиспользованные дни.`, buttons: [{ id: 'y', text: 'Удалить', type: 'destructive' }] });
     if (!ok) return;
-    const r = await UI.run(() => api(`/servers/${s.id}`, 'DELETE'));
+    const r = await withCode(s, 'delete', 'удаление', code => api(`/servers/${s.id}` + (code ? '?code=' + encodeURIComponent(code) : ''), 'DELETE'));
     if (r === undefined) return;
     UI.toast('Сервер удалён, вернули ' + rub(r.refund_rub));
     await load(); UI.nav.back();
   } })], `Вернём ${rub(s.refund_rub)} за неиспользованные дни.`));
   return v;
+}
+
+/* Опасное действие с кодом из бота (если включено в админке): fn(code) → Promise. */
+async function withCode(s, action, what, fn, okText) {
+  if (!D.confirm_codes) return UI.run(() => fn(null), okText).then(async r => { if (r !== undefined && okText) await refresh(); return r; });
+  const sent = await UI.run(() => api(`/servers/${s.id}/code`, 'POST', { action }));
+  if (sent === undefined) return undefined;
+  return new Promise(resolve => {
+    let done = false;
+    const close = UI.sheet('Код подтверждения', closeFn => {
+      const inp = h('input', { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 6, placeholder: '000000', 'aria-label': 'Код из бота', style: 'font: 600 24px/1.2 var(--mono); letter-spacing: .3em; text-align:center' });
+      const go = h('button', { class: 'btn danger', type: 'button', disabled: true }, 'Подтвердить ' + what);
+      inp.addEventListener('input', () => { inp.value = inp.value.replace(/\D/g, ''); go.disabled = inp.value.length !== 6; });
+      go.onclick = UI.busy(go, async () => {
+        const r = await UI.run(() => fn(inp.value), okText);
+        if (r === undefined) { inp.value = ''; go.disabled = true; return; }
+        done = true; closeFn(); resolve(r); if (okText) await refresh();
+      });
+      setTimeout(() => inp.focus(), 350);
+      return h('div', {}, h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field stack' }, h('label', {}, 'Код из бота'), inp)),
+        h('div', { class: 'group-f' }, `Мы отправили 6 цифр в чат с ботом — это защищает от случайного нажатия. Код действует 10 минут.`)),
+        h('div', { style: 'margin:0 var(--gutter)' }, go));
+    });
+    const iv = setInterval(() => { if (!document.querySelector('.sheet')) { clearInterval(iv); if (!done) resolve(undefined); } }, 400);
+  });
+}
+
+function howtoView(s) {
+  const ip = s.ip || 'IP-адрес';
+  const cmd = 'ssh root@' + ip;
+  const pre = t => h('pre', {}, t);
+  const step = (title, ...body) => h('div', { class: 'step' }, h('b', {}, title), ...body);
+  const copyRow = row({ title: 'Скопировать команду', cls: 'accent', onClick: () => UI.copy(cmd, 'Команда') });
+  return h('div', { class: 'howto' }, UI.nav.backLink(s.name), h('h1', { class: 'large-title' }, 'Как подключиться'),
+    group('Компьютер', [
+      step('Windows 10 и 11', h('div', {}, 'Откройте «Терминал» или PowerShell и введите:'), pre(cmd),
+        h('div', { style: 'color:var(--hint);font-size:14px;margin-top:6px' }, 'На вопрос о ключе ответьте yes, затем вставьте пароль — при вводе он не отображается, это нормально.')),
+      step('macOS и Linux', h('div', {}, 'Откройте «Терминал», команда та же:'), pre(cmd)),
+      copyRow,
+    ]),
+    group('Телефон', [step('Termius (iOS, Android)', h('div', {}, `New Host → адрес ${ip}, пользователь root, пароль из карточки сервера.`))]),
+    group('Сервер не отвечает?', [step('Что проверить', h('ol', {},
+      h('li', {}, 'Сервер оплачен и включён — статус наверху карточки.'),
+      h('li', {}, 'Перезагрузите его кнопкой «Перезагрузить».'),
+      h('li', {}, 'Откройте «Консоль VNC» — там видно, что происходит на экране.'),
+      h('li', {}, 'Не помогло — напишите в поддержку и укажите IP.'))),
+      row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', onClick: () => UI.nav.push(() => newTicketView(s.role === 'member' ? null : s.id)) })]));
+}
+
+const LOGS = {};
+function logView(s) {
+  const box = h('div', {});
+  const paint = items => {
+    if (!items.length) { box.replaceChildren(h('div', { class: 'empty' }, icon('doc'), h('b', {}, 'Пока пусто'), 'Здесь появятся включения, перезагрузки, продления и другие действия.')); return; }
+    let day = '';
+    const parts = [];
+    let cur = null;
+    items.forEach(it => {
+      const d = new Date(it.at), dd = d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+      if (dd !== day) { day = dd; cur = []; parts.push([dd, cur]); }
+      const who = it.role === 'system' ? 'автоматически' : it.who;
+      cur.push(h('div', { class: 'log-item' }, h('span', { class: 'i', 'aria-hidden': 'true' }, it.icon), h('b', {}, it.title + (it.detail ? ' · ' + it.detail : '')),
+        h('span', {}, d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) + ' · ' + who)));
+    });
+    box.replaceChildren(...parts.map(([dd, rows]) => h('section', { class: 'group' }, h('div', { class: 'group-h' }, dd), h('div', { class: 'list' }, rows))));
+  };
+  if (LOGS[s.id]) paint(LOGS[s.id]); else box.append(group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  api(`/servers/${s.id}/log`).then(items => { LOGS[s.id] = items; if (box.isConnected || !box.parentNode) paint(items); }).catch(e => box.replaceChildren(group(null, [row({ title: 'Не удалось загрузить журнал', sub: e.message })])));
+  return h('div', {}, UI.nav.backLink(s.name), h('h1', { class: 'large-title' }, 'Журнал'), box);
 }
 
 function memberTail(v, s, live, act) {
@@ -513,6 +625,10 @@ function memberTail(v, s, live, act) {
   v.append(group('Управление', [
     row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
   ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
+  v.append(group(null, [
+    row({ icon: 'info', tile: '#34AADC', title: 'Как подключиться', onClick: () => UI.nav.push(() => howtoView(s)) }),
+    row({ icon: 'doc', tile: '#8E8E93', title: 'Журнал действий', onClick: () => UI.nav.push(() => logView(s)) }),
+  ]));
   v.append(group('Общий доступ', [
     row({ icon: 'person', tile: '#8B8CFF', title: 'Владелец', detail: (o.first_name || 'Клиент') + (o.username ? ' @' + o.username : '') }),
     row({ title: 'Выйти из доступа', cls: 'destructive', onClick: async () => {
@@ -880,7 +996,7 @@ async function buy(m, price, opt) {
   const term = opt.months > 1 ? `${PERIOD_LABEL[opt.code]} (дальше продление помесячно — ${rub(m.price_kop / 100)})` : '30 дней';
   const ok = await UI.ask({
     title: 'Оплатить сервер?',
-    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.` + (m.speed ? ` Канал до ${m.speed}.` : '') + `\n${rub(price)} за ${term} спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% на первый месяц по промокоду).` : '.'),
+    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.` + (m.speed ? ` Канал до ${m.speed}.` : '') + `\n${rub(price)} за ${term} спишем с баланса` + (D.discount ? ` (${discountNote()} на первый месяц).` : '.'),
     buttons: [{ id: 'y', text: 'Оплатить ' + rub(price) }],
   });
   if (!ok) return;
@@ -1050,7 +1166,7 @@ function profileView() {
   UI.tween(bigEl, lastBal, D.balance_rub, v => rub(v), 420); lastBal = D.balance_rub;
   const tags = h('div', { class: 'tags' });
   if (D.autopay.available) tags.append(h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') }, h('i', { class: 'dot ' + (D.autopay.enabled ? 'ok' : '') }), D.autopay.enabled ? 'Автоплатёж включён' : 'Автоплатёж выключен'));
-  if (D.discount) tags.append(h('span', { class: 'badge accent' }, icon('sparkle'), `Скидка ${D.discount.pct}% · ${D.discount.code}`));
+  if (D.discount) tags.append(h('span', { class: 'badge accent' }, icon('sparkle'), D.discount.until ? `Скидка ${D.discount.pct}% до ${shortDate(D.discount.until)}` : `Скидка ${D.discount.pct}% · ${D.discount.code}`));
   if (next && D.balance_rub < next.price_rub && !(D.autopay.available && D.autopay.enabled)) tags.append(h('span', { class: 'badge warn' }, `Не хватает ${rub(Math.ceil(next.price_rub - D.balance_rub))} на продление`));
   tags.querySelectorAll('svg').forEach(s => { s.style.width = '12px'; s.style.height = '12px'; });
   wrap.append(h('div', { class: 'hero-card' },
@@ -1130,7 +1246,7 @@ function profileView() {
   });
   code.addEventListener('keydown', e => { if (e.key === 'Enter') apply.click(); });
   wrap.append(UI.section('Промокод', h('div', { class: 'card', style: 'padding:10px' }, h('label', { class: 'input' }, icon('gift'), code, apply)),
-    D.discount ? `Активна скидка ${D.discount.pct}% (${D.discount.code}) на следующую покупку сервера.` : 'Бонус зачислится на баланс, скидка — применится к следующей покупке.'));
+    D.discount ? `Активна ${discountNote()} на следующую покупку сервера.` : 'Бонус зачислится на баланс, скидка — применится к следующей покупке.'));
 
   // способы оплаты и автоплатёж
   const methodsBox = h('div', {}, UI.section('Способы оплаты', h('div', { class: 'list' }, h('div', { class: 'skeleton' }))));

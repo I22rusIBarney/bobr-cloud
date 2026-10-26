@@ -17,7 +17,7 @@ from sqlalchemy import select, update
 from .db import Server, ServerShare, User, session, utcnow
 from .services import UserError, flag
 from .settings import load_settings
-from . import events
+from . import events, serverlog
 
 TTL = timedelta(hours=24)
 MAX_MEMBERS = 5
@@ -83,6 +83,7 @@ async def invite(ctx, owner_tg: int, server_id: int, query: str) -> dict:
     text = (f"👥 <b>Вам открывают доступ к серверу</b>\n\n👤 Владелец: {_who(owner)}\n🖥 {fl} {html.escape(name)} · {spec}\n\n"
             "Вы увидите IP и пароль, сможете включать, выключать и перезагружать сервер, открывать VNC и продлевать его со своего баланса. "
             "Сервер остаётся у владельца. Приглашение действует 24 часа.")
+    await serverlog.add(server_id, owner_tg, "share_invite", to.first_name or (f"@{to.username}" if to.username else str(to.tg_id)))
     send = getattr(ctx, "send_share_offer", None)
     if send:
         await send(to.tg_id, text, sh.id)
@@ -126,6 +127,7 @@ async def _names(sh: ServerShare) -> tuple[str, User | None, User | None]:
 async def accept(ctx, share_id: int, member_tg: int) -> dict:
     sh = await _finish(share_id, member_tg, "member_tg", "active", ("pending",))
     name, owner, member = await _names(sh)
+    await serverlog.add(sh.server_id, member_tg, "share_join")
     await ctx.notify(sh.owner_tg, f"👥 {_who(member)} принял(а) доступ к серверу <b>{html.escape(name)}</b>.")
     await events.emit(ctx, "sales", f"👥 <b>Общий доступ</b>\n\n🖥 {html.escape(name)}\n👤 {events.who(owner)} → {events.who(member)}")
     return {"server_id": sh.server_id, "name": name}
@@ -143,7 +145,9 @@ async def remove(ctx, share_id: int, owner_tg: int) -> None:
         sh = await s.get(ServerShare, share_id)
         st = sh.status if sh and sh.owner_tg == owner_tg else None
     sh = await _finish(share_id, owner_tg, "owner_tg", "cancelled" if st == "pending" else "revoked", ("pending", "active"))
-    name, _, _ = await _names(sh)
+    name, _, member = await _names(sh)
+    if sh.status == "revoked":
+        await serverlog.add(sh.server_id, owner_tg, "share_remove", (member.first_name or "") if member else "")
     await ctx.notify(sh.member_tg, (f"ℹ️ Владелец отменил приглашение к серверу {html.escape(name)}." if sh.status == "cancelled"
                                     else f"🔒 Владелец закрыл вам доступ к серверу <b>{html.escape(name)}</b>. Сервер больше не отображается у вас."))
 
@@ -157,6 +161,7 @@ async def leave(ctx, server_id: int, member_tg: int) -> None:
         sh.status, sh.finished_at = "left", utcnow()
         await s.commit()
     name, _, member = await _names(sh)
+    await serverlog.add(server_id, member_tg, "share_leave")
     await ctx.notify(sh.owner_tg, f"👋 {_who(member)} вышел(а) из доступа к серверу {html.escape(name)}.")
 
 

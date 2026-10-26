@@ -36,6 +36,7 @@ async def main() -> None:
     ctx.tg_ping = bot.get_me
     ctx.send_transfer_offer = botmod.make_transfer_offer(bot)
     ctx.send_share_offer = botmod.make_transfer_offer(bot, "sh")
+    ctx.notify_kb = botmod.make_kb_notifier(bot)
     from app import events
     ctx.alert_admin = events.make_alert(ctx)  # системные алерты — в чат «Алерты» (или админам)
     try:
