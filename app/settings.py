@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import math
 from typing import Any
 
@@ -52,7 +53,9 @@ DEFAULTS: dict[str, Any] = {
     "sub_chat": "",              # @username или -100… для закрытых
     "sub_link": "",              # ссылка-приглашение (для закрытых каналов)
     "sub_title": "",             # название — подставляется при проверке
-    "transfers_enabled": True,   # клиенты могут передавать серверы друг другу
+    "transfers_enabled": True,
+    # ограничение скорости канала по тарифам: "cpu-ram-disk" → "200 Мбит/с" (Astra не отдаёт это в API)
+    "preset_speeds": {"1-1-10": "200 Мбит/с"},   # клиенты могут передавать серверы друг другу
     # реферальная программа (бонусы только на баланс)
     "ref_enabled": True,
     "ref_pct": 10,               # % от каждого пополнения приглашённого — пригласившему
@@ -85,6 +88,13 @@ def coerce(key: str, value: Any) -> Any:
         return value if isinstance(value, bool) else str(value).lower() in ("1", "true", "yes", "on")
     if t is list:
         return [int(x) for x in value]
+    if t is dict:
+        out = {}
+        for k, v in dict(value or {}).items():
+            v = re.sub(r"^\s*до\s+", "", str(v or "")).strip()[:30]
+            if v and re.fullmatch(r"\d+-\d+-\d+", str(k)):
+                out[str(k)] = v
+        return dict(list(out.items())[:100])
     if t is int:
         return int(float(value))
     if t is float:

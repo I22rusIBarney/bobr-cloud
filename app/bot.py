@@ -359,7 +359,9 @@ async def buy_tariffs(c: CallbackQuery):
         await show(c, f"⚠️ <b>{svc.flag(loc)} {e(name)}</b>\n\nВ этой локации сейчас нет доступных тарифов.", kb_rows([], back="m:buy"))
         return
     rows = [[(f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — {rub(o['price_kop'])}", f"b:p:{loc}:{o['idx']}")] for o in offs]
-    await show(c, f"🖥 <b>Конфигурация · {svc.flag(loc)} {e(name)}</b>\n\nПроцессор · память · диск NVMe.\nЦены — за 30 дней.", kb_rows(rows, back="m:buy"))
+    limited = [f"{o['cpu']} vCPU · {o['ram']} ГБ · {o['disk']} ГБ — до {e(o['speed'])}" for o in offs if o.get("speed")]
+    speed_note = ("\n\n🌐 <b>Скорость канала</b>\n" + "\n".join(limited)) if limited else ""
+    await show(c, f"🖥 <b>Конфигурация · {svc.flag(loc)} {e(name)}</b>\n\nПроцессор · память · диск NVMe.\nЦены — за 30 дней.{speed_note}", kb_rows(rows, back="m:buy"))
 
 
 @router.callback_query(F.data.startswith("b:p:"))
@@ -414,6 +416,7 @@ async def buy_confirm(c: CallbackQuery):
         "🛒 <b>Подтверждение заказа</b>\n\n"
         f"🌍 {svc.flag(loc)} {e(name)}\n"
         f"🖥 {o['cpu']} vCPU · {o['ram']} ГБ RAM · {o['disk']} ГБ NVMe\n"
+        + (f"🌐 Канал: до {e(o['speed'])}\n" if o.get("speed") else "") +
         f"⚙️ {e(svc.os_label(os_))}\n"
         f"🔄 {term}\n\n"
         f"💳 К оплате: {price}" + (f"\n<i>{' · '.join(notes)}</i>" if notes else "") + "\n"
@@ -594,11 +597,12 @@ async def servers_list(c: CallbackQuery):
     await show(c, f"🖥 <b>Мои серверы</b>\n\nВсего: <b>{len(rows)}</b> · активных: <b>{active}</b>\nВыберите сервер, чтобы открыть управление.", kb_rows(kb))
 
 
-def card_text(srv: Server) -> str:
+def card_text(srv: Server, speed: str = "") -> str:
     return (
         f"🖥 <b>{e(srv.name)}</b>\n"
         f"{STATUS.get(srv.status, e(srv.status))} · {svc.flag(srv.location)} {e(srv.location.upper())}\n"
-        f"{srv.cpu} vCPU · {srv.ram} ГБ RAM · {srv.disk} ГБ · {e(svc.os_label(srv.os))}\n\n"
+        f"{srv.cpu} vCPU · {srv.ram} ГБ RAM · {srv.disk} ГБ · {e(svc.os_label(srv.os))}\n"
+        + (f"🌐 Канал: до {e(speed)}\n" if speed else "") + "\n"
         f"🛡 <b>Доступ</b>\n"
         f"IP: <code>{e(srv.ip or '—')}</code>\nЛогин: <code>root</code>\nПароль: <code>{e(srv.root_password or '—')}</code>\n\n"
         f"💳 <b>Оплата</b>\n"
@@ -620,10 +624,11 @@ def card_kb(srv: Server, transfers: bool = True) -> InlineKeyboardMarkup:
     return kb_rows(rows, back="s:list", back_text="← Мои серверы")
 
 
-async def _card_kb(srv: Server) -> InlineKeyboardMarkup:
+async def _card(srv: Server) -> tuple[str, InlineKeyboardMarkup]:
     async with session() as s:
         cfg = await load_settings(s)
-    return card_kb(srv, bool(cfg.get("transfers_enabled", True)))
+    return (card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk)),
+            card_kb(srv, bool(cfg.get("transfers_enabled", True))))
 
 
 async def _own(c: CallbackQuery, sid: int) -> Server | None:
@@ -647,7 +652,7 @@ async def server_card(c: CallbackQuery, state: FSMContext | None = None):
     srv = await _own(c, int(c.data.split(":")[2]))
     if srv:
         out = await _outgoing(c.from_user.id, srv.id)
-        text, kb = card_text(srv), await _card_kb(srv)
+        text, kb = await _card(srv)
         if out:
             u = out["user"] or {}
             text += f"\n\n🔁 <b>Ожидает подтверждения</b> от {e(u.get('first_name') or '')}" + (f" @{e(u['username'])}" if u.get("username") else f" (ID {u.get('tg_id')})")
@@ -746,7 +751,7 @@ async def toggle_autorenew(c: CallbackQuery):
         row.auto_renew = not row.auto_renew
         await s.commit()
         srv = row
-    await show(c, card_text(srv), await _card_kb(srv))
+    await show(c, *await _card(srv))
 
 
 @router.callback_query(F.data.startswith("s:rn:"))
@@ -760,7 +765,7 @@ async def renew_now(c: CallbackQuery):
     except UserError as ex:
         await c.message.answer(f"❌ {e(ex)}", parse_mode="HTML")
         return
-    await show(c, card_text(srv), await _card_kb(srv))
+    await show(c, *await _card(srv))
 
 
 @router.callback_query(F.data.startswith("s:a:"))

@@ -160,7 +160,8 @@
   .preset .pname { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-text); margin-bottom: 6px; }
   .preset .pspec { font-size: 15px; font-weight: 600; white-space: nowrap; }
   .preset .pdisk { font-size: 13px; color: var(--hint); }
-  .preset .pprice { font: 700 18px/1.2 var(--font-display); letter-spacing: -0.3px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+  .preset .pspeed { font-size: 12px; color: var(--hint); margin-top: 2px; }
+  .preset .pprice { font: 700 18px/1.2 var(--font-display); letter-spacing: -0.3px; margin-top: auto; padding-top: 10px; font-variant-numeric: tabular-nums; }
   .preset .pprice small { font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
   .preset[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .16), rgba(67, 140, 255, .03) 70%), var(--cell); box-shadow: 0 12px 30px -16px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
 
@@ -435,7 +436,7 @@ function serverView(id) {
   ], s.auto_renew ? 'Продлим автоматически за сутки до окончания, если на балансе хватит денег.' : 'Без автопродления сервер остановится, когда закончится оплаченный срок.'));
 
   v.append(group('Управление', [
-    row({ icon: 'stack', tile: '#34C759', title: 'Мощность', detail: `${s.cpu} vCPU, ${s.ram} ГБ`, onClick: () => upgradeSheet(s) }),
+    row({ icon: 'stack', tile: '#34C759', title: 'Мощность', sub: s.speed ? 'Канал до ' + s.speed : null, detail: `${s.cpu} vCPU, ${s.ram} ГБ`, onClick: () => upgradeSheet(s) }),
     row({ icon: 'text', tile: '#8E8E93', title: 'Переименовать', onClick: () => renameSheet(s) }),
     row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
     row({ icon: 'globe', tile: '#34AADC', title: 'Сменить IP', detail: rub(D.cfg.change_ip_price_rub), onClick: act('change-ip', { done: 'IP-адрес меняется', ask: { title: 'Сменить IP?', message: `Сервер получит новый адрес, старый перестанет работать. Спишем ${rub(D.cfg.change_ip_price_rub)}.`, buttons: [{ id: 'y', text: 'Сменить' }] } }) }),
@@ -655,19 +656,20 @@ function builderView() {
       h('span', { class: 'from' }, min == null ? 'Нет мест' : 'от ' + rub(min) + ' / мес'));
     locGrid.append(b);
   });
-  wrap.append(UI.section('Локация', locGrid, loc && loc.channel ? `Канал в локации ${loc.name}: ${loc.channel}.` : null));
+  const someLimited = loc && loc.offers.some(o => o.speed);
+  wrap.append(UI.section('Локация', locGrid, loc && loc.channel ? `Канал в локации ${loc.name}: ${loc.channel}.` + (someLimited ? ' На отдельных тарифах скорость ограничена — она указана в тарифе.' : '') : null));
 
   // 2. готовые тарифы
   const presets = presetsFor(B.loc);
   const presetBtns = presets.map(p => h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false', onclick: () => { setSpec(p); UI.haptic('select'); } },
     h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')),
-    h('span', { class: 'pname' }, p.pname), h('span', { class: 'pspec' }, `${p.cpu} vCPU · ${p.ram} ГБ`), h('span', { class: 'pdisk' }, `${p.disk} ГБ NVMe`),
+    h('span', { class: 'pname' }, p.pname), h('span', { class: 'pspec' }, `${p.cpu} vCPU · ${p.ram} ГБ`), h('span', { class: 'pdisk' }, `${p.disk} ГБ NVMe`), p.speed ? h('span', { class: 'pspeed' }, 'канал до ' + p.speed) : null,
     h('span', { class: 'pprice' }, rub(discounted(p.price_kop / 100)), h('small', {}, ' / мес'))));
   presetBtns.forEach((b, i) => { b._idx = presets[i].idx; });
   const all = [...offersFor(B.loc)].sort((a, b) => a.price_kop - b.price_kop);
   const allPlans = all.length > presets.length ? h('details', { class: 'all-plans' },
     h('summary', {}, `Все тарифы · ${all.length}`, icon('chevron')),
-    h('div', { class: 'list' }, all.map(o => row({ title: `${o.cpu} vCPU · ${o.ram} ГБ · ${o.disk} ГБ`, detail: rub(o.price_kop / 100), chevron: false, onClick: () => { setSpec(o); UI.haptic('select'); } })))) : null;
+    h('div', { class: 'list' }, all.map(o => row({ title: `${o.cpu} vCPU · ${o.ram} ГБ · ${o.disk} ГБ`, sub: o.speed ? 'канал до ' + o.speed : null, detail: rub(o.price_kop / 100), chevron: false, onClick: () => { setSpec(o); UI.haptic('select'); } })))) : null;
   wrap.append(UI.section('Готовые тарифы', h('div', {}, h('div', { class: 'preset-grid' }, presetBtns), allPlans)));
 
   // 3. конфигурация: сводка + ползунки
@@ -738,7 +740,7 @@ function builderView() {
     }
     const over = ['cpu', 'ram', 'disk'].filter(k => m[k] > B[k]);
     note.className = 'match-note' + (over.length ? '' : ' ok');
-    note.textContent = over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : 'Точно под ваши параметры.';
+    note.textContent = (over.length ? 'Подобрали ближайший тариф — выделенное получите с запасом.' : 'Точно под ваши параметры.') + (m.speed ? ` Скорость канала — до ${m.speed}.` : '');
     const full = m.price_kop / 100;
     const opt = periodOpts().find(o => o.code === B.period) || periodOpts()[0];
     const price = periodTotal(full, opt);
@@ -793,7 +795,7 @@ async function buy(m, price, opt) {
   const term = opt.months > 1 ? `${PERIOD_LABEL[opt.code]} (дальше продление помесячно — ${rub(m.price_kop / 100)})` : '30 дней';
   const ok = await UI.ask({
     title: 'Оплатить сервер?',
-    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.\n${rub(price)} за ${term} спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% на первый месяц по промокоду).` : '.'),
+    message: `${loc.flag} ${loc.name}: ${m.cpu} vCPU, ${m.ram} ГБ памяти, ${m.disk} ГБ диска, ${osName(B.os)}.` + (m.speed ? ` Канал до ${m.speed}.` : '') + `\n${rub(price)} за ${term} спишем с баланса` + (D.discount ? ` (скидка ${D.discount.pct}% на первый месяц по промокоду).` : '.'),
     buttons: [{ id: 'y', text: 'Оплатить ' + rub(price) }],
   });
   if (!ok) return;

@@ -217,7 +217,40 @@ function tariffsView() {
   }), 'Выключенные тарифы не показываются клиентам ни в боте, ни в конструкторе. Изменения применятся после сохранения.'));
   paint(); onSettings(list, paint);
   v.append(list);
+
+  // скорость канала: Astra не отдаёт её в API, задаётся вручную по конфигурации
+  const specKey = p => `${p.cpu}-${p.ram}-${p.disk}`;
+  const speeds = h('div');
+  const paintSpeeds = () => {
+    const seen = new Set(), rows = [];
+    CAT.presets.forEach(p => {
+      const k = specKey(p); if (seen.has(k)) return; seen.add(k);
+      const cur = (S.settings.preset_speeds || {})[k] || '';
+      rows.push(row({ title: `${p.cpu} vCPU, ${p.ram} ГБ, ${p.disk} ГБ`, detail: cur ? 'до ' + cur : 'без ограничения', onClick: () => speedSheet(k, `${p.cpu} vCPU, ${p.ram} ГБ, ${p.disk} ГБ`, cur) }));
+    });
+    speeds.replaceChildren(group('Скорость канала', rows, 'Astra не передаёт ограничение скорости через API. Укажите его для тарифов, где оно есть, — клиенты увидят его в боте, конструкторе и карточке сервера. Пусто — показываем только канал локации.'));
+  };
+  paintSpeeds(); onSettings(speeds, paintSpeeds);
+  v.append(speeds);
   return v;
+}
+
+function speedSheet(key, title, cur) {
+  UI.sheet('Скорость канала', close => {
+    const i = h('input', { type: 'text', 'aria-label': 'Скорость', placeholder: '200 Мбит/с', autocapitalize: 'off', spellcheck: false, style: 'text-align:left' });
+    i.value = cur;
+    const apply = val => {
+      const next = { ...(S.settings.preset_speeds || {}) };
+      val = val.replace(/^\s*до\s+/i, '').trim();
+      if (val) next[key] = val; else delete next[key];
+      setVal('preset_speeds', next); close();
+    };
+    return h('div', {},
+      group(title, [h('label', { class: 'field stack' }, h('label', {}, 'До какой скорости'), i)], 'Например: 200 Мбит/с или 1 Гбит/с. Оставьте пустым, если ограничения нет.'),
+      h('div', { style: 'display:flex;flex-direction:column;gap:10px;padding:0 var(--gutter) 16px' },
+        h('button', { class: 'btn', type: 'button', onclick: () => apply(i.value) }, 'Сохранить'),
+        cur ? h('button', { class: 'btn plain', type: 'button', onclick: () => apply('') }, 'Убрать ограничение') : null));
+  });
 }
 
 // ───────── тексты ─────────

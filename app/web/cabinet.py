@@ -27,7 +27,7 @@ log = logging.getLogger(__name__)
 ACTIONS = {"start", "stop", "reboot", "vnc", "password", "change-ip", "reinstall"}
 
 
-def server_dict(srv: Server, refund_pct: float) -> dict:
+def server_dict(srv: Server, refund_pct: float, speed: str = "") -> dict:
     left = None
     if srv.expires_at:
         left = (srv.expires_at - utcnow()).total_seconds() / 86400
@@ -39,6 +39,7 @@ def server_dict(srv: Server, refund_pct: float) -> dict:
         "cpu": srv.cpu,
         "ram": srv.ram,
         "disk": srv.disk,
+        "speed": speed,
         "os": srv.os,
         "os_label": svc.os_label(srv.os),
         "flag": svc.flag(srv.location),
@@ -164,7 +165,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "theme": {"bg": cfg["theme_bg"], "image": cfg["theme_bg_image"], "effect": cfg["theme_effect"], "client_choice": cfg["theme_client_choice"]},
             "tickets_unread": await tk.unread_for_client(m["id"]) if m["consented"] else 0,
             "balance_rub": user.balance_kop / 100,
-            "servers": [server_dict(x, cfg["refund_pct"]) for x in rows] if m["consented"] else [],
+            "servers": [server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk)) for x in rows] if m["consented"] else [],
             "cfg": {
                 "providers": svc.payment_providers(ctx, cfg),
                 "min_topup_rub": cfg["min_topup_rub"],

@@ -117,6 +117,19 @@ def _normalize_catalog(data: dict) -> dict:
 # ───────────────────────── каталог ─────────────────────────
 
 
+def spec_key(cpu, ram, disk) -> str:
+    n = lambda x: str(int(x)) if float(x) == int(float(x)) else str(x)
+    return f"{n(cpu)}-{n(ram)}-{n(disk)}"
+
+
+def speed_of(cfg: dict, cpu, ram, disk) -> str:
+    """Ограничение скорости тарифа из настроек («200 Мбит/с») или пустая строка."""
+    try:
+        return (cfg.get("preset_speeds") or {}).get(spec_key(cpu, ram, disk), "")
+    except (TypeError, ValueError):
+        return ""
+
+
 async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict]:
     """Тарифы для локации с ценой клиенту (с учётом персонального «без наценки»)."""
     cat = await ctx.catalog()
@@ -139,6 +152,7 @@ async def offers(ctx: Ctx, location: str, tg_id: int | None = None) -> list[dict
                 "disk": p["disk"],
                 "cost_rub": cost,
                 "price_kop": sell_price_kop(cost, cfg),
+                "speed": speed_of(cfg, p["cpu"], p["ram"], p["disk"]),
             }
         )
     return out
