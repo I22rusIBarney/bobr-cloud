@@ -18,6 +18,7 @@ from .. import tickets as tk
 from .. import referral
 from .. import subscription as sub
 from .. import transfers as trf
+from .. import shares as shr
 from ..legal import DOCS, REQUIRED, render_fragment
 from ..settings import load_settings
 from .auth import validate_init_data
@@ -148,8 +149,9 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 await s.execute(select(Server).where(Server.tg_id == m["id"], Server.status != "deleted").order_by(Server.id))
             ).scalars().all()
         n_methods = len(await acc.methods(m["id"]))
+        shared = await shr.shared_servers(m["id"]) if m["consented"] else []
         try:
-            cat = await ctx.catalog() if rows else {}
+            cat = await ctx.catalog() if rows or shared else {}
         except Exception:  # Astra недоступна — скорость покажем только ручную
             cat = {}
         sub_info = await sub.required(ctx, m["id"]) if m["consented"] else None
@@ -169,7 +171,13 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
             "theme": {"bg": cfg["theme_bg"], "image": cfg["theme_bg_image"], "effect": cfg["theme_effect"], "client_choice": cfg["theme_client_choice"]},
             "tickets_unread": await tk.unread_for_client(m["id"]) if m["consented"] else 0,
             "balance_rub": user.balance_kop / 100,
-            "servers": [server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))) for x in rows] if m["consented"] else [],
+            "servers": ([{**server_dict(x, cfg["refund_pct"], svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))),
+                          "role": "owner", "members": await shr.members(x.id, m["id"])} for x in rows]
+                        + [{**server_dict(x, 0, svc.speed_of(cfg, x.cpu, x.ram, x.disk, svc.loc_channel(cat, x.location))), "refund_rub": 0, "role": "member",
+                            "owner": {"tg_id": o.tg_id, "username": o.username, "first_name": o.first_name} if o else None} for x, o in shared])
+                       if m["consented"] else [],
+            "share_invites": await shr.incoming(m["id"]) if m["consented"] else [],
+            "shares_enabled": bool(cfg.get("shares_enabled", True)),
             "cfg": {
                 "providers": svc.payment_providers(ctx, cfg),
                 "min_topup_rub": cfg["min_topup_rub"],
@@ -201,6 +209,36 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 await trf.cancel(ctx, tid, m["id"])
             else:
                 raise HTTPException(404)
+        except UserError as ex:
+            raise wrap(ex)
+        return {"ok": True}
+
+    @r.post("/servers/{sid}/share")
+    async def share_create(sid: int, p: TransferIn, m: dict = Depends(me_ok)):
+        try:
+            return await shr.invite(ctx, m["id"], sid, p.to)
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.post("/shares/{shid}/{act}")
+    async def share_act(shid: int, act: str, m: dict = Depends(me_ok)):
+        try:
+            if act == "accept":
+                return await shr.accept(ctx, shid, m["id"])
+            if act == "decline":
+                await shr.decline(ctx, shid, m["id"])
+            elif act == "remove":
+                await shr.remove(ctx, shid, m["id"])
+            else:
+                raise HTTPException(404)
+        except UserError as ex:
+            raise wrap(ex)
+        return {"ok": True}
+
+    @r.post("/servers/{sid}/leave")
+    async def share_leave(sid: int, m: dict = Depends(me_ok)):
+        try:
+            await shr.leave(ctx, sid, m["id"])
         except UserError as ex:
             raise wrap(ex)
         return {"ok": True}
@@ -389,12 +427,17 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
 
     @r.post("/servers/{sid}/renew")
     async def renew(sid: int, m: dict = Depends(me_ok)):
-        async with session() as s:
-            await _own(s, m, sid)
         try:
-            await svc.renew_server(ctx, sid)
+            async with session() as s:
+                srv, role = await svc.get_server_access(s, m["id"], sid)
+                me_u = await s.get(User, m["id"])
+            await svc.renew_server(ctx, sid, payer=m["id"])
         except UserError as ex:
             raise wrap(ex)
+        if role == "member":
+            import html as _h
+            who = _h.escape(me_u.first_name or "") + (f" @{_h.escape(me_u.username)}" if me_u.username else "")
+            await ctx.notify(srv.tg_id, f"👥 {who} продлил(а) сервер <b>{_h.escape(srv.name)}</b> на 30 дней со своего баланса.")
         return {"ok": True}
 
     @r.post("/servers/{sid}/autorenew")

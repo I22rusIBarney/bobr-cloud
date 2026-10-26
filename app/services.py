@@ -48,6 +48,7 @@ class Ctx:
     post: Callable[[Any, str], Awaitable[str | None]] | None = None
     tg_ping: Callable[[], Awaitable[Any]] | None = None
     send_transfer_offer: Callable[[int, str, int], Awaitable[None]] | None = None
+    send_share_offer: Callable[[int, str, int], Awaitable[None]] | None = None
     post_file: Callable[[Any, str, str], Awaitable[str | None]] | None = None
     # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
     send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None
@@ -317,18 +318,20 @@ async def _refund(tg_id: int, kop: int, kind: str, ref: str) -> None:
 # ───────────────────────── продление ─────────────────────────
 
 
-async def renew_server(ctx: Ctx, server_id: int) -> Server:
+async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Server:
+    """Продление на 30 дней. payer — кто платит (по умолчанию владелец; участник общего доступа — сам)."""
     async with session() as s:
         srv = await s.get(Server, server_id)
         if srv is None or srv.status in ("deleted", "provisioning"):
             raise UserError("Сервер недоступен для продления.")
         price = srv.price_kop
-        if not await change_balance(s, srv.tg_id, -price, "renew", str(srv.astra_id)):
+        payer = payer or srv.tg_id
+        if not await change_balance(s, payer, -price, "renew", str(srv.astra_id)):
             raise UserError("Недостаточно средств для продления.")
     try:
         await ctx.astra.action(srv.astra_id, "renew")
     except AstraError as ex:
-        await _refund(srv.tg_id, price, "refund_renew", str(srv.astra_id))
+        await _refund(payer, price, "refund_renew", str(srv.astra_id))
         if ex.status == 402:
             await ctx.alert_once("astra_balance", "⚠️ Баланс Astra закончился — продления не проходят.")
         else:
@@ -401,10 +404,25 @@ async def get_user_server(s, tg_id: int, server_id: int) -> Server:
     return srv
 
 
+async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:
+    """Сервер и роль клиента: owner — свой, member — общий доступ."""
+    from .shares import role
+
+    srv = await s.get(Server, server_id)
+    r = await role(s, tg_id, srv)
+    if r is None:
+        raise UserError("Сервер не найден.")
+    return srv, r
+
+
 async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body: dict | None = None) -> dict:
     """start | stop | reboot | reinstall | password | vnc | change-ip."""
+    from .shares import MEMBER_ACTIONS
+
     async with session() as s:
-        srv = await get_user_server(s, tg_id, server_id)
+        srv, who = await get_server_access(s, tg_id, server_id)
+        if who == "member" and action not in MEMBER_ACTIONS:
+            raise UserError("Это действие доступно только владельцу сервера.")
         cfg = await load_settings(s)
         if srv.status not in ("active", "suspended"):
             raise UserError("Сервер сейчас недоступен для этого действия.")
@@ -484,7 +502,7 @@ async def rename_server(ctx: Ctx, tg_id: int, server_id: int, name: str) -> str:
 async def server_live(ctx: Ctx, tg_id: int, server_id: int) -> dict:
     """Актуальное состояние из Astra: питание (running/stopped) и готовый текст подключения."""
     async with session() as s:
-        srv = await get_user_server(s, tg_id, server_id)
+        srv, _ = await get_server_access(s, tg_id, server_id)
     try:
         r = await ctx.astra.server(srv.astra_id)
     except Exception as ex:
@@ -646,6 +664,8 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
         await s.commit()
         if refund > 0:
             await change_balance(s, tg_id, refund, "refund_cancel", str(srv.astra_id))
+    from .shares import revoke_all
+    await revoke_all(ctx, server_id, "владелец удалил сервер")
     return refund
 
 
@@ -1025,6 +1045,8 @@ async def sync_servers(ctx: Ctx) -> None:
             await ctx.notify(srv.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
         elif kind == "vanished":
             await ctx.alert_admin(f"⚠️ Сервер #{srv.astra_id} клиента {srv.tg_id} пропал из списка Astra.")
+            from .shares import revoke_all
+            await revoke_all(ctx, srv.id, "сервер удалён")
 
 
 async def autorenew_and_remind(ctx: Ctx, only_tg: int | None = None) -> None:

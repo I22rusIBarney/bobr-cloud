@@ -26,9 +26,10 @@ from . import tickets as tk
 from . import referral
 from . import subscription as sub
 from . import transfers as tr
+from . import shares as sh
 from .legal import DOCS, REQUIRED
 from .config import env
-from .db import Payment, Server, User, change_balance, get_or_create_user, session
+from .db import Payment, Server, ServerShare, User, change_balance, get_or_create_user, session
 from .services import Ctx, UserError
 from .settings import fmt_rub, load_settings
 
@@ -64,6 +65,10 @@ class PromoInput(StatesGroup):
 
 
 class TransferInput(StatesGroup):
+    to = State()
+
+
+class ShareInput(StatesGroup):
     to = State()
 
 
@@ -593,12 +598,15 @@ async def servers_list(c: CallbackQuery):
 
     async with session() as s:
         rows = (await s.execute(select(Server).where(Server.tg_id == c.from_user.id, Server.status != "deleted").order_by(Server.id))).scalars().all()
-    if not rows:
+    shared = [srv for srv, _ in await sh.shared_servers(c.from_user.id)]
+    if not rows and not shared:
         await show(c, "🖥 <b>Мои серверы</b>\n\nСерверов пока нет. Соберите первый — он будет готов через 1–3 минуты.", kb_rows([[("🛒 Купить сервер", "m:buy")]]))
         return
     kb = [[(f"{STATUS_ICON.get(r.status, '•')} {svc.flag(r.location)} {r.name} · {r.ip or 'создаётся'}", f"s:v:{r.id}")] for r in rows]
-    active = sum(1 for r in rows if r.status == "active")
-    await show(c, f"🖥 <b>Мои серверы</b>\n\nВсего: <b>{len(rows)}</b> · активных: <b>{active}</b>\nВыберите сервер, чтобы открыть управление.", kb_rows(kb))
+    kb += [[(f"👥 {svc.flag(r.location)} {r.name} · {r.ip or 'создаётся'}", f"s:v:{r.id}")] for r in shared]
+    active = sum(1 for r in rows + shared if r.status == "active")
+    note = "\n👥 — общий доступ: сервер другого владельца." if shared else ""
+    await show(c, f"🖥 <b>Мои серверы</b>\n\nВсего: <b>{len(rows) + len(shared)}</b> · активных: <b>{active}</b>{note}\nВыберите сервер, чтобы открыть управление.", kb_rows(kb))
 
 
 def card_text(srv: Server, speed: str = "") -> str:
@@ -616,27 +624,54 @@ def card_text(srv: Server, speed: str = "") -> str:
     )
 
 
-def card_kb(srv: Server, transfers: bool = True) -> InlineKeyboardMarkup:
+def member_kb(srv: Server) -> InlineKeyboardMarkup:
+    i = srv.id
+    rows = [
+        [("🔄 Продлить со своего баланса", f"s:rn:{i}")],
+        [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
+        [("🖥 Консоль VNC", f"s:a:{i}:vnc")],
+        [("🚪 Выйти из доступа", f"sh:l:{i}")],
+    ]
+    return kb_rows(rows, back="s:list", back_text="← Мои серверы")
+
+
+def card_kb(srv: Server, transfers: bool = True, shares: bool = True) -> InlineKeyboardMarkup:
     i = srv.id
     rows = [
         [("🔄 Продлить на 30 дней", f"s:rn:{i}"), (("Автопродление: вкл" if srv.auto_renew else "Автопродление: выкл"), f"s:ar:{i}")],
         [("Включить", f"s:a:{i}:start"), ("Выключить", f"s:a:{i}:stop"), ("Перезагрузить", f"s:a:{i}:reboot")],
         [("🖥 Консоль VNC", f"s:a:{i}:vnc"), ("🌍 Сменить IP", f"s:c:{i}:change-ip")],
         [("⚙️ Переустановить ОС", f"s:ri:{i}"), ("🛡 Сбросить пароль", f"s:c:{i}:password")],
-        ([("🔁 Передать другу", f"s:tr:{i}")] if transfers else []) + [("❌ Удалить сервер", f"s:d:{i}")],
+        ([("👥 Общий доступ", f"s:sh:{i}")] if shares else []) + ([("🔁 Передать другу", f"s:tr:{i}")] if transfers else []),
+        [("❌ Удалить сервер", f"s:d:{i}")],
     ]
+    rows = [r for r in rows if r]
     return kb_rows(rows, back="s:list", back_text="← Мои серверы")
 
 
-async def _card(srv: Server) -> tuple[str, InlineKeyboardMarkup]:
+def _uname(u: dict | User | None) -> str:
+    if u is None:
+        return "клиент"
+    g = (lambda k: u.get(k)) if isinstance(u, dict) else (lambda k: getattr(u, k))
+    return e(g("first_name") or "") + (f" @{e(g('username'))}" if g("username") else f" (ID {g('tg_id')})")
+
+
+async def _card(srv: Server, role: str = "owner") -> tuple[str, InlineKeyboardMarkup]:
     async with session() as s:
         cfg = await load_settings(s)
+        owner = await s.get(User, srv.tg_id) if role == "member" else None
     try:
         channel = svc.loc_channel(await ctx().catalog(), srv.location)
     except Exception:  # Astra недоступна — карточку всё равно показываем
         channel = ""
-    return (card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk, channel)),
-            card_kb(srv, bool(cfg.get("transfers_enabled", True))))
+    text = card_text(srv, svc.speed_of(cfg, srv.cpu, srv.ram, srv.disk, channel))
+    if role == "member":
+        text = text.rsplit("\nАвтопродление:", 1)[0] + f"\n\n👥 <b>Общий доступ</b> · владелец {_uname(owner)}\n<i>Можно включать, выключать, перезагружать сервер и продлевать его со своего баланса.</i>"
+        return text, member_kb(srv)
+    mem = [m for m in await sh.members(srv.id, srv.tg_id) if m["status"] == "active"]
+    if mem:
+        text += "\n\n👥 Доступ: " + ", ".join(_uname(m["user"]) for m in mem)
+    return text, card_kb(srv, bool(cfg.get("transfers_enabled", True)), bool(cfg.get("shares_enabled", True)))
 
 
 async def _own(c: CallbackQuery, sid: int) -> Server | None:
@@ -648,6 +683,17 @@ async def _own(c: CallbackQuery, sid: int) -> Server | None:
     return srv
 
 
+async def _access(c: CallbackQuery, sid: int) -> tuple[Server, str] | None:
+    """Свой сервер или общий доступ к чужому."""
+    async with session() as s:
+        srv = await s.get(Server, sid)
+        role = await sh.role(s, c.from_user.id, srv)
+    if role is None:
+        await c.answer("❌ Сервер не найден", show_alert=True)
+        return None
+    return srv, role
+
+
 async def _outgoing(tg_id: int, server_id: int) -> dict | None:
     p = await tr.pending_for(tg_id)
     return next((x for x in p["outgoing"] if x["server_id"] == server_id), None)
@@ -657,7 +703,11 @@ async def _outgoing(tg_id: int, server_id: int) -> dict | None:
 async def server_card(c: CallbackQuery, state: FSMContext | None = None):
     if state is not None:
         await state.clear()
-    srv = await _own(c, int(c.data.split(":")[2]))
+    acc_ = await _access(c, int(c.data.split(":")[2]))
+    if acc_ and acc_[1] == "member":
+        await show(c, *await _card(acc_[0], "member"))
+        return
+    srv = acc_[0] if acc_ else None
     if srv:
         out = await _outgoing(c.from_user.id, srv.id)
         text, kb = await _card(srv)
@@ -749,6 +799,143 @@ async def transfer_answer(c: CallbackQuery):
         await show(c, "✖️ <b>Передача отменена</b>\n\nСервер остаётся у вас.", kb_rows([], back="s:list", back_text="← Мои серверы"))
 
 
+# ───────────────────────── общий доступ ─────────────────────────
+
+SHARE_RIGHTS = ("Участник видит IP и пароль, может включать, выключать и перезагружать сервер, открывать VNC и продлевать его со своего баланса. "
+                "Переустановка, сброс пароля, смена IP, удаление и передача — только у вас.")
+
+
+async def _share_screen(c: CallbackQuery, srv: Server) -> None:
+    mem = await sh.members(srv.id, c.from_user.id)
+    lines, rows = [], []
+    for m in mem:
+        if m["status"] == "active":
+            lines.append(f"✅ {_uname(m['user'])}")
+            rows.append([(f"🔒 Закрыть доступ: {(m['user'] or {}).get('first_name') or 'клиент'}", f"sh:r:{m['id']}")])
+        else:
+            lines.append(f"⏳ {_uname(m['user'])} — ждём ответа")
+            rows.append([(f"✖️ Отменить приглашение: {(m['user'] or {}).get('first_name') or 'клиент'}", f"sh:r:{m['id']}")])
+    if len(mem) < sh.MAX_MEMBERS:
+        rows.insert(0, [("➕ Пригласить", f"sh:i:{srv.id}")])
+    body = "\n".join(lines) if lines else "Пока доступ есть только у вас."
+    await show(c, f"👥 <b>Общий доступ · {e(srv.name)}</b>\n\n{body}\n\n<i>{SHARE_RIGHTS}</i>", kb_rows(rows, back=f"s:v:{srv.id}", back_text="← К серверу"))
+
+
+@router.callback_query(F.data.startswith("s:sh:"))
+async def share_menu(c: CallbackQuery, state: FSMContext):
+    await state.clear()
+    srv = await _own(c, int(c.data.split(":")[2]))
+    if not srv:
+        return
+    async with session() as s:
+        if not (await load_settings(s)).get("shares_enabled", True):
+            return await c.answer("Общий доступ к серверам сейчас отключён.", show_alert=True)
+    await _share_screen(c, srv)
+
+
+@router.callback_query(F.data.startswith("sh:i:"))
+async def share_start(c: CallbackQuery, state: FSMContext):
+    srv = await _own(c, int(c.data.split(":")[2]))
+    if not srv:
+        return
+    if srv.status not in ("active", "suspended"):
+        return await c.answer("Поделиться можно только созданным сервером.", show_alert=True)
+    await state.set_state(ShareInput.to)
+    await state.update_data(server_id=srv.id)
+    await show(c, f"👥 <b>Пригласить к {e(srv.name)}</b>\n\nОтправьте @username или Telegram ID. Это должен быть клиент бота.\n\n<i>{SHARE_RIGHTS}</i>",
+               kb_rows([], back=f"s:sh:{srv.id}", back_text="← Отмена"))
+
+
+@router.message(ShareInput.to)
+async def share_to(m: Message, state: FSMContext):
+    sid = (await state.get_data()).get("server_id")
+    try:
+        u = await tr.find_recipient(m.text or "")
+        if u.tg_id == m.from_user.id:
+            raise UserError("Это вы — сервер и так ваш.")
+    except UserError as ex:
+        await m.answer(f"⚠️ {e(ex)}\n\nОтправьте @username или ID ещё раз.", parse_mode="HTML", reply_markup=kb_rows([], back=f"s:sh:{sid}", back_text="← Отмена"))
+        return
+    await state.clear()
+    await m.answer(f"👥 <b>Открыть доступ {_uname(u)}?</b>\n\nСервер появится у него в списке после того, как он примет приглашение. Закрыть доступ можно в любой момент.",
+                   parse_mode="HTML", reply_markup=kb_rows([[("✅ Отправить приглашение", f"sh:y:{sid}:{u.tg_id}")]], back=f"s:sh:{sid}", back_text="← Отмена"))
+
+
+@router.callback_query(F.data.startswith("sh:y:"))
+async def share_send(c: CallbackQuery):
+    _, _, sid, to = c.data.split(":")
+    try:
+        await sh.invite(ctx(), c.from_user.id, int(sid), to)
+    except UserError as ex:
+        return await c.answer(str(ex)[:190], show_alert=True)
+    await c.answer("✅ Приглашение отправлено")
+    srv = await _own(c, int(sid))
+    if srv:
+        await _share_screen(c, srv)
+
+
+@router.callback_query(F.data.startswith("sh:r:"))
+async def share_remove(c: CallbackQuery):
+    shid = int(c.data.split(":")[2])
+    try:
+        await sh.remove(ctx(), shid, c.from_user.id)
+    except UserError as ex:
+        await c.answer(str(ex)[:190], show_alert=True)
+    else:
+        await c.answer("Готово")
+    async with session() as s:
+        row = await s.get(ServerShare, shid)
+    srv = await _own(c, row.server_id) if row else None
+    if srv:
+        await _share_screen(c, srv)
+
+
+@router.callback_query(F.data.startswith("sh:a:") | F.data.startswith("sh:d:"))
+async def share_answer(c: CallbackQuery):
+    _, act, shid = c.data.split(":")
+    try:
+        if act == "a":
+            r = await sh.accept(ctx(), int(shid), c.from_user.id)
+        else:
+            await sh.decline(ctx(), int(shid), c.from_user.id)
+    except UserError as ex:
+        await c.answer(str(ex)[:190], show_alert=True)
+        try:
+            await c.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
+        return
+    if act == "a":
+        await c.answer("✅ Доступ открыт")
+        await show(c, f"✅ <b>Сервер {e(r['name'])} теперь в вашем списке</b>\n\nОн отмечен 👥 в «Мои серверы» и в личном кабинете.",
+                   kb_rows([[("🖥 Открыть сервер", f"s:v:{r['server_id']}")]], back="s:list", back_text="← Мои серверы"))
+    else:
+        await c.answer("Приглашение отклонено")
+        await show(c, "❌ <b>Приглашение отклонено</b>", None)
+
+
+@router.callback_query(F.data.startswith("sh:l:"))
+async def share_leave_confirm(c: CallbackQuery):
+    a = await _access(c, int(c.data.split(":")[2]))
+    if not a:
+        return
+    srv, role = a
+    if role != "member":
+        return await c.answer("Это ваш сервер.", show_alert=True)
+    await show(c, f"🚪 <b>Выйти из доступа к {e(srv.name)}?</b>\n\nСервер пропадёт из вашего списка. Вернуть доступ сможет только владелец.",
+               kb_rows([[("🚪 Выйти", f"sh:ly:{srv.id}")]], back=f"s:v:{srv.id}", back_text="← Отмена"))
+
+
+@router.callback_query(F.data.startswith("sh:ly:"))
+async def share_leave(c: CallbackQuery):
+    try:
+        await sh.leave(ctx(), int(c.data.split(":")[2]), c.from_user.id)
+    except UserError as ex:
+        return await c.answer(str(ex)[:190], show_alert=True)
+    await c.answer("Вы вышли из доступа")
+    await servers_list(c)
+
+
 @router.callback_query(F.data.startswith("s:ar:"))
 async def toggle_autorenew(c: CallbackQuery):
     srv = await _own(c, int(c.data.split(":")[2]))
@@ -764,16 +951,21 @@ async def toggle_autorenew(c: CallbackQuery):
 
 @router.callback_query(F.data.startswith("s:rn:"))
 async def renew_now(c: CallbackQuery):
-    srv = await _own(c, int(c.data.split(":")[2]))
-    if not srv:
+    a = await _access(c, int(c.data.split(":")[2]))
+    if not a:
         return
+    srv, role = a
     await c.answer("🔄 Продлеваем…")
     try:
-        srv = await svc.renew_server(ctx(), srv.id)
+        srv = await svc.renew_server(ctx(), srv.id, payer=c.from_user.id)
     except UserError as ex:
         await c.message.answer(f"❌ {e(ex)}", parse_mode="HTML")
         return
-    await show(c, *await _card(srv))
+    if role == "member":
+        async with session() as s:
+            me = await s.get(User, c.from_user.id)
+        await ctx().notify(srv.tg_id, f"👥 {_uname(me)} продлил(а) сервер <b>{e(srv.name)}</b> на 30 дней со своего баланса.")
+    await show(c, *await _card(srv, role))
 
 
 @router.callback_query(F.data.startswith("s:a:"))
@@ -1147,10 +1339,10 @@ def make_poster(bot: Bot):
     return post, post_file
 
 
-def make_transfer_offer(bot: Bot):
+def make_transfer_offer(bot: Bot, prefix: str = "tr"):
     async def offer(tg_id: int, text: str, tid: int) -> None:
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять", callback_data=f"tr:a:{tid}"),
-                                                     InlineKeyboardButton(text="❌ Отклонить", callback_data=f"tr:d:{tid}")]])
+        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять", callback_data=f"{prefix}:a:{tid}"),
+                                                     InlineKeyboardButton(text="❌ Отклонить", callback_data=f"{prefix}:d:{tid}")]])
         try:
             await bot.send_message(tg_id, text, parse_mode="HTML", reply_markup=kb)
         except Exception:

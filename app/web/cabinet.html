@@ -344,11 +344,12 @@ function root() {
 
 // ───────── Серверы ─────────
 function serversView() {
-  const act = D.servers.filter(s => s.status === 'active');
+  const act = D.servers.filter(s => s.status === 'active' && s.role !== 'member');
   const monthly = act.reduce((a, s) => a + (+s.price_rub || 0), 0);
   const wrap = h('div', {}, header('Серверы', { sub: D.servers.length ? `${D.servers.length} ${UI.plural(D.servers.length, 'сервер', 'сервера', 'серверов')}` + (monthly ? ` · ${rub(monthly)} в месяц` : '') : null }));
   // входящие передачи: друг отправил сервер — принять или отклонить
   ((D.transfers && D.transfers.incoming) || []).forEach(t => wrap.append(transferOfferCard(t)));
+  (D.share_invites || []).forEach(t => wrap.append(shareOfferCard(t)));
   if (!D.servers.length) {
     wrap.append(h('div', { class: 'empty' }, icon('server'), h('b', {}, 'Пока нет серверов'),
       'Соберите конфигурацию — сервер будет готов через 1–3 минуты.',
@@ -364,11 +365,14 @@ function serversView() {
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
         h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name), h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—'))),
         h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
-      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.speed ? specChip('globe', s.speed) : null, s.auto_renew ? specChip('renew', 'Автопродление') : null),
+      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.speed ? specChip('globe', s.speed) : null,
+        s.role === 'member' ? specChip('users', 'Общий доступ')
+          : (s.members || []).some(m => m.status === 'active') ? specChip('users', 'Доступ: ' + (s.members || []).filter(m => m.status === 'active').length) : null,
+        s.auto_renew && s.role !== 'member' ? specChip('renew', 'Автопродление') : null),
       days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
         h('div', { class: 'term-row' }, h('span', {}, days > 0 ? `Осталось ${days} ${UI.plural(days, 'день', 'дня', 'дней')}` : 'Срок истёк'), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
   });
-  const due = D.servers.filter(s => s.days_left != null && s.days_left < 3 && !s.auto_renew);
+  const due = D.servers.filter(s => s.role !== 'member' && s.days_left != null && s.days_left < 3 && !s.auto_renew);
   if (due.length) wrap.append(h('div', { class: 'group-f', style: 'margin:2px var(--gutter) 22px' }, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.'));
   wrap.append(h('div', { style: 'margin:12px var(--gutter) 24px' }, h('button', { class: 'btn secondary', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Новый сервер')));
   return wrap;
@@ -420,6 +424,8 @@ function serverView(id) {
     h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('reboot', { done: 'Сервер перезагружается', ask: { title: 'Перезагрузить сервер?', message: 'Соединения на несколько секунд прервутся.', buttons: [{ id: 'y', text: 'Перезагрузить' }] } }) }, h('span', {}, icon('restart')), 'Перезагрузить'),
     h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('stop', { done: 'Сервер выключается', ask: { title: 'Выключить сервер?', message: 'Сайты и сервисы на нём станут недоступны, пока вы его не включите.', buttons: [{ id: 'y', text: 'Выключить', type: 'destructive' }] } }) }, h('span', {}, icon('stop')), 'Выключить')));
 
+  if (s.role === 'member') return memberTail(v, s, live, act);
+
   v.append(group('Оплата', [
     row({ title: 'Оплачен до', detail: UI.date(s.expires_at) }),
     row({ title: 'Стоимость', detail: rub(s.price_rub) + ' в месяц' }),
@@ -450,6 +456,25 @@ function serverView(id) {
 
   v.append(group(null, [row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', sub: 'Вопрос по этому серверу', onClick: () => UI.nav.push(() => newTicketView(s.id)) })]));
 
+  // общий доступ
+  const mem = s.members || [];
+  if (D.shares_enabled !== false && (live || mem.length)) {
+    const rows = mem.map(m => {
+      const u = m.user || {};
+      return row({ icon: 'person', tile: m.status === 'active' ? '#34C759' : '#FBBF5B', title: (u.first_name || 'Клиент') + (u.username ? ' @' + u.username : ''),
+        sub: m.status === 'active' ? 'Есть доступ' : 'Приглашён, ждём ответа', detail: m.status === 'active' ? 'Закрыть' : 'Отменить',
+        onClick: async () => {
+          const ok = await UI.ask(m.status === 'active'
+            ? { title: 'Закрыть доступ?', message: `Сервер пропадёт из списка у ${u.first_name || 'клиента'}. Если он знает пароль root, смените его.`, buttons: [{ id: 'y', text: 'Закрыть доступ', type: 'destructive' }] }
+            : { title: 'Отменить приглашение?', message: 'Приглашение перестанет действовать.', buttons: [{ id: 'y', text: 'Отменить приглашение', type: 'destructive' }] });
+          if (!ok) return;
+          if (await UI.run(() => api(`/shares/${m.id}/remove`, 'POST'), m.status === 'active' ? 'Доступ закрыт' : 'Приглашение отменено') !== undefined) await refresh();
+        } });
+    });
+    if (live && mem.length < 5) rows.push(row({ icon: 'users', tile: '#8B8CFF', title: 'Пригласить', cls: mem.length ? '' : 'wrap', sub: mem.length ? null : 'Сервер появится и у друга — по @username или ID', onClick: () => shareSheet(s) }));
+    v.append(group('Общий доступ', rows, 'Участники видят IP и пароль, включают, выключают и перезагружают сервер, открывают VNC и могут продлить его со своего баланса. Остальное — только у вас.'));
+  }
+
   // передача другу
   const out = ((D.transfers && D.transfers.outgoing) || []).find(t => t.server_id === s.id);
   if (out) {
@@ -472,6 +497,66 @@ function serverView(id) {
     await load(); UI.nav.back();
   } })], `Вернём ${rub(s.refund_rub)} за неиспользованные дни.`));
   return v;
+}
+
+function memberTail(v, s, live, act) {
+  const o = s.owner || {};
+  v.append(group('Оплата', [
+    row({ title: 'Оплачен до', detail: UI.date(s.expires_at) }),
+    row({ title: 'Стоимость', detail: rub(s.price_rub) + ' в месяц' }),
+    row({ title: 'Продлить со своего баланса', cls: 'accent', onClick: async () => {
+      const ok = await UI.ask({ title: 'Продлить сервер?', message: `Спишем ${rub(s.price_rub)} с вашего баланса — сервер владельца продлится на 30 дней. Сейчас на балансе ${rub(D.balance_rub)}.`, buttons: [{ id: 'y', text: 'Продлить' }] });
+      if (!ok) return;
+      if (await UI.run(() => api(`/servers/${s.id}/renew`, 'POST'), 'Продлено на 30 дней') !== undefined) await refresh();
+    } }),
+  ], 'Автопродление и остальные настройки — у владельца.'));
+  v.append(group('Управление', [
+    row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
+  ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
+  v.append(group('Общий доступ', [
+    row({ icon: 'person', tile: '#8B8CFF', title: 'Владелец', detail: (o.first_name || 'Клиент') + (o.username ? ' @' + o.username : '') }),
+    row({ title: 'Выйти из доступа', cls: 'destructive', onClick: async () => {
+      const ok = await UI.ask({ title: 'Выйти из доступа?', message: 'Сервер пропадёт из вашего списка. Вернуть доступ сможет только владелец.', buttons: [{ id: 'y', text: 'Выйти', type: 'destructive' }] });
+      if (!ok) return;
+      if (await UI.run(() => api(`/servers/${s.id}/leave`, 'POST'), 'Вы вышли из доступа') === undefined) return;
+      await load(); UI.nav.back();
+    } }),
+  ], 'Переустановка, сброс пароля, смена IP, удаление и передача — только у владельца.'));
+  return v;
+}
+
+function shareSheet(s) {
+  UI.sheet('Общий доступ', close => {
+    const inp = h('input', { type: 'text', placeholder: '@username или Telegram ID', autocapitalize: 'off', spellcheck: false, autocomplete: 'off', 'aria-label': 'Кому открыть доступ' });
+    const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Пригласить');
+    inp.addEventListener('input', () => { go.disabled = inp.value.trim().length < 3; });
+    go.onclick = UI.busy(go, async () => {
+      const r = await UI.run(() => api(`/servers/${s.id}/share`, 'POST', { to: inp.value.trim() }));
+      if (r === undefined) return;
+      close(); UI.toast('Приглашение отправлено'); await refresh();
+    });
+    setTimeout(() => inp.focus(), 350);
+    return h('div', {}, h('section', { class: 'group' }, h('div', { class: 'list' }, h('label', { class: 'field stack' }, h('label', {}, 'Кому'), inp)),
+      h('div', { class: 'group-f' }, 'Друг должен быть клиентом бота. Он получит приглашение в Telegram, и после принятия сервер появится у него в списке. Сервер остаётся вашим, доступ можно закрыть в любой момент.')),
+      h('div', { style: 'margin:0 var(--gutter)' }, go));
+  });
+}
+
+function shareOfferCard(t) {
+  const u = t.user || {};
+  const act = a => async () => {
+    if (await UI.run(() => api(`/shares/${t.id}/${a}`, 'POST'), a === 'accept' ? 'Сервер добавлен в ваш список' : 'Приглашение отклонено') !== undefined) await refresh();
+  };
+  return h('div', { class: 'server-card', style: 'cursor:default;box-shadow:var(--shadow-card),inset 0 0 0 1.5px var(--accent)' },
+    h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, t.flag),
+      h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, 'Доступ к ' + t.server),
+        h('div', { class: 'ip', style: 'font-family:inherit' }, 'от ' + (u.first_name || '') + (u.username ? ' @' + u.username : ''))),
+      h('span', { class: 'badge accent' }, 'Приглашение')),
+    h('div', { class: 'specs' }, specChip('cpu', t.cpu + ' vCPU'), specChip('ram', t.ram + ' ГБ'), specChip('drive', t.disk + ' ГБ')),
+    h('div', { class: 'group-f', style: 'margin:10px 0 0;padding:0' }, 'Сервер останется у владельца. Вы сможете управлять питанием, открывать VNC и продлевать его.'),
+    h('div', { style: 'display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px' },
+      h('button', { class: 'btn secondary', type: 'button', style: 'min-height:44px', onclick: act('decline') }, 'Отклонить'),
+      h('button', { class: 'btn', type: 'button', style: 'min-height:44px', onclick: act('accept') }, 'Принять')));
 }
 
 function transferSheet(s) {

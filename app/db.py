@@ -148,6 +148,20 @@ class Server(Base):
     period_months: Mapped[float] = mapped_column(Float, default=1.0)
 
 
+class ServerShare(Base):
+    """Общий доступ к серверу: владелец приглашает другого клиента, тот видит сервер у себя."""
+    __tablename__ = "server_shares"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    owner_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    member_tg: Mapped[int] = mapped_column(BigInteger, index=True)
+    # pending | active | declined | cancelled | revoked | left | expired
+    status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+    accepted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
 class ServerTransfer(Base):
     """Передача сервера другому клиенту: ждёт согласия получателя 24 часа."""
     __tablename__ = "server_transfers"
