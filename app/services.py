@@ -417,7 +417,6 @@ _LINK_KEYS = ("url", "link", "vnc_url", "console_url", "vnc", "console", "href",
 
 def vnc_link(resp) -> str | None:
     """Ссылка на консоль из ответа Astra: ищем по известным полям, затем любую http(s)-ссылку в любом месте ответа."""
-    import re
 
     def walk(x, depth=0):
         if depth > 5:
@@ -442,7 +441,32 @@ def vnc_link(resp) -> str | None:
                     return r
         return None
 
-    return walk(resp)
+    found = walk(resp)
+    if found:
+        return found
+    # запасной вариант: адрес без схемы или только токен консоли (формат ссылок Astra: https://vnc.astravps.co/<токен>)
+    def strings(x, key="", depth=0):
+        if depth > 5:
+            return
+        if isinstance(x, str):
+            yield key, x
+        elif isinstance(x, dict):
+            for k, v in x.items():
+                yield from strings(v, str(k).lower(), depth + 1)
+        elif isinstance(x, (list, tuple)):
+            for v in x:
+                yield from strings(v, key, depth + 1)
+    for key, val in strings(resp):
+        v = val.strip()
+        m = re.match(r"^(?://)?(vnc\.[a-z0-9.-]+/\S+)$", v, re.I)
+        if m:
+            return "https://" + m.group(1)
+        if key in ("token", "vnc_token", "console_token", "key", "session", "hash", "id", "code") and re.fullmatch(r"[A-Za-z0-9_-]{20,128}", v):
+            return VNC_BASE + v
+    return None
+
+
+VNC_BASE = "https://vnc.astravps.co/"
 
 
 async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:
