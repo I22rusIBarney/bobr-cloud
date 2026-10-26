@@ -438,7 +438,7 @@ function healthView() {
 
 // ───────── уведомления и бэкапы ─────────
 const BK_LABEL = { 6: 'каждые 6 ч', 12: 'каждые 12 ч', 24: 'раз в сутки', 168: 'раз в неделю' };
-const EV_ICON = { health: ['stack', '#34C759'], security: ['shield', '#FF9500'], alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
+const EV_ICON = { health: ['stack', '#34C759'], security: ['shield', '#FF9500'], alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], locations: ['globe', '#34AADC'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
 function eventsView() {
   const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   api('events').then(info => {

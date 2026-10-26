@@ -78,8 +78,8 @@ DEFAULTS: dict[str, Any] = {
     "ref_months": 6,             # сколько месяцев после приглашения начисляем (0 — всегда)
     "ref_welcome_rub": 100,      # бонус приглашённому после его первой оплаты
     # куда слать служебные события: чат (@канал или -100…), пусто — личка админов
-    **{f"ev_{k}_on": True for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups", "health", "security")},
-    **{f"ev_{k}_chat": "" for k in ("alerts", "tickets", "sales", "payments", "referrals", "backups", "health", "security")},
+    **{f"ev_{k}_on": True for k in ("alerts", "tickets", "sales", "locations", "payments", "referrals", "backups", "health", "security")},
+    **{f"ev_{k}_chat": "" for k in ("alerts", "tickets", "sales", "locations", "payments", "referrals", "backups", "health", "security")},
     "health_enabled": True,      # мониторинг сервисов
     "health_interval_min": 5,    # как часто проверять, минут
     "health_daily": True,        # сводка раз в сутки

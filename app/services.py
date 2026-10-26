@@ -1436,19 +1436,19 @@ async def watch_locations(ctx: Ctx) -> None:
         if code not in known:
             if v["on"]:
                 price = fmt_rub(sell_price_kop(v["from"], cfg)) if v["from"] is not None else "—"
-                await events.emit(ctx, "sales", f"🆕 <b>Новая локация в продаже: {name}</b>\n\nТарифов: {v['offers']}, цена клиенту от {price} в месяц"
+                await events.emit(ctx, "locations", f"🆕 <b>Новая локация в продаже: {name}</b>\n\nТарифов: {v['offers']}, цена клиенту от {price} в месяц"
                                   + (f"\nКанал: {html.escape(v['channel'])}" if v["channel"] else "")
                                   + (f"\n📍 {html.escape(v['description'])}" if v.get("description") else "")
                                   + "\n\nУже доступна в боте и кабинете. Проверьте наценку в «Тарифы и маржа».")
             else:
-                await events.emit(ctx, "sales", f"🆕 <b>У Astra появилась локация {name}</b>\n\nПока без доступных тарифов — в продаже появится автоматически, как только Astra откроет заказы.")
+                await events.emit(ctx, "locations", f"🆕 <b>У Astra появилась локация {name}</b>\n\nПока без доступных тарифов — в продаже появится автоматически, как только Astra откроет заказы.")
         elif v["on"] and not known.get(code):
-            await events.emit(ctx, "sales", f"✅ <b>Локация {name} снова в продаже</b> — тарифов: {v['offers']}.")
+            await events.emit(ctx, "locations", f"✅ <b>Локация {name} снова в продаже</b> — тарифов: {v['offers']}.")
         elif not v["on"] and known.get(code):
-            await events.emit(ctx, "sales", f"⚠️ <b>Локация {name} недоступна</b>\n\nAstra закрыла заказы или убрала тарифы — клиенты её не видят. Текущие серверы работают.")
+            await events.emit(ctx, "locations", f"⚠️ <b>Локация {name} недоступна</b>\n\nAstra закрыла заказы или убрала тарифы — клиенты её не видят. Текущие серверы работают.")
     for code in known:
         if code not in now and known[code]:
-            await events.emit(ctx, "sales", f"⚠️ <b>Локация {flag(code)} {code.upper()} пропала из каталога Astra</b>\n\nКлиенты её больше не видят. Текущие серверы работают.")
+            await events.emit(ctx, "locations", f"⚠️ <b>Локация {flag(code)} {code.upper()} пропала из каталога Astra</b>\n\nКлиенты её больше не видят. Текущие серверы работают.")
 
 
 async def check_astra_balance(ctx: Ctx) -> None:
