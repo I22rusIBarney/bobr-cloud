@@ -26,6 +26,9 @@ class Env(BaseSettings):
     # свой домен для консоли VNC (прокси на vnc.astravps.co через Caddy): bcloud vnc vnc.example.com
     vnc_domain: str = ""
 
+    # служебный API /api/svc для своих ботов (бот развёртывания нод); пусто — выключен. bcloud api-token
+    service_token: str = ""
+
     database_url: str = "sqlite+aiosqlite:///data/bot.db"
     web_host: str = "0.0.0.0"
     web_port: int = 8080

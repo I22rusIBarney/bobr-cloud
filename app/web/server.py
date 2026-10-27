@@ -202,6 +202,12 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     app.include_router(build_cabinet(ctx))
 
+    # ───── служебный API для своих ботов (SERVICE_TOKEN) ─────
+
+    from .service_api import build_service_router
+
+    app.include_router(build_service_router(ctx))
+
     @app.get("/app", response_class=FileResponse)
     async def cabinet_page():
         return FileResponse(HERE / "cabinet.html", headers={"Cache-Control": "no-store"})

@@ -7,3 +7,5 @@ __pycache__/
 # генерируется установщиком под ваш домен
 Caddyfile
 *.zip
+# сайты других программ за Caddy bcloud (bcloud site add)
+sites/
