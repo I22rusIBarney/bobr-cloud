@@ -145,6 +145,20 @@ async def remove(ctx, server_id: int, refund: bool, admin_id: int) -> dict:
     return {"refund_rub": kop / 100}
 
 
+async def change_ip(ctx, server_id: int, admin_id: int, charge: bool) -> dict:
+    """Смена IP сервера клиента из админки: с баланса клиента (как его кнопка) или за счёт сервиса. Клиенту — уведомление."""
+    import html
+    from .services import server_action
+    srv = await _get(server_id)
+    old = srv.ip
+    await server_action(ctx, srv.tg_id, server_id, "change-ip", actor=admin_id, free=not charge)
+    srv = await _get(server_id)
+    if srv.ip and srv.ip != old:
+        await ctx.notify(srv.tg_id, f"🔁 <b>IP-адрес сервера {html.escape(srv.name or '')} сменён</b>\n\n"
+                                    f"Новый IP: <code>{html.escape(srv.ip)}</code>")
+    return {"ok": True, "ip": srv.ip, "old_ip": old}
+
+
 async def action(ctx, server_id: int, act: str, admin_id: int) -> dict:
     from .services import server_action
     if act not in ("start", "stop", "reboot", "vnc"):

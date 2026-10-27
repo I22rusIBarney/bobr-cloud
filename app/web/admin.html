@@ -857,6 +857,13 @@ function serverSheet(c, x, reload) {
         row({ icon: 'restart', tile: '#FF9500', title: 'Перезагрузить', onClick: async () => {
           if (await sure('Перезагрузить сервер?', `${x.name} клиента ${nameOf(c)} перезагрузится, сайты на нём будут недоступны пару минут.`, 'Перезагрузить') && await call('reboot', null, 'Перезагрузка запущена') !== undefined) close();
         } }),
+        row({ icon: 'globe', tile: '#0A84FF', title: 'Сменить IP', sub: x.ip || '', onClick: async () => {
+          const ans = await UI.ask({ title: 'Сменить IP?', message: `${x.name} клиента ${nameOf(c)} получит новый IP-адрес (старый ${x.ip || '—'}), сервер может перезагрузиться. Клиенту придёт уведомление с новым IP.`,
+            buttons: [{ id: 'free', text: 'Бесплатно для клиента' }, { id: 'charge', text: 'С баланса клиента' }] });
+          if (!ans) return;
+          const r = await call('change_ip', { charge: ans === 'charge' }, 'IP сменён');
+          if (r) { UI.toast(r.ip && r.ip !== r.old_ip ? 'Новый IP: ' + r.ip : 'Смена IP запущена'); done(); }
+        } }),
         row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: async () => {
           const r = await call('vnc'); if (r && r.link) { UI.openLink(r.link); close(); } else if (r) UI.toast('Консоль запрошена — ссылка не пришла, попробуйте ещё раз');
         } }),

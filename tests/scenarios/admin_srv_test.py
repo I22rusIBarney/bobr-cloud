@@ -29,8 +29,12 @@ class FakeAstra:
         s.n += 1; p = PRESETS[kw.get("idx", 0)]
         return {"id": s.n, "spec": {"cpu": p["cpu"], "ram": p["ram"], "disk": p["disk"], "os": kw["os"]}, "charged_rub": 188, "expires_in_days": 30}
     async def servers(s): return []
-    async def server(s, sid): return {"id": sid, "status": "active", "renew_month_rub": s.renew_price}
-    async def action(s, sid, a, body=None): s.actions.append((sid, a, body)); return {"ok": True, "url": "https://vnc.astravps.co/tok"} if a == "vnc" else {"ok": True}
+    async def server(s, sid): return {"id": sid, "status": "active", "renew_month_rub": s.renew_price, **({"ip": s.ips[sid]} if sid in getattr(s, "ips", {}) else {})}
+    async def action(s, sid, a, body=None):
+        s.actions.append((sid, a, body))
+        if a == "change-ip":
+            s.ips = {**getattr(s, "ips", {}), sid: f"203.0.113.{sid % 250}"}
+        return {"ok": True, "url": "https://vnc.astravps.co/tok"} if a == "vnc" else {"ok": True}
     async def delete(s, sid): s.actions.append((sid, "delete", None)); return {"ok": True}
     async def close(s): pass
 
@@ -140,6 +144,16 @@ async def main():
         ok(any(i["action"] == "renew_free" and i["who"] == "Поддержка" for i in items), "в журнале клиента — «Поддержка», без имени админа")
         r = await c.post(f"/api/admin/servers/{small}/reboot", headers=HA, json={}); ok(r.status_code == 200 and astra.actions[-1][1] == "reboot", "перезагрузка админом")
         r = await c.post(f"/api/admin/servers/{small}/vnc", headers=HA, json={}); ok(r.status_code == 200 and r.json().get("link"), "VNC админом — ссылка")
+        bal_c = (await c.get("/api/me", headers=A)).json()["balance_rub"]
+        msgs.clear()
+        r = await c.post(f"/api/admin/servers/{small}/change_ip", headers=HA, json={"charge": False})
+        async with D.session() as s:
+            ip_now = (await s.get(D.Server, small)).ip
+        ok(r.status_code == 200 and r.json()["ip"] == ip_now and ip_now and ip_now.startswith("203.0.113.")
+           and (await c.get("/api/me", headers=A)).json()["balance_rub"] == bal_c, f"смена IP админом бесплатно: {r.text[:200]}")
+        ok(any("Новый IP" in t for _, t in msgs), "клиенту пришёл новый IP")
+        r = await c.post(f"/api/admin/servers/{small}/change_ip", headers=HA, json={"charge": True})
+        ok(r.status_code == 200 and (await c.get("/api/me", headers=A)).json()["balance_rub"] < bal_c, "смена IP админом с баланса клиента")
         r = await c.post(f"/api/admin/servers/{small}/format", headers=HA, json={}); ok(r.status_code == 400, "неизвестное действие — 400")
         r = await c.post(f"/api/admin/servers/{small}/reboot", headers=B, json={}); ok(r.status_code in (401, 403), "клиент не может звать админские действия")
         msgs.clear()
