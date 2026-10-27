@@ -62,3 +62,12 @@ jobs:
             org.opencontainers.image.revision=${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Образ доступен серверам без логина
+        run: |
+          tok=$(curl -fsS "https://ghcr.io/token?scope=repository:${IMG#ghcr.io/}:pull" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' || true)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $tok" \
+            -H 'Accept: application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.v2+json,application/vnd.oci.image.manifest.v1+json' \
+            "https://ghcr.io/v2/${IMG#ghcr.io/}/manifests/sha-${GITHUB_SHA}")
+          if [ "$code" = 200 ]; then echo "Образ публичный — bcloud update скачает его"; else
+            echo "::warning::Пакет ${IMG} приватный (HTTP $code): серверы не смогут его скачать и будут собирать сами. Откройте Packages → bobr-cloud → Package settings → Change visibility → Public."
+          fi
