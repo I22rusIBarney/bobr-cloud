@@ -29,6 +29,53 @@ EOF
   chmod 755 /usr/local/bin/bcloud
 }
 
+# ───────── Готовый образ из GitHub ─────────
+# Образ собирается в GitHub Actions после прохождения тестов (ghcr.io/<владелец>/<репозиторий>:sha-<коммит>).
+# Сервер только скачивает изменившиеся слои — без сборки и pip на VPS. Нет образа — собираем на месте.
+gh_repo() { git config --get remote.origin.url 2>/dev/null | sed -E 's#(\.git)?/*$##; s#^.*github\.com[:/]##'; }
+pull_image() {  # $1 — полный sha коммита. 0 — образ скачан, 1 — собрать на сервере, 2 — тесты не прошли
+  local sha="$1" repo img st waited=0
+  [[ "${BCLOUD_BUILD:-}" == 1 ]] && return 1          # BCLOUD_BUILD=1 bcloud update — всегда собирать на месте
+  repo="$(gh_repo)"; [[ -n "$repo" ]] || return 1
+  img="ghcr.io/${repo,,}:sha-$sha"
+  while :; do
+    if docker pull -q "$img" >/dev/null 2>&1; then
+      env_set BOBR_IMAGE "$img"
+      # старые версии образа больше не нужны
+      docker images "ghcr.io/${repo,,}" --format '{{.Repository}}:{{.Tag}}' | grep -vx "$img" | xargs -r docker rmi >/dev/null 2>&1 || true
+      return 0
+    fi
+    st="$(curl -fsS -m 10 "https://api.github.com/repos/$repo/actions/runs?head_sha=$sha&per_page=5" 2>/dev/null | tr -d ' \n' || true)"
+    [[ "$st" == *'"head_sha"'* ]] || { [[ $waited -gt 0 ]] && warn "Не дождался образа — собираю на сервере"; return 1; }
+    [[ "$st" == *'"conclusion":"failure"'* ]] && return 2
+    if [[ "$st" != *'"status":"queued"'* && "$st" != *'"status":"in_progress"'* && "$st" != *'"status":"waiting"'* ]]; then
+      warn "Готового образа для этого сервера нет — собираю на месте"; return 1
+    fi
+    (( waited >= 600 )) && { warn "GitHub собирает дольше 10 минут — собираю на сервере"; return 1; }
+    (( waited == 0 )) && say "Новая версия ещё проходит тесты и собирается на GitHub (обычно 2–3 минуты), жду…"
+    sleep 20; waited=$((waited + 20))
+  done
+}
+# запуск: готовый образ из GitHub или сборка на месте. $1 — к какой версии откатиться, если тесты не прошли
+deploy() {
+  local sha rc=1
+  sha="$(git rev-parse HEAD 2>/dev/null || true)"
+  if [[ -n "$sha" ]]; then pull_image "$sha" && rc=0 || rc=$?; fi
+  if [[ $rc == 2 ]]; then
+    if [[ -n "${1:-}" ]] && git reset -q --keep "$1"; then
+      die "Тесты этой версии на GitHub не прошли — обновление отменено, бот продолжает работать на версии $1"
+    fi
+    die "Тесты этой версии на GitHub не прошли — обновление не применено (бот работает на прежней версии)"
+  fi
+  if [[ $rc == 0 ]]; then
+    ok "Готовый образ с GitHub скачан"
+    compose up -d
+  else
+    env_set BOBR_IMAGE "bobr-cloud-bot:local"
+    compose up -d --build
+  fi
+}
+
 # ───────── Caddy: основной домен и (по желанию) свой домен консоли VNC ─────────
 env_get() { [[ -f .env ]] && sed -n "s/^$1='\{0,1\}\([^']*\)'\{0,1\}$/\1/p" .env | tail -1; }
 env_set() {
@@ -288,14 +335,14 @@ case "${1:-install}" in
       after="$(git rev-parse --short HEAD)"
       if [[ "$before" == "$after" ]]; then ok "Уже последняя версия ($after)"; else ok "Код обновлён: $before → $after"; fi
       # дальше — уже свежей версией скрипта
-      exec ./install.sh _rebuild
+      exec ./install.sh _rebuild "$before"
     fi
     compose up -d --build; install_cli; ok "Обновлено"; exit 0 ;;
   _rebuild)
     # свой домен консоли: пересобираем Caddyfile, чтобы исправления прокси приходили с обновлением
     vd="$(env_get VNC_DOMAIN)"
     if [[ -n "$vd" ]]; then m="$(env_get PUBLIC_URL)"; m="${m#https://}"; m="${m%%/*}"; write_caddyfile "$m" "$vd"; fi
-    compose up -d --build
+    deploy "${2:-}"
     [[ -n "$vd" ]] && { compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy; }
     install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
   restart) compose restart bot; ok "Бот перезапущен"; exit 0 ;;
@@ -438,6 +485,7 @@ YOOKASSA_SECRET_KEY='${V[YOOKASSA_SECRET_KEY]:-}'
 NALOG_INN='${V[NALOG_INN]:-}'
 NALOG_PASSWORD='${V[NALOG_PASSWORD]:-}'
 VNC_DOMAIN='${V[VNC_DOMAIN]:-}'
+BOBR_IMAGE='${V[BOBR_IMAGE]:-}'
 EOF
 chmod 600 .env
 write_caddyfile "${V[DOMAIN]}" "${V[VNC_DOMAIN]:-}"
@@ -455,8 +503,8 @@ if ss -ltn 2>/dev/null | grep -E ':(80|443)\s' | grep -qv docker; then
 fi
 
 # ───────── Запуск ─────────
-say; say "Собираю и запускаю (первый раз 1–3 минуты)…"
-compose up -d --build
+say; say "Запускаю (первый раз 1–3 минуты)…"
+deploy
 install_cli
 
 say "Жду, пока сервис ответит по HTTPS…"

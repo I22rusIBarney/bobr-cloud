@@ -1,5 +1,7 @@
 services:
   bot:
+    # готовый образ из GitHub (bcloud update скачивает его), без него — сборка на сервере
+    image: ${BOBR_IMAGE:-bobr-cloud-bot:local}
     build: .
     restart: unless-stopped
     env_file: .env
