@@ -107,6 +107,7 @@ class ChatIn(BaseModel):
 class SrvActIn(BaseModel):
     to: str = ""
     refund: bool = True
+    charge: bool = False   # смена IP: с баланса клиента (True) или за счёт сервиса
 
 
 class MarkupIn(BaseModel):
@@ -705,6 +706,8 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
                 return await asv.remove(ctx, sid, p.refund, adm["id"])
             if act == "reprice":
                 return await asv.reprice(ctx, sid, adm["id"])
+            if act == "change_ip":
+                return await asv.change_ip(ctx, sid, adm["id"], p.charge)
             return await asv.action(ctx, sid, act, adm["id"])
         except UserError as ex:
             raise HTTPException(400, str(ex))

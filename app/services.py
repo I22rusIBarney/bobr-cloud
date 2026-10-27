@@ -721,8 +721,10 @@ async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]
     return srv, r
 
 
-async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body: dict | None = None, actor: int | None = None) -> dict:
-    """start | stop | reboot | reinstall | password | vnc | change-ip. actor — кто нажал (админ от имени владельца)."""
+async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body: dict | None = None, actor: int | None = None,
+                        free: bool = False) -> dict:
+    """start | stop | reboot | reinstall | password | vnc | change-ip. actor — кто нажал (админ от имени владельца).
+    free — смена IP за счёт сервиса, без списания с клиента (только из админки)."""
     from .shares import MEMBER_ACTIONS
 
     async with session() as s:
@@ -735,7 +737,7 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         if action == "reinstall" and body and not os_fits(cfg, body.get("os", ""), srv.cpu, srv.ram, srv.disk):
             raise UserError(os_req_text(body["os"], os_requirement(cfg, body["os"])) + " Сначала увеличьте мощность сервера.")
         charge = 0
-        if action == "change-ip":
+        if action == "change-ip" and not free:
             payer = await s.get(User, tg_id)
             charge = change_ip_price_kop(cfg, payer)
             if not await change_balance(s, tg_id, -charge, "change_ip", str(srv.astra_id)):
