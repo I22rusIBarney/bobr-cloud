@@ -185,6 +185,7 @@ function rootView() {
     toggleRow('Автопродление по умолчанию', 'auto_renew_default'),
     toggleRow('Чеки после пополнения', 'receipts_enabled', INT && !INT.nalog.configured ? 'Сначала подключите «Мой налог»' : null),
     toggleRow('Автоплатежи', 'autopay_available', 'Включайте, когда ЮKassa подключит рекуррентные платежи'),
+    toggleRow('Рассылка о новых локациях', 'loc_announce', 'Сама уходит клиентам с согласием на рекламу, когда Astra открывает новую страну'),
     toggleRow('Своя конфигурация', 'custom_enabled', 'Клиент собирает CPU, память и диск ползунками — цену считает Astra'),
     toggleRow('Передача серверов', 'transfers_enabled', 'Клиенты могут передать сервер другому клиенту бота'),
     toggleRow('Общий доступ к серверам', 'shares_enabled', 'Владелец может открыть доступ к серверу другим клиентам'),

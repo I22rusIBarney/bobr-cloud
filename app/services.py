@@ -1430,11 +1430,14 @@ async def watch_locations(ctx: Ctx) -> None:
             r.value = val
         await s.commit()
     if known is None:  # первый запуск — просто запоминаем
+        await _announced_init({c for c, v in now.items() if v["on"]})
         return
+    await _announced_init({c for c, v in now.items() if v["on"] and known.get(c)})
     for code, v in now.items():
         name = f"{flag(code)} {html.escape(v['name'])}"
         if code not in known:
             if v["on"]:
+                await _announce_queue(code)
                 price = fmt_rub(sell_price_kop(v["from"], cfg)) if v["from"] is not None else "—"
                 await events.emit(ctx, "locations", f"🆕 <b>Новая локация в продаже: {name}</b>\n\nТарифов: {v['offers']}, цена клиенту от {price} в месяц"
                                   + (f"\nКанал: {html.escape(v['channel'])}" if v["channel"] else "")
@@ -1443,12 +1446,106 @@ async def watch_locations(ctx: Ctx) -> None:
             else:
                 await events.emit(ctx, "locations", f"🆕 <b>У Astra появилась локация {name}</b>\n\nПока без доступных тарифов — в продаже появится автоматически, как только Astra откроет заказы.")
         elif v["on"] and not known.get(code):
+            await _announce_queue(code)  # объявляем, только если о ней ещё не сообщали (первое открытие продаж)
             await events.emit(ctx, "locations", f"✅ <b>Локация {name} снова в продаже</b> — тарифов: {v['offers']}.")
         elif not v["on"] and known.get(code):
             await events.emit(ctx, "locations", f"⚠️ <b>Локация {name} недоступна</b>\n\nAstra закрыла заказы или убрала тарифы — клиенты её не видят. Текущие серверы работают.")
     for code in known:
         if code not in now and known[code]:
             await events.emit(ctx, "locations", f"⚠️ <b>Локация {flag(code)} {code.upper()} пропала из каталога Astra</b>\n\nКлиенты её больше не видят. Текущие серверы работают.")
+
+
+# ── рассылка клиентам о новой локации ──
+# Объявляем каждую страну один раз — при первом открытии продаж. Если в этот момент идёт другая
+# рассылка, ждём в очереди до следующей проверки каталога.
+
+async def _setting_json(key: str, default):
+    import json as _json
+    from .db import Setting
+    async with session() as s:
+        row = await s.get(Setting, key)
+    try:
+        return _json.loads(row.value) if row else default
+    except ValueError:
+        return default
+
+
+async def _setting_put(key: str, value) -> None:
+    import json as _json
+    from .db import Setting
+    async with session() as s:
+        row = await s.get(Setting, key)
+        if row is None:
+            s.add(Setting(key=key, value=_json.dumps(value)))
+        else:
+            row.value = _json.dumps(value)
+        await s.commit()
+
+
+async def _announced_init(codes: set[str]) -> None:
+    """Локации, которые уже были в продаже до появления функции, не объявляем задним числом."""
+    if await _setting_json("announced_locations", None) is None:
+        await _setting_put("announced_locations", sorted(codes))
+
+
+async def _announce_queue(code: str) -> None:
+    done = set(await _setting_json("announced_locations", []))
+    pend = list(await _setting_json("loc_announce_pending", []))
+    if code not in done and code not in pend:
+        pend.append(code)
+        await _setting_put("loc_announce_pending", pend)
+
+
+def location_announce_text(code: str, loc: dict, price_kop: int | None) -> str:
+    name = clean_name(loc.get("name", "")) or code.upper()
+    lines = [f"🆕 <b>Новая локация — {flag(code)} {html.escape(name)}</b>", ""]
+    if price_kop:
+        lines.append(f"Серверы от <b>{fmt_rub(price_kop)}</b> в месяц, выдача за 1–3 минуты.")
+    if loc.get("description"):
+        lines.append(f"📍 {html.escape(loc['description'])}")
+    sp = channel_speed(loc.get("channel", ""))
+    if sp:
+        lines.append(f"🌐 Канал до {html.escape(sp)}")
+    return "\n".join(lines)
+
+
+async def announce_locations(ctx: Ctx) -> None:
+    """Отправляет ожидающие объявления о новых локациях — рассылкой «Новости» (только с согласием на рекламу)."""
+    from . import broadcasts, events
+    pend = list(await _setting_json("loc_announce_pending", []))
+    if not pend:
+        return
+    async with session() as s:
+        cfg = await load_settings(s)
+    if not cfg.get("loc_announce", True):
+        await _setting_put("loc_announce_pending", [])
+        return
+    cat = await ctx.catalog()
+    done = set(await _setting_json("announced_locations", []))
+    for code in list(pend):
+        loc = next((x for x in cat.get("locations", []) if x.get("code") == code), None)
+        offs = await offers(ctx, code) if loc and loc.get("available", True) else []
+        if not offs:  # уже закрыли — объявлять нечего, объявим при следующем открытии
+            pend.remove(code)
+            continue
+        text = location_announce_text(code, loc, min(o["price_kop"] for o in offs))
+        bot = getattr(ctx, "bot_username", "") or ""
+        try:
+            b = await broadcasts.create(ctx, 0, text, "all", "news", "🛒 Собрать сервер" if bot else "",
+                                        f"https://t.me/{bot}?start=loc_{code}" if bot else "")
+        except broadcasts.BroadcastError as ex:
+            if "другая рассылка" in str(ex):
+                break  # подождём окончания текущей
+            pend.remove(code)
+            done.add(code)
+            await events.emit(ctx, "locations", f"ℹ️ Рассылку о локации {flag(code)} {code.upper()} не отправили: {html.escape(str(ex))}")
+            continue
+        pend.remove(code)
+        done.add(code)
+        await events.emit(ctx, "locations", f"📣 <b>Клиентам ушла рассылка о локации {flag(code)} {html.escape(clean_name(loc.get('name', '')) or code.upper())}</b>\n\n"
+                                            f"Получателей: {b.total} (с согласием на рекламу).")
+    await _setting_put("loc_announce_pending", pend)
+    await _setting_put("announced_locations", sorted(done))
 
 
 async def check_astra_balance(ctx: Ctx) -> None:

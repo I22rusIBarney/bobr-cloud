@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import logging
+import re
 from datetime import datetime, timezone
 
 from aiogram import BaseMiddleware, Bot, F, Router
@@ -329,6 +330,12 @@ def home_kb(is_admin: bool = False) -> InlineKeyboardMarkup:
 @router.message(CommandStart())
 async def start(m: Message, state: FSMContext):
     await state.clear()
+    arg = (m.text or "").split(maxsplit=1)[1] if " " in (m.text or "") else ""
+    if re.fullmatch(r"loc_[a-z]{2,8}", arg):  # кнопка «Собрать сервер» из рассылки о новой локации
+        try:
+            return await tariffs_screen(m, arg[4:], m.from_user.id)
+        except Exception:
+            log.exception("start loc")
     await show(m, await home_text(m.from_user.id), home_kb(m.from_user.id in env().admins))
 
 
@@ -369,8 +376,12 @@ async def buy_locations(c: CallbackQuery):
 
 @router.callback_query(F.data.startswith("b:l:"))
 async def buy_tariffs(c: CallbackQuery):
-    loc = c.data.split(":")[2]
-    offs = await svc.offers(ctx(), loc, c.from_user.id)
+    await tariffs_screen(c, c.data.split(":")[2], c.from_user.id)
+
+
+async def tariffs_screen(c: Message | CallbackQuery, loc: str, uid: int):
+    """Тарифы локации — из меню покупки или по ссылке из рассылки (start=loc_cz)."""
+    offs = await svc.offers(ctx(), loc, uid)
     name = loc_name(await ctx().catalog(), loc)
     if not offs:
         await show(c, f"⚠️ <b>{svc.flag(loc)} {e(name)}</b>\n\nВ этой локации сейчас нет доступных тарифов.", kb_rows([], back="m:buy"))
