@@ -14,6 +14,7 @@ from .config import env
 from .db import Consent, Payment, PaymentMethod, Promo, PromoUse, Server, Tx, User, change_balance, session, utcnow
 from .legal import REQUIRED
 from . import referral
+from . import services as _svc
 from .services import UserError
 from .settings import fmt_rub, load_settings
 
@@ -280,6 +281,7 @@ async def client_card(tg_id: int) -> dict:
         "paid_total_rub": spent / 100,
         "servers": [{"id": x.id, "astra_id": x.astra_id, "name": x.name, "status": x.status, "location": x.location,
                      "cpu": x.cpu, "ram": x.ram, "disk": x.disk, "ip": x.ip, "price_rub": x.price_kop / 100, "cost_rub": x.cost_kop / 100,
+                     "refund_rub": _svc.refund_amount(_svc.paid_base(x), x.expires_at, cfg["refund_pct"], _svc.paid_months(x)) / 100 if x.status != "deleted" else 0,
                      "auto_renew": x.auto_renew, "expires_at": x.expires_at.isoformat() if x.expires_at else None} for x in servers],
         "methods": await methods(tg_id, include_deleted=True),
         "payments": [{"id": p.id, "amount_rub": p.amount_kop / 100, "status": p.status, "autopay": p.autopay, "receipt": p.receipt_status,

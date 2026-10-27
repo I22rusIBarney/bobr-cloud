@@ -1,0 +1,1 @@
+class TelegramBadRequest(Exception): pass

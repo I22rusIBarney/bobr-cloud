@@ -104,6 +104,11 @@ class ChatIn(BaseModel):
     chat: str
 
 
+class SrvActIn(BaseModel):
+    to: str = ""
+    refund: bool = True
+
+
 class MarkupIn(BaseModel):
     no_markup: bool | None = None   # старый переключатель
     mode: str | None = None         # default | custom | none
@@ -443,7 +448,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
                     "hidden": p["idx"] in cfg["hidden_presets"],
                 }
             )
-        return {"locations": cat.get("locations", []), "presets": presets}
+        oses = cat.get("os", [])
+        return {"locations": cat.get("locations", []), "presets": presets, "os": [{"code": o, "label": svc.os_label(o)} for o in oses],
+                "os_requirements": cfg.get("os_requirements") or {}}
 
     def bad(ex: UserError) -> HTTPException:
         return HTTPException(400, str(ex))
@@ -667,6 +674,34 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
             new = await save_settings(s, {"docs_version": int(cfg["docs_version"]) + 1, "docs_date": utcnow().astimezone().strftime("%d.%m.%Y")})
         return {"docs_version": new["docs_version"], "docs_date": new["docs_date"]}
+
+    # ───── серверы клиентов: действия админа и сторож маржи ─────
+
+    @app.get("/api/admin/margin")
+    async def margin(_: dict = Depends(admin)):
+        from .. import admin_servers as asv
+        return {"servers": await asv.loss_servers()}
+
+    @app.post("/api/admin/margin/reprice-all")
+    async def margin_all(adm: dict = Depends(admin)):
+        from .. import admin_servers as asv
+        return {"changed": await asv.reprice_all(ctx, adm["id"])}
+
+    @app.post("/api/admin/servers/{sid}/{act}")
+    async def admin_server_act(sid: int, act: str, p: SrvActIn, adm: dict = Depends(admin)):
+        from .. import admin_servers as asv
+        try:
+            if act == "renew_free":
+                return await asv.renew_free(ctx, sid, adm["id"])
+            if act == "move":
+                return await asv.move(ctx, sid, p.to, adm["id"])
+            if act == "delete":
+                return await asv.remove(ctx, sid, p.refund, adm["id"])
+            if act == "reprice":
+                return await asv.reprice(ctx, sid, adm["id"])
+            return await asv.action(ctx, sid, act, adm["id"])
+        except UserError as ex:
+            raise HTTPException(400, str(ex))
 
     @app.post("/api/admin/users/{tg_id}/balance")
     async def adjust_balance(tg_id: int, p: BalancePatch, adm: dict = Depends(admin)):

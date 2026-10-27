@@ -177,7 +177,8 @@ function rootView() {
     h('div', { class: 'field stack', style: 'padding-bottom:12px' }, h('label', { style: 'margin-bottom:8px' }, 'Округлять цену вверх до'), roundSeg),
   ], example));
   const shown = CAT ? CAT.presets.filter(p => !S.settings.hidden_presets.includes(p.idx)).length : null;
-  v.append(group(null, [row({ icon: 'tag', tile: '#34C759', title: 'Тарифы и маржа', detail: shown == null ? '' : `${shown} из ${CAT.presets.length}`, onClick: () => UI.nav.push(tariffsView) })]));
+  v.append(group(null, [row({ icon: 'tag', tile: '#34C759', title: 'Тарифы и маржа', detail: shown == null ? '' : `${shown} из ${CAT.presets.length}`, onClick: () => UI.nav.push(tariffsView) }),
+    row({ icon: 'alert', tile: '#FF3B30', title: 'Продление в минус', sub: 'серверы, которые Astra продлевает дороже, чем платит клиент', onClick: () => UI.nav.push(marginView) })]));
 
   // продажи
   v.append(group('Продажи', [
@@ -223,9 +224,10 @@ function rootView() {
     numField('Минимум пополнения', 'min_topup_rub', '₽'),
     numField('Максимум пополнения', 'max_topup_rub', '₽'),
     numField('Смена IP для клиента', 'change_ip_price_rub', '₽'),
+    numField('Смена IP без наценки', 'change_ip_cost_rub', '₽'),
     numField('Возврат при удалении', 'refund_pct', '%'),
     numField('Порог баланса Astra', 'low_balance_rub', '₽'),
-  ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽. Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
+  ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽ — клиенты без наценки платят «Смену IP без наценки». Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
 
   v.append(group(null, [
     row({ icon: 'text', tile: '#8E8E93', title: 'Тексты', onClick: () => UI.nav.push(textsView) }),
@@ -268,7 +270,36 @@ function tariffsView() {
   };
   paintSpeeds(); onSettings(speeds, paintSpeeds);
   v.append(speeds);
+
+  // минимальная мощность для ОС: Windows не встанет на 1 ГБ — такие ОС клиенту не предлагаем
+  const osBox = h('div');
+  const paintOS = () => {
+    const req = S.settings.os_requirements || {};
+    osBox.replaceChildren(group('Требования систем', (CAT.os || []).map(o => {
+      const cur = req[o.code];
+      return row({ title: o.label, detail: cur ? (([c, r, d]) => `${c} vCPU, ${r}/${d} ГБ`)(cur.split('-')) : 'любая', onClick: () => osReqSheet(o, cur) });
+    }), 'Минимум процессора, памяти и диска. Если тариф слабее, система не показывается при покупке и переустановке, а конструктор подскажет, сколько добавить.'));
+  };
+  paintOS(); onSettings(osBox, paintOS);
+  v.append(osBox);
   return v;
+}
+
+function osReqSheet(o, cur) {
+  UI.sheet(o.label, close => {
+    const [c0, r0, d0] = (cur || '--').split('-');
+    const mk = (label, val, unit) => { const i = h('input', { type: 'number', inputmode: 'numeric', 'aria-label': label, placeholder: '—' }); i.value = val || ''; return [i, h('label', { class: 'field' }, h('span', {}, label), i, h('span', { class: 'unit' }, unit))]; };
+    const [ci, cf] = mk('Процессор', c0, 'vCPU'), [ri, rf] = mk('Память', r0, 'ГБ'), [di, df] = mk('Диск', d0, 'ГБ');
+    const apply = val => {
+      const next = { ...(S.settings.os_requirements || {}) };
+      if (val) next[o.code] = val; else delete next[o.code];
+      setVal('os_requirements', next); close();
+    };
+    return h('div', {}, group('Минимум', [cf, rf, df], 'Например, для Windows Server: 2 vCPU, 2 ГБ, 40 ГБ.'),
+      h('div', { style: 'display:flex;flex-direction:column;gap:10px;padding:0 var(--gutter) 16px' },
+        h('button', { class: 'btn', type: 'button', onclick: () => apply([ci, ri, di].map(i => Math.max(1, Math.round(Number(i.value) || 1))).join('-')) }, 'Сохранить'),
+        cur ? h('button', { class: 'btn plain', type: 'button', onclick: () => apply('') }, 'Без требований') : null));
+  });
 }
 
 function speedSheet(key, title, cur) {
@@ -765,11 +796,11 @@ function clientBody(c) {
   const live = c.servers.filter(x => x.status !== 'deleted'), gone = c.servers.filter(x => x.status === 'deleted');
   out.push(group('Услуги', live.length ? live.map(x => {
     const [t, cl] = SRV[x.status] || [x.status, ''];
-    const left = x.expires_at ? Math.ceil((new Date(x.expires_at) - Date.now()) / 864e5) : null;
-    return row({ flag: UI.flag(x.location), title: x.name, cls: 'wrap',
+    const left = x.expires_at ? Math.floor((new Date(x.expires_at) - Date.now()) / 864e5) : null;
+    return row({ flag: UI.flag(x.location), title: x.name, cls: 'wrap', onClick: () => serverSheet(c, x, reload),
       sub: `#${x.astra_id} у Astra · ${x.ip || '—'}, ${x.cpu} vCPU, ${x.ram} ГБ, ${x.disk} ГБ\n${rub(x.price_rub)} в месяц, ${left == null ? '' : left >= 0 ? 'ещё ' + left + ' дн.' : 'истёк'}${x.auto_renew ? ', автопродление' : ''}`,
       right: h('span', { class: 'badge ' + cl }, t) });
-  }) : [row({ title: 'Нет активных услуг' })], gone.length ? `Удалённых серверов: ${gone.length}.` : null));
+  }) : [row({ title: 'Нет активных услуг' })], (gone.length ? `Удалённых серверов: ${gone.length}. ` : '') + (live.length ? 'Нажмите на сервер, чтобы продлить, перенести, перезагрузить или удалить его. Всё попадёт в журнал сервера.' : '')));
 
   // способы оплаты и автоплатёж
   const activeM = c.methods.filter(m => m.active), oldM = c.methods.filter(m => !m.active);
@@ -807,6 +838,85 @@ function clientBody(c) {
   const DOCN = { terms: 'Соглашение', aup: 'Правила', privacy: 'Политика', pd: 'Согласие ПД', autopay: 'Автоплатежи', ads: 'Реклама' };
   if (c.consents.length) out.push(group('Журнал согласий', c.consents.slice(0, 12).map(x => row({ title: (x.accepted ? '' : 'Отзыв: ') + (DOCN[x.doc] || x.doc), sub: `ред. ${x.version}  ·  ${x.source === 'bot' ? 'в боте' : 'в приложении'}`, detail: UI.date(x.created) })), 'Журнал подтверждает, когда и где клиент принял документы.'));
   return out;
+}
+
+// ───────── действия с сервером клиента ─────────
+function serverSheet(c, x, reload) {
+  const call = (act, body, ok) => UI.run(() => api(`servers/${x.id}/${act}`, 'POST', body || {}), ok);
+  const sure = (title, message, text, destructive) => UI.ask({ title, message, buttons: [{ id: 'y', text, type: destructive ? 'destructive' : 'default' }] });
+  UI.sheet(x.name, close => {
+    const done = () => { close(); reload(); };
+    const live = x.status === 'active' || x.status === 'suspended';
+    const loss = x.cost_rub && x.price_rub < x.cost_rub;
+    return h('div', {},
+      group(null, [
+        row({ title: 'Цена клиенту', detail: rub(x.price_rub) + ' / мес' }),
+        x.cost_rub ? row({ title: 'Продление у Astra', detail: rub(x.cost_rub), right: loss ? h('span', { class: 'badge bad' }, 'в минус') : null }) : null,
+      ].filter(Boolean)),
+      group('Сервер', [
+        row({ icon: 'restart', tile: '#FF9500', title: 'Перезагрузить', onClick: async () => {
+          if (await sure('Перезагрузить сервер?', `${x.name} клиента ${nameOf(c)} перезагрузится, сайты на нём будут недоступны пару минут.`, 'Перезагрузить') && await call('reboot', null, 'Перезагрузка запущена') !== undefined) close();
+        } }),
+        row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: async () => {
+          const r = await call('vnc'); if (r && r.link) { UI.openLink(r.link); close(); } else if (r) UI.toast('Консоль запрошена — ссылка не пришла, попробуйте ещё раз');
+        } }),
+      ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })),
+      group('Услуга', [
+        row({ icon: 'gift', tile: '#34C759', title: 'Продлить бесплатно', sub: '30 дней за счёт сервиса', onClick: async () => {
+          if (await sure('Продлить бесплатно?', `Astra продлит сервер за ваш счёт (${rub(x.cost_rub || x.price_rub)}), с баланса клиента ничего не спишем.`, 'Продлить') && await call('renew_free', null, 'Продлено на 30 дней') !== undefined) done();
+        } }),
+        loss ? row({ icon: 'tag', tile: '#FF3B30', title: 'Пересчитать цену', sub: 'со следующего продления', onClick: async () => {
+          const r = await call('reprice'); if (r) { UI.toast(r.changed ? 'Новая цена ' + rub(r.price_rub) : 'Цена не изменилась'); done(); }
+        } }) : null,
+        row({ icon: 'users', tile: '#0A84FF', title: 'Передать другому клиенту', onClick: () => { close(); moveSheet(c, x, reload); } }),
+        row({ icon: 'trash', tile: '#FF3B30', title: 'Удалить сервер', cls: 'danger', onClick: async () => {
+          const r1 = x.refund_rub ? ` Клиенту вернётся ${rub(x.refund_rub)}.` : '';
+          const ans = await UI.ask({ title: 'Удалить сервер?', message: `${x.name} будет удалён у Astra безвозвратно.${r1} Можно удалить без возврата — например, за нарушение правил.`,
+            buttons: [{ id: 'r', text: 'С возвратом', type: 'destructive' }, { id: 'n', text: 'Без возврата', type: 'destructive' }] });
+          if (!ans) return;
+          const r = await call('delete', { refund: ans === 'r' }); if (r) { UI.toast(r.refund_rub ? 'Удалён, вернули ' + rub(r.refund_rub) : 'Сервер удалён'); done(); }
+        } }),
+      ].filter(Boolean).map(r => { if (!live) r.classList.add('is-disabled'); return r; }), 'Действия записываются в журнал сервера от вашего имени.'));
+  });
+}
+
+function moveSheet(c, x, reload) {
+  UI.sheet('Передать сервер', close => {
+    const i = h('input', { type: 'text', placeholder: '@username или ID', autocapitalize: 'off', spellcheck: false, 'aria-label': 'Новый владелец', style: 'text-align:left' });
+    const go = h('button', { class: 'btn', type: 'button', disabled: true }, 'Передать');
+    i.addEventListener('input', () => { go.disabled = i.value.trim().length < 3; });
+    go.onclick = UI.busy(go, async () => {
+      const ok = await UI.ask({ title: 'Передать сервер?', message: `${x.name} перейдёт к ${i.value.trim()} без подтверждения. Общий доступ к серверу будет отозван, оба клиента получат уведомление.`, buttons: [{ id: 'y', text: 'Передать' }] });
+      if (!ok) return;
+      const r = await UI.run(() => api(`servers/${x.id}/move`, 'POST', { to: i.value.trim() }), 'Сервер передан');
+      if (r) { close(); reload(); }
+    });
+    return h('div', {}, group(x.name, [h('label', { class: 'field stack' }, h('label', {}, 'Кому'), i)], 'Новый владелец должен хотя бы раз запустить бота.'),
+      h('div', { style: 'margin:0 var(--gutter) 16px' }, go));
+  });
+}
+
+// ───────── продление в минус ─────────
+function marginView() {
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Продление в минус'));
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  v.append(list);
+  api('margin').then(r => {
+    if (!r.servers.length) { list.replaceChildren(h('div', { class: 'empty' }, icon('check'), h('b', {}, 'Всё в плюсе'), 'Если Astra поднимет цену продления купленных серверов, они появятся здесь, а в канал алертов придёт сообщение.')); return; }
+    const all = h('button', { class: 'btn', type: 'button' }, 'Пересчитать все');
+    all.onclick = UI.busy(all, async () => {
+      const ok = await UI.ask({ title: 'Пересчитать все цены?', message: `${r.servers.length} ${UI.plural(r.servers.length, 'клиент получит', 'клиента получат', 'клиентов получат')} уведомление о новой цене. Она начнёт действовать со следующего продления.`, buttons: [{ id: 'y', text: 'Пересчитать' }] });
+      if (!ok) return;
+      const x = await UI.run(() => api('margin/reprice-all', 'POST'));
+      if (x) { UI.toast('Обновлено: ' + x.changed); UI.nav.refresh(); }
+    });
+    list.replaceChildren(group(null, r.servers.map(x => row({ flag: x.flag, title: x.name, cls: 'wrap',
+      sub: h('span', {}, `${x.client} · #${x.astra_id}\nклиент ${rub(x.price_rub)}, Astra ${rub(x.cost_rub)} `, h('span', { class: 'margin neg' }, '−' + rub(x.loss_rub)), `\nновая цена: ${rub(x.new_price_rub)}`),
+      onClick: () => UI.nav.push(() => clientView(x.tg_id)) })),
+      'Клиенты продлевают по цене на момент покупки. Пересчёт ставит цену по текущей себестоимости и наценке клиента; оплаченный срок не меняется, клиенту придёт уведомление.'),
+      h('div', { style: 'margin:0 var(--gutter) 16px' }, all));
+  }).catch(e => list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return v;
 }
 
 function balanceSheet(c, reload) {

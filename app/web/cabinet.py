@@ -197,7 +197,7 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 "providers": svc.payment_providers(ctx, cfg),
                 "min_topup_rub": cfg["min_topup_rub"],
                 "max_topup_rub": cfg["max_topup_rub"],
-                "change_ip_price_rub": cfg["change_ip_price_rub"],
+                "change_ip_price_rub": svc.change_ip_price_kop(cfg, user) / 100,
                 "maintenance": cfg["maintenance"],
                 "welcome_text": cfg["welcome_text"],
                 "support": None,  # поддержка — через обращения в кабинете
@@ -401,7 +401,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
         conf = svc.configurator(cat) if cfg.get("custom_enabled", True) else None
         from .. import locwatch
         closed = await locwatch.closed_locations(ctx, m["id"])
-        return {"locations": out, "closed": closed, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
+        reqs = {o: r for o in oses if (r := svc.os_requirement(cfg, o))}
+        return {"locations": out, "closed": closed, "os_requirements": reqs, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
                 "periods": svc.period_options(cfg, cat), "configurator": conf}
 
     @r.post("/locations/{code}/watch")

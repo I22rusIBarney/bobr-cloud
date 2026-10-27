@@ -56,6 +56,9 @@ DEFAULTS: dict[str, Any] = {
     "transfers_enabled": True,
     "shares_enabled": True,
     "custom_enabled": True,
+    # минимальная конфигурация для ОС: код ОС → "cpu-ram-disk" (Windows на 1 ГБ не встанет)
+    "os_requirements": {"win2022": "2-2-40"},
+    "change_ip_cost_rub": 100,   # смена IP у Astra — столько платят клиенты без наценки
     "loc_announce": True,        # рассылка «Новости» о новой локации в продаже (только с согласием на рекламу)      # своя конфигурация (cpu/ram/disk) через конструктор Astra      # общий доступ к серверу для других клиентов
     "monitor_enabled": True,     # следить за доступностью серверов клиентов и сообщать о сбоях
     "confirm_codes": True,       # код из бота для удаления / переустановки / сброса пароля в кабинете
@@ -105,6 +108,13 @@ def coerce(key: str, value: Any) -> Any:
         return value if isinstance(value, bool) else str(value).lower() in ("1", "true", "yes", "on")
     if t is list:
         return [int(x) for x in value]
+    if t is dict and key == "os_requirements":
+        out = {}
+        for k, v in dict(value or {}).items():
+            v = str(v or "").strip()
+            if v and re.fullmatch(r"[a-z0-9._-]{2,32}", str(k)) and re.fullmatch(r"\d{1,3}-\d{1,3}-\d{1,5}", v):
+                out[str(k)] = v
+        return out
     if t is dict:
         out = {}
         for k, v in dict(value or {}).items():

@@ -37,11 +37,13 @@ LABEL = {
     "monitor_on": "Мониторинг включён",
     "monitor_off": "Мониторинг выключен",
     "delete": "Сервер удалён",
+    "renew_free": "Продление на 30 дней за счёт сервиса",
+    "reprice": "Новая цена продления",
 }
 ICON = {"purchase": "🛒", "start": "▶️", "stop": "⏹", "reboot": "🔄", "vnc": "🖥", "reinstall": "⚙️", "password": "🛡", "change-ip": "🌍",
         "renew": "💳", "autorenew": "💳", "rename": "✏️", "upgrade": "⚡", "transfer": "🔁", "monitor_down": "🔴", "monitor_up": "🟢", "delete": "❌",
         "autorenew_on": "🔄", "autorenew_off": "🔄", "share_invite": "👥", "share_join": "👥", "share_remove": "🔒", "share_leave": "🚪",
-        "monitor_on": "🔔", "monitor_off": "🔕"}
+        "monitor_on": "🔔", "monitor_off": "🔕", "renew_free": "🎁", "reprice": "💲"}
 
 
 async def add(server_id: int, actor: int, action: str, detail: str = "") -> None:
@@ -64,11 +66,15 @@ async def recent(server_id: int, owner_tg: int, limit: int = 40) -> list[dict]:
         for r in rows:
             if r.actor and r.actor not in names:
                 names[r.actor] = await s.get(User, r.actor)
+    from .config import env
+    admins = set(env().admins)
     out = []
     for r in rows:
         u = names.get(r.actor)
         who = "Система" if not r.actor else (u.first_name or (f"@{u.username}" if u and u.username else f"ID {r.actor}")) if u else f"ID {r.actor}"
         role = "system" if not r.actor else "owner" if r.actor == owner_tg else "other"
+        if r.actor and r.actor != owner_tg and r.actor in admins:
+            who, role = "Поддержка", "support"  # клиенту не показываем, кто именно из админов
         out.append({"action": r.action, "title": LABEL.get(r.action, r.action), "icon": ICON.get(r.action, "•"), "detail": r.detail,
                     "who": who, "role": role, "at": r.created_at.isoformat()})
     return out

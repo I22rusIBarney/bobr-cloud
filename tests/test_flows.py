@@ -92,7 +92,7 @@ async def main():
 
         # пополнение с сохранением карты: пока автоплатежи выключены — флаг игнорируется
         r = await c.post("/api/me/topup", headers=H2, json={"amount_rub": 500, "save_method": True}); ok(r.status_code == 200 and not ctx.yk.last.get("save_payment_method"), "без включённых автоплатежей карта не сохраняется")
-        await c.post("/api/admin/settings", headers=HA, json={"values": {"autopay_available": True}})
+        await c.post("/api/admin/settings", headers=HA, json={"values": {"autopay_available": True, "yk_method": "all"}})
         r = await c.post("/api/me/topup", headers=H2, json={"amount_rub": 500, "save_method": True}); ok(ctx.yk.last.get("save_payment_method") is True, "запрос в ЮKassa с save_payment_method")
         pid = r.json()["url"].split("/")[-1]
         r = await c.post("/yookassa/webhook/sec", json={"event": "payment.succeeded", "object": {"id": pid}}); ok(r.status_code == 200, "вебхук принят")
@@ -172,14 +172,14 @@ async def main():
         cl = (await c.get(f"/api/me/tickets/{tid}", headers=H4)).json()
         ok(cl["status"] == "provider" and all(m["author"] != "note" for m in cl["messages"]), "клиент видит статус «у провайдера», но не заметки")
         await c.post(f"/api/admin/tickets/{tid}/messages", headers=HA, json={"text": "Провайдер перезапустил узел, проверьте"})
-        ok(any(u == 4 and f"ticket={tid}" in url and "Поддержка Bobr Cloud" in t for u, t, url in btns), "ответ ушёл клиенту от имени нашего сервиса")
+        ok(any(u == 4 and f"ticket={tid}" in url and "Ответ поддержки" in t for u, t, url in btns), "ответ ушёл клиенту с кнопкой «Открыть обращение»")
         lst = (await c.get("/api/me/tickets", headers=H4)).json(); ok(lst[0]["unread"] and lst[0]["status"] == "answered", "у клиента отметка о новом ответе")
         await c.get(f"/api/me/tickets/{tid}", headers=H4)
         lst = (await c.get("/api/me/tickets", headers=H4)).json(); ok(not lst[0]["unread"], "после просмотра отметка снята")
         await c.post(f"/api/me/tickets/{tid}/messages", headers=H4, json={"text": "Заработало, спасибо"})
         d = (await c.get(f"/api/admin/tickets/{tid}", headers=HA)).json(); ok(d["status"] == "open", "ответ клиента возвращает тикет в «ждёт ответа»")
         await c.post(f"/api/admin/tickets/{tid}/status", headers=HA, json={"status": "closed"})
-        ok(any(u == 4 and "решённое" in t for u, t in msgs), "клиенту сообщили о закрытии")
+        ok(any(u == 4 and "решено" in t for u, t in msgs), "клиенту сообщили о закрытии")
         H5 = {"X-Init-Data": init(5)}; await c.get("/api/me", headers=H5); await c.post("/api/me/consent", headers=H5, json={"docs": ["terms", "aup", "privacy", "pd"]})
         r = await c.get(f"/api/me/tickets/{tid}", headers=H5); ok(r.status_code == 404, "чужое обращение недоступно")
         # сообщение боту без открытых обращений создаёт новое

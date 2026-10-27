@@ -160,6 +160,8 @@ class Server(Base):
     mon_fail: Mapped[int] = mapped_column(Integer, default=0)
     mon_down_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     mon_quiet_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # себестоимость, о которой уже предупредили (сторож маржи не повторяет алерт)
+    margin_alert_cost: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class LocationWatch(Base):

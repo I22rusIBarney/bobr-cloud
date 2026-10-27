@@ -452,12 +452,19 @@ async def buy_os(c: CallbackQuery):
     _, _, loc, idx = c.data.split(":")
     cat = await ctx().catalog()
     oses = cat.get("os", [])
+    async with session() as s:
+        cfg = await load_settings(s)
+    p = next((x for x in cat.get("presets", []) if str(x.get("idx")) == idx), None)
+    # ОС, которым не хватает мощности тарифа (Windows на 1 ГБ), не предлагаем
+    ok = [o for o in oses if p is None or svc.os_fits(cfg, o, p["cpu"], p["ram"], p["disk"])]
+    hidden = [o for o in oses if o not in ok]
     b = InlineKeyboardBuilder()
-    for o in oses:
+    for o in ok:
         b.button(text=svc.os_label(o), callback_data=f"b:o:{loc}:{idx}:{o}")
     b.adjust(2)
     b.row(InlineKeyboardButton(text="← Назад", callback_data=f"b:l:{loc}"))
-    await show(c, "⚙️ <b>Операционная система</b>\n\nВыберите образ — сменить его можно позже переустановкой.", b.as_markup())
+    note = "".join(f"\n\nℹ️ {e(svc.os_req_text(o, svc.os_requirement(cfg, o)))} Выберите тариф мощнее, чтобы она появилась." for o in hidden)
+    await show(c, "⚙️ <b>Операционная система</b>\n\nВыберите образ — сменить его можно позже переустановкой." + note, b.as_markup())
 
 
 PERIOD_LABEL = {"1m": "1 мес", "3m": "3 мес", "6m": "6 мес", "1y": "1 год"}
@@ -1144,9 +1151,10 @@ async def confirm_action(c: CallbackQuery):
         return
     async with session() as s:
         cfg = await load_settings(s)
+        u = await s.get(User, c.from_user.id)
     warn, btn = {
         "password": ("🛡 <b>Сброс пароля</b>\n\nПароль root будет сброшен, <b>данные на диске будут стёрты</b>. IP-адрес сохранится.", "✅ Сбросить и стереть"),
-        "change-ip": (f"🌍 <b>Смена IP</b>\n\nСервер получит новый адрес, старый перестанет работать.\nСтоимость: <b>{rub(int(cfg['change_ip_price_rub']) * 100)}</b> — спишем с баланса.", "✅ Сменить IP"),
+        "change-ip": (f"🌍 <b>Смена IP</b>\n\nСервер получит новый адрес, старый перестанет работать.\nСтоимость: <b>{rub(svc.change_ip_price_kop(cfg, u))}</b> — спишем с баланса.", "✅ Сменить IP"),
     }[action]
     await show(c, f"{warn}\n\nПродолжить?", kb_rows([[(btn, f"s:a:{sid}:{action}")]], back=f"s:v:{sid}"))
 
@@ -1154,15 +1162,21 @@ async def confirm_action(c: CallbackQuery):
 @router.callback_query(F.data.startswith("s:ri:"))
 async def reinstall_choose(c: CallbackQuery):
     sid = c.data.split(":")[2]
-    if not await _own(c, int(sid)):
+    srv = await _own(c, int(sid))
+    if not srv:
         return
     cat = await ctx().catalog()
+    async with session() as s:
+        cfg = await load_settings(s)
+    oses = cat.get("os", [])
+    ok = [o for o in oses if svc.os_fits(cfg, o, srv.cpu, srv.ram, srv.disk)]
     b = InlineKeyboardBuilder()
-    for o in cat.get("os", []):
+    for o in ok:
         b.button(text=svc.os_label(o), callback_data=f"s:rc:{sid}:{o}")
     b.adjust(2)
     b.row(InlineKeyboardButton(text="← Назад", callback_data=f"s:v:{sid}"))
-    await show(c, "⚙️ <b>Переустановка системы</b>\n\nВыберите образ. <b>Все данные на сервере будут стёрты.</b>", b.as_markup())
+    note = "".join(f"\n\nℹ️ {e(svc.os_req_text(o, svc.os_requirement(cfg, o)))}" for o in oses if o not in ok)
+    await show(c, "⚙️ <b>Переустановка системы</b>\n\nВыберите образ. <b>Все данные на сервере будут стёрты.</b>" + note, b.as_markup())
 
 
 @router.callback_query(F.data.startswith("s:rc:"))

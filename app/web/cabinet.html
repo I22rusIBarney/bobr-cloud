@@ -511,7 +511,7 @@ function serverView(id) {
       const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(os)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
       if (!ok) return;
       await withCode(s, 'reinstall', 'переустановку', code => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os, code }), 'Переустановка запущена');
-    }) }),
+    }, { cpu: s.cpu, ram: s.ram, disk: s.disk }, true) }),
   ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
 
   const extra = [row({ icon: 'doc', tile: '#8E8E93', title: 'Журнал действий', sub: 'Кто и что делал с сервером', onClick: () => UI.nav.push(() => logView(s)) })];
@@ -806,13 +806,28 @@ async function upgradeSheet(s) {
   });
 }
 
-async function pickOS(current, title, onPick) {
+/* Минимум мощности для ОС (Windows не встанет на 1 ГБ): null — ограничений нет. */
+function osReq(code) { return (CAT && CAT.os_requirements || {})[code] || null; }
+function osFits(code, spec) { const r = osReq(code); return !r || !spec || (spec.cpu >= r.cpu && spec.ram >= r.ram && spec.disk >= r.disk); }
+function osReqText(code) { const r = osReq(code); return r ? `Для ${osName(code)} нужно от ${r.cpu} vCPU, ${r.ram} ГБ памяти и ${r.disk} ГБ диска.` : ''; }
+
+/* spec — мощность сервера; strict — неподходящие ОС нельзя выбрать (переустановка), иначе только подсказка. */
+async function pickOS(current, title, onPick, spec, strict) {
   await UI.run(loadCatalog);
   if (!CAT) return;
-  UI.sheet(title || 'Система', close => group(null, CAT.os.map(code => row({
-    title: osName(code), right: code === current ? icon('check', 'check') : null, chevron: false,
-    onClick: () => { close(); onPick(code); },
-  }))));
+  UI.sheet(title || 'Система', close => group(null, CAT.os.map(code => {
+    const r = osReq(code), fits = osFits(code, spec);
+    const el = row({
+      title: osName(code), sub: r ? `от ${r.cpu} vCPU · ${r.ram} ГБ · ${r.disk} ГБ` : undefined,
+      right: code === current ? icon('check', 'check') : null, chevron: false,
+      onClick: () => {
+        if (!fits && strict) return UI.toast(osReqText(code) + ' Сначала увеличьте мощность сервера.');
+        close(); onPick(code);
+      },
+    });
+    if (!fits) el.classList.add('is-dim');
+    return el;
+  }), strict && CAT.os.some(c => !osFits(c, spec)) ? 'Системам, которым не хватает мощности сервера, нужна конфигурация побольше.' : null));
 }
 
 // ───────── Конструктор ─────────
@@ -1093,6 +1108,10 @@ function builderView() {
     const plain = full * opt.months;
     if (price < plain) priceS.replaceChildren(h('span', {}, h('s', {}, rub(plain)), opt.months > 1 ? ` ≈ ${rub(Math.round(price / opt.months))} / мес` : ` −${D.discount.pct}% · дальше ${rub(full)}`));
     else priceS.replaceChildren(`${loc.flag} ${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
+    if (!osFits(B.os, m)) {  // Windows и подобные не встанут на слабую конфигурацию
+      note.className = 'match-note bad'; note.textContent = osReqText(B.os) + ' Добавьте мощности или выберите другую систему.';
+      pay.textContent = 'Мало для этой ОС'; pay.disabled = true; return;
+    }
     pay.disabled = false;
     if (D.balance_rub >= price) {
       pay.textContent = 'Оплатить';

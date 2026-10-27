@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Синтаксис скриптов кабинета и админки
+        run: |
+          python - <<'PY'
+          import re, pathlib
+          for f in ("cabinet", "admin"):
+              s = pathlib.Path(f"app/web/{f}.html").read_text()
+              js = max(re.findall(r"<script>(.*?)</script>", s, re.S), key=len)
+              pathlib.Path(f"/tmp/{f}.js").write_text(js)
+          PY
+          node --check /tmp/cabinet.js
+          node --check /tmp/admin.js
+          node --check app/web/static/ui.js
+      - run: pytest -q

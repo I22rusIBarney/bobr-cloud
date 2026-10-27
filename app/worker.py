@@ -48,6 +48,12 @@ async def _locations(ctx: svc.Ctx) -> None:
     await svc.announce_locations(ctx)
 
 
+async def _margin(ctx: svc.Ctx) -> None:
+    from . import admin_servers
+
+    await admin_servers.margin_check(ctx)
+
+
 async def _monitor(ctx: svc.Ctx) -> None:
     from . import monitor
 
@@ -79,6 +85,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("health", 30, _health, 40),
         ("security", 30, _security, 15),
         ("monitor", 60, _monitor, 90),
+        ("margin", 1800, _margin, 240),
         ("retention", 600, _retention, 180),
     ]
     return [asyncio.create_task(_loop(n, t, f, ctx, d), name=n) for n, t, f, d in jobs]

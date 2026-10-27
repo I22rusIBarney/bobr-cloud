@@ -91,7 +91,7 @@ def clean_name(name: str) -> str:
 
 _OS = {
     "ubuntu": "Ubuntu", "debian": "Debian", "centos": "CentOS", "almalinux": "AlmaLinux", "alma": "AlmaLinux",
-    "rockylinux": "Rocky Linux", "rocky": "Rocky Linux", "fedora": "Fedora", "windows": "Windows", "alpine": "Alpine",
+    "rockylinux": "Rocky Linux", "rocky": "Rocky Linux", "fedora": "Fedora", "windows": "Windows", "win": "Windows Server", "winserver": "Windows Server", "alpine": "Alpine",
     "arch": "Arch Linux", "archlinux": "Arch Linux", "opensuse": "openSUSE", "freebsd": "FreeBSD", "oraclelinux": "Oracle Linux",
 }
 
@@ -147,6 +147,25 @@ def speed_of(cfg: dict, cpu, ram, disk, channel: str = "") -> str:
 
 def loc_channel(cat: dict, code: str) -> str:
     return next((l.get("channel") or "" for l in cat.get("locations", []) if l.get("code") == code), "")
+
+
+def os_requirement(cfg: dict, os_: str) -> dict | None:
+    """Минимум для ОС из настроек: {"cpu", "ram", "disk"} или None."""
+    v = (cfg.get("os_requirements") or {}).get(os_ or "")
+    try:
+        c, r, d = (int(x) for x in str(v).split("-"))
+    except (TypeError, ValueError):
+        return None
+    return {"cpu": c, "ram": r, "disk": d}
+
+
+def os_fits(cfg: dict, os_: str, cpu: int, ram: int, disk: int) -> bool:
+    req = os_requirement(cfg, os_)
+    return req is None or (cpu >= req["cpu"] and ram >= req["ram"] and disk >= req["disk"])
+
+
+def os_req_text(os_: str, req: dict) -> str:
+    return (f"Для {os_label(os_)} нужно от {req['cpu']} vCPU, {req['ram']} ГБ памяти и {req['disk']} ГБ диска.")
 
 
 def configurator(cat: dict) -> dict | None:
@@ -355,6 +374,8 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
             raise UserError("Эта локация сейчас недоступна.")
         if os_ not in cat.get("os", []):
             raise UserError("Эта ОС недоступна.")
+        if not os_fits(cfg, os_, preset["cpu"], preset["ram"], preset["disk"]):
+            raise UserError(os_req_text(os_, os_requirement(cfg, os_)) + " Выберите конфигурацию мощнее или другую систему.")
 
         opt = next((o for o in period_options(cfg, cat) if o["code"] == period), None)
         if opt is None:
@@ -434,8 +455,9 @@ async def _refund(tg_id: int, kop: int, kind: str, ref: str) -> None:
 # ───────────────────────── продление ─────────────────────────
 
 
-async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Server:
-    """Продление на 30 дней. payer — кто платит (по умолчанию владелец; участник общего доступа — сам)."""
+async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None, free: bool = False, actor: int | None = None) -> Server:
+    """Продление на 30 дней. payer — кто платит (по умолчанию владелец; участник общего доступа — сам).
+    free — за счёт сервиса (админ продлевает в качестве компенсации, с клиента не списываем)."""
     async with session() as s:
         srv = await s.get(Server, server_id)
         if srv is None or srv.status in ("deleted", "provisioning"):
@@ -443,12 +465,15 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Se
         price = srv.price_kop
         explicit_payer = payer
         payer = payer or srv.tg_id
-        if not await change_balance(s, payer, -price, "renew", str(srv.astra_id)):
+        if free:
+            price = 0
+        elif not await change_balance(s, payer, -price, "renew", str(srv.astra_id)):
             raise UserError("Недостаточно средств для продления.")
     try:
         await ctx.astra.action(srv.astra_id, "renew")
     except AstraError as ex:
-        await _refund(payer, price, "refund_renew", str(srv.astra_id))
+        if price:
+            await _refund(payer, price, "refund_renew", str(srv.astra_id))
         if ex.status == 402:
             await ctx.alert_once("astra_balance", "⚠️ Баланс Astra закончился — продления не проходят.")
         else:
@@ -472,7 +497,10 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None) -> Se
         row.renew_try_at = now
         await s.commit()
     from . import serverlog
-    await serverlog.add(server_id, payer if explicit_payer else 0, "renew" if explicit_payer else "autorenew")
+    if free:
+        await serverlog.add(server_id, actor or 0, "renew_free")
+    else:
+        await serverlog.add(server_id, payer if explicit_payer else 0, "renew" if explicit_payer else "autorenew")
     await refresh_server(ctx, srv.astra_id)  # точная дата от Astra, если доступна
     async with session() as s:
         srv = await s.get(Server, server_id)
@@ -511,6 +539,12 @@ def _apply_remote(srv: Server, r: dict) -> None:
             setattr(srv, k, int(spec[k]))
     if r.get("name") and isinstance(r["name"], str):
         srv.name = r["name"][:60]
+    # Astra отдаёт цену продления сервера — по ней сторож маржи видит повышения
+    for k in ("renew_month_rub", "price_month_rub"):
+        v = r.get(k)
+        if isinstance(v, (int, float)) and v > 0:
+            srv.cost_kop = cost_kop(v)
+            break
 
 
 # ───────────────────────── действия над сервером ─────────────────────────
@@ -669,6 +703,13 @@ async def verify_change_ip(ctx: Ctx, server_id: int, astra_id: int, old_ip: str 
     return "unknown"
 
 
+def change_ip_price_kop(cfg: dict, user: User | None) -> int:
+    """Смена IP: клиентам без наценки — по себестоимости Astra, остальным — цена из настроек."""
+    if user is not None and user.no_markup:
+        return int(cfg.get("change_ip_cost_rub", 100)) * 100
+    return int(cfg["change_ip_price_rub"]) * 100
+
+
 async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]:
     """Сервер и роль клиента: owner — свой, member — общий доступ."""
     from .shares import role
@@ -680,8 +721,8 @@ async def get_server_access(s, tg_id: int, server_id: int) -> tuple[Server, str]
     return srv, r
 
 
-async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body: dict | None = None) -> dict:
-    """start | stop | reboot | reinstall | password | vnc | change-ip."""
+async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body: dict | None = None, actor: int | None = None) -> dict:
+    """start | stop | reboot | reinstall | password | vnc | change-ip. actor — кто нажал (админ от имени владельца)."""
     from .shares import MEMBER_ACTIONS
 
     async with session() as s:
@@ -691,9 +732,12 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         cfg = await load_settings(s)
         if srv.status not in ("active", "suspended"):
             raise UserError("Сервер сейчас недоступен для этого действия.")
+        if action == "reinstall" and body and not os_fits(cfg, body.get("os", ""), srv.cpu, srv.ram, srv.disk):
+            raise UserError(os_req_text(body["os"], os_requirement(cfg, body["os"])) + " Сначала увеличьте мощность сервера.")
         charge = 0
         if action == "change-ip":
-            charge = int(cfg["change_ip_price_rub"]) * 100
+            payer = await s.get(User, tg_id)
+            charge = change_ip_price_kop(cfg, payer)
             if not await change_balance(s, tg_id, -charge, "change_ip", str(srv.astra_id)):
                 raise UserError(f"Для смены IP нужно {fmt_rub(charge)} на балансе.")
     try:
@@ -721,7 +765,7 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
             row = await s.get(Server, server_id)
             row.mon_quiet_until, row.mon_fail = utcnow() + timedelta(minutes=quiet), 0
             await s.commit()
-    await serverlog.add(server_id, tg_id, action, os_label(body["os"]) if action == "reinstall" and body and body.get("os") else "")
+    await serverlog.add(server_id, actor or tg_id, action, os_label(body["os"]) if action == "reinstall" and body and body.get("os") else "")
     if action in ("reinstall", "password", "change-ip"):
         await refresh_server(ctx, srv.astra_id)
     return resp
@@ -941,7 +985,7 @@ async def upgrade_server(ctx: Ctx, tg_id: int, server_id: int, cpu: int, ram: in
     return {"charged_kop": final, "new_price_kop": new_price, "cpu": cpu, "ram": ram}
 
 
-async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
+async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = True, actor: int | None = None) -> int:
     """Удаляет сервер, возвращает клиенту часть остатка. Возвращает сумму возврата (коп)."""
     async with session() as s:
         srv = await get_user_server(s, tg_id, server_id)
@@ -953,7 +997,8 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте список серверов через минуту.") from ex
-    refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"], paid_months(srv))
+    do_refund = refund
+    refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"], paid_months(srv)) if do_refund else 0
     async with session() as s:
         row = await s.get(Server, server_id)
         row.status = "deleted"
@@ -964,7 +1009,7 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int) -> int:
             await change_balance(s, tg_id, refund, "refund_cancel", str(srv.astra_id))
     from .shares import revoke_all
     from . import serverlog
-    await serverlog.add(server_id, tg_id, "delete")
+    await serverlog.add(server_id, actor or tg_id, "delete", "" if do_refund else "без возврата")
     await revoke_all(ctx, server_id, "владелец удалил сервер")
     return refund
 

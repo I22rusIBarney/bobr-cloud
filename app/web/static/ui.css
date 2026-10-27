@@ -125,6 +125,7 @@ a { color: var(--accent-text); text-decoration: none; }
 .row.accent .grow, .row.accent .t { color: var(--accent-text); }
 .row.destructive .grow, .row.destructive .t { color: var(--danger); }
 .row[disabled], .row.is-disabled { opacity: .4; pointer-events: none; }
+.row.is-dim { opacity: .45; }
 .row.wrap .t { white-space: normal; }
 .row.wrap .s { white-space: pre-line; }
 
