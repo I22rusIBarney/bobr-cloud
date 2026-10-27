@@ -1485,19 +1485,32 @@ def make_poster(bot: Bot):
     """Отправка в любой чат (каналы событий). Возвращает None или текст ошибки."""
     from aiogram.types import FSInputFile
 
+    import asyncio
+    from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter, TelegramServerError
+
+    async def _send(fn) -> str | None:
+        # сеть до Telegram иногда рвётся («Server disconnected») — повторяем, прежде чем считать канал недоступным
+        err = None
+        for delay in (0, 2, 5):
+            if delay:
+                await asyncio.sleep(delay)
+            try:
+                await fn()
+                return None
+            except TelegramRetryAfter as ex:
+                err = str(ex)
+                await asyncio.sleep(min(int(ex.retry_after), 30))
+            except (TelegramNetworkError, TelegramServerError) as ex:
+                err = str(ex)
+            except Exception as ex:  # нет доступа к каналу, неверный ID — повтор не поможет
+                return str(ex)
+        return err
+
     async def post(chat, text: str) -> str | None:
-        try:
-            await bot.send_message(chat, text, parse_mode="HTML", disable_web_page_preview=True)
-            return None
-        except Exception as ex:
-            return str(ex)
+        return await _send(lambda: bot.send_message(chat, text, parse_mode="HTML", disable_web_page_preview=True))
 
     async def post_file(chat, path: str, caption: str) -> str | None:
-        try:
-            await bot.send_document(chat, FSInputFile(path), caption=caption[:1000])
-            return None
-        except Exception as ex:
-            return str(ex)
+        return await _send(lambda: bot.send_document(chat, FSInputFile(path), caption=caption[:1000]))
 
     return post, post_file
 
