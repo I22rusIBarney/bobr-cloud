@@ -13,7 +13,7 @@ PRESETS = [{"idx": 0, "cpu": 1, "ram": 1, "disk": 10, "price_month_rub": {"nl": 
 
 
 class FakeAstra:
-    def __init__(s): s.n = 100; s.ready = False; s.renamed = []
+    def __init__(s): s.n = 100; s.ready = False; s.renamed = []; s.ip = "198.51.100.5"
     async def catalog(s): return {"locations": [{"code": "nl", "name": "Нидерланды", "available": True}], "presets": PRESETS, "os": ["ubuntu2404", "debian12"]}
     async def balance(s): return {"balance_rub": 5000}
     async def create(s, **kw):
@@ -23,8 +23,12 @@ class FakeAstra:
     async def server(s, sid):
         if not s.ready:
             return {"id": sid, "status": "provisioning"}
-        return {"id": sid, "status": "active", "ip": "198.51.100.5", "root_password": s.pw}
-    async def action(s, sid, a, body=None): s.renamed.append((sid, a, body)); return {"ok": True}
+        return {"id": sid, "status": "active", "ip": s.ip, "root_password": s.pw}
+    async def action(s, sid, a, body=None):
+        s.renamed.append((sid, a, body))
+        if a == "change-ip":
+            s.ip = "198.51.100.66"
+        return {"ok": True}
     async def close(s): pass
 
 
@@ -101,6 +105,18 @@ async def main():
         r = await c.post(f"/api/svc/servers/{sid}/rename", headers=T, json={"tg_id": 1, "name": "de-1"})
         ok(r.status_code == 200 and r.json()["name"] == "de-1", "переименование после готовности")
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=77", headers=T)).status_code == 404, "сервер не виден от имени другого клиента")
+
+        # смена IP через API: с баланса владельца, новый IP сразу в ответе; sync=1 — свежие данные у провайдера
+        v = (await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()
+        ok(v["change_ip_price_kop"] == 15000, f"цена смены IP в данных сервера: {v.get('change_ip_price_kop')}")
+        bal0 = (await c.get("/api/svc/balance?tg_id=1", headers=T)).json()["balance_kop"]
+        r = await c.post(f"/api/svc/servers/{sid}/change-ip", headers=T, json={"tg_id": 1})
+        ok(r.status_code == 200 and r.json()["ip"] == "198.51.100.66" and r.json()["pending"] is False, f"смена IP: {r.text[:200]}")
+        ok((await c.get("/api/svc/balance?tg_id=1", headers=T)).json()["balance_kop"] == bal0 - 15000, "смена IP списана с баланса владельца")
+        ok((await c.post(f"/api/svc/servers/{sid}/change-ip", headers=T, json={"tg_id": 77})).status_code == 404, "чужой сервер — 404")
+        astra.ip = "198.51.100.77"  # сменили в кабинете — bcloud ещё не знает
+        ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()["ip"] == "198.51.100.66", "без sync — данные bcloud")
+        ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1&sync=1", headers=T)).json()["ip"] == "198.51.100.77", "sync=1 — свежий IP от провайдера")
 
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 1, "idx": 1, "location": "nl", "os": "debian12"})
         ok(r.status_code == 400 and "баланс" in r.json()["detail"].lower(), "не хватает баланса — понятная ошибка")
