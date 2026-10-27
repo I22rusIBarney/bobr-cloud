@@ -120,6 +120,46 @@ $2 {
 }
 CADDY
   fi
+  # дополнительные сайты других программ на этом сервере (bcloud site add): sites/*.caddy
+  local f
+  for f in sites/*.caddy; do
+    [[ -f "$f" ]] || continue
+    printf '\n# %s\n' "$f" >> Caddyfile
+    cat "$f" >> Caddyfile
+  done
+}
+
+main_domain() { local m; m="$(env_get PUBLIC_URL)"; m="${m#https://}"; printf '%s' "${m%%/*}"; }
+reload_caddy() {
+  write_caddyfile "$(main_domain)" "$(env_get VNC_DOMAIN)"
+  compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy
+}
+
+# Сайт другой программы за Caddy bcloud (общие порты 80/443): bcloud site add ИМЯ ДОМЕН АДРЕС
+site_cmd() {
+  [[ -f .env ]] || die "Сначала установите бота: sudo ./install.sh"
+  local act="${1:-}" name="${2:-}" dom="${3:-}" up="${4:-}"
+  case "$act" in
+    add)
+      [[ "$name" =~ ^[a-z0-9-]{2,32}$ ]] || die "Имя: латиница, цифры и дефис"
+      dom="${dom#https://}"; dom="${dom%%/*}"; dom="${dom,,}"
+      [[ "$dom" =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || die "Неверный домен: $dom"
+      [[ "$up" =~ ^[A-Za-z0-9_.-]+:[0-9]{2,5}$ ]] || die "Адрес вида имя-контейнера:порт, например nodes:8080"
+      [[ "$dom" != "$(main_domain)" && "$dom" != "$(env_get VNC_DOMAIN)" ]] || die "Домен $dom уже занят bcloud"
+      mkdir -p sites
+      printf '%s {\n\treverse_proxy %s\n}\n' "$dom" "$up" > "sites/$name.caddy"
+      reload_caddy; ok "Сайт $name: https://$dom → $up" ;;
+    rm)
+      [[ -f "sites/$name.caddy" ]] || die "Сайта $name нет"
+      rm -f "sites/$name.caddy"; reload_caddy; ok "Сайт $name убран" ;;
+    ""|list)
+      local f any=""
+      for f in sites/*.caddy; do [[ -f "$f" ]] || continue; any=1; say "$(basename "$f" .caddy): $(head -1 "$f" | sed 's/ {$//')"; done
+      [[ -n "$any" ]] || say "Дополнительных сайтов нет" ;;
+    network)  # имя docker-сети bcloud — к ней подключаются программы, чьи сайты обслуживает Caddy bcloud
+      docker inspect "$(compose ps -q caddy)" -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' | head -1 ;;
+    *) die "bcloud site [list|add ИМЯ ДОМЕН АДРЕС|rm ИМЯ|network]" ;;
+  esac
 }
 
 vnc_domain_cmd() {
@@ -343,6 +383,7 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud security  состояние защиты: файрвол, блокировки, вход по паролю
   bcloud vnc ДОМЕН консоль VNC под своим поддоменом (bcloud vnc off — выключить)
   bcloud api-token токен служебного API для своих ботов (new — выпустить новый, off — выключить)
+  bcloud site      сайты других программ за HTTPS bcloud (bcloud site add ИМЯ ДОМЕН АДРЕС)
   bcloud setup     повторная настройка (токен, домен, ключи)
   bcloud help      эта справка
 EOF
@@ -364,9 +405,10 @@ case "${1:-install}" in
   _rebuild)
     # свой домен консоли: пересобираем Caddyfile, чтобы исправления прокси приходили с обновлением
     vd="$(env_get VNC_DOMAIN)"
-    if [[ -n "$vd" ]]; then m="$(env_get PUBLIC_URL)"; m="${m#https://}"; m="${m%%/*}"; write_caddyfile "$m" "$vd"; fi
+    ls sites/*.caddy >/dev/null 2>&1 && extra=1 || extra=""
+    if [[ -n "$vd" || -n "$extra" ]]; then write_caddyfile "$(main_domain)" "$vd"; fi
     deploy "${2:-}"
-    [[ -n "$vd" ]] && { compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy; }
+    [[ -n "$vd" || -n "$extra" ]] && { compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy; }
     install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
   restart) compose restart bot; ok "Бот перезапущен"; exit 0 ;;
   logs)    compose logs -f --tail=100 bot; exit 0 ;;
@@ -403,6 +445,7 @@ case "${1:-install}" in
   security) security_status; exit 0 ;;
   vnc)      vnc_domain_cmd "${2:-}"; exit 0 ;;
   api-token) api_token_cmd "${2:-}"; exit 0 ;;
+  site)     site_cmd "${2:-}" "${3:-}" "${4:-}" "${5:-}"; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   setup|install) ;;
   *) usage; die "Неизвестная команда: $1" ;;
