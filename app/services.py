@@ -1429,6 +1429,8 @@ async def watch_locations(ctx: Ctx) -> None:
         else:
             r.value = val
         await s.commit()
+    from . import locwatch
+    await locwatch.track({c: v["on"] for c, v in now.items()})
     if known is None:  # первый запуск — просто запоминаем
         await _announced_init({c for c, v in now.items() if v["on"]})
         return
@@ -1542,6 +1544,13 @@ async def announce_locations(ctx: Ctx) -> None:
             continue
         pend.remove(code)
         done.add(code)
+        # кто просил «сообщить, когда появится» и получит эту рассылку — второе сообщение не нужно
+        from .db import LocationWatch
+        from sqlalchemy import delete as _del
+        async with session() as s:
+            await s.execute(_del(LocationWatch).where(LocationWatch.code == code, LocationWatch.tg_id.in_(
+                select(User.tg_id).where(User.ads_consent.is_(True), User.consent_version > 0, User.banned.is_(False), User.bot_blocked.is_(False)))))
+            await s.commit()
         await events.emit(ctx, "locations", f"📣 <b>Клиентам ушла рассылка о локации {flag(code)} {html.escape(clean_name(loc.get('name', '')) or code.upper())}</b>\n\n"
                                             f"Получателей: {b.total} (с согласием на рекламу).")
     await _setting_put("loc_announce_pending", pend)

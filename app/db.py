@@ -162,6 +162,16 @@ class Server(Base):
     mon_quiet_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
+class LocationWatch(Base):
+    """Клиент просил сообщить, когда закрытая локация снова появится в продаже."""
+    __tablename__ = "location_watch"
+    __table_args__ = (UniqueConstraint("tg_id", "code"),)
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    tg_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    code: Mapped[str] = mapped_column(String(8), index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
+
+
 class ServerLog(Base):
     """Журнал действий по серверу: кто и что сделал (actor 0 — система)."""
     __tablename__ = "server_log"

@@ -399,8 +399,18 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
         async with session() as s:
             cfg = await load_settings(s)
         conf = svc.configurator(cat) if cfg.get("custom_enabled", True) else None
-        return {"locations": out, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
+        from .. import locwatch
+        closed = await locwatch.closed_locations(ctx, m["id"])
+        return {"locations": out, "closed": closed, "os": oses, "os_labels": cat.get("os_labels") or {o: svc.os_label(o) for o in oses},
                 "periods": svc.period_options(cfg, cat), "configurator": conf}
+
+    @r.post("/locations/{code}/watch")
+    async def location_watch(code: str, p: AutoIn, m: dict = Depends(me_ok)):
+        """«Сообщить, когда появится» для закрытой локации."""
+        from .. import locwatch
+        if code.lower() not in {x["code"] for x in await locwatch.closed_locations(ctx)} and p.value:
+            raise HTTPException(400, "Эта локация уже доступна для заказа.")
+        return {"watching": await locwatch.set_watch(m["id"], code, p.value)}
 
     @r.get("/quote")
     async def quote(location: str, cpu: int, ram: int, disk: int, m: dict = Depends(me_ok)):

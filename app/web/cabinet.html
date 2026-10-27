@@ -142,6 +142,10 @@
   .loc .f { font-size: 28px; line-height: 1; margin-bottom: 8px; }
   .loc b { font-size: 15px; font-weight: 600; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .loc .from { font-size: 13px; color: var(--hint); font-variant-numeric: tabular-nums; }
+  .loc.closed > .f, .loc.closed > b { opacity: .45; }
+  .loc.closed .from { display: inline-flex; align-items: center; gap: 4px; }
+  .loc.closed .from svg { width: 13px; height: 13px; color: var(--accent-text); }
+  .loc.closed.watching .from { color: var(--accent-text); }
   .loc[aria-pressed="true"] {
     background: linear-gradient(160deg, rgba(67, 140, 255, .18), rgba(67, 140, 255, .04) 70%), var(--cell);
     box-shadow: 0 12px 30px -14px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent);
@@ -918,6 +922,22 @@ function builderView() {
       setTimeout(() => { if (tab === 'new' && !UI.nav.stack.length) UI.nav.refresh(); }, 170);
     } }, h('span', { class: 'tick', 'aria-hidden': 'true' }, icon('check')), h('span', { class: 'f', 'aria-hidden': 'true' }, l.flag), h('b', {}, l.name),
       h('span', { class: 'from' }, min == null ? 'Нет мест' : 'от ' + rub(min) + ' / мес'));
+    locGrid.append(b);
+  });
+  // закрытые локации: серые, с «Сообщить, когда появится»
+  (CAT.closed || []).forEach(l => {
+    const label = l.watching ? 'Сообщим' : l.status === 'soon' ? 'Скоро' : 'Нет мест';
+    const b = h('button', { class: 'loc closed' + (l.watching ? ' watching' : ''), type: 'button', 'aria-label': `${l.name}: ${label}`, onclick: async () => {
+      const ok = await UI.ask(l.watching
+        ? { title: `${l.flag} ${l.name}`, message: 'Мы напишем вам в Telegram, как только появятся места.', buttons: [{ id: 'y', text: 'Не сообщать', type: 'destructive' }] }
+        : { title: `${l.flag} ${l.name}`, message: (l.status === 'soon' ? 'Скоро откроем заказы в этой стране.' : 'Места закончились — стараемся вернуть как можно скорее.')
+            + (l.description ? `\n${l.description}.` : '') + '\n\nСообщить вам, когда можно будет заказать?', buttons: [{ id: 'y', text: 'Сообщить' }] });
+      if (!ok) return;
+      const r = await UI.run(() => api(`/locations/${l.code}/watch`, 'POST', { value: !l.watching }), l.watching ? 'Не будем сообщать' : 'Сообщим, когда появятся места');
+      if (r === undefined) return;
+      l.watching = r.watching; UI.nav.refresh();
+    } }, h('span', { class: 'f', 'aria-hidden': 'true' }, l.flag), h('b', {}, l.name),
+      h('span', { class: 'from' }, l.watching ? icon('bell') : null, label));
     locGrid.append(b);
   });
   const someLimited = loc && loc.offers.some(o => o.speed_limited);

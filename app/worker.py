@@ -41,7 +41,10 @@ async def _security(ctx: svc.Ctx) -> None:
 
 
 async def _locations(ctx: svc.Ctx) -> None:
+    from . import locwatch
+
     await svc.watch_locations(ctx)
+    await locwatch.notify(ctx)          # подписавшимся «сообщить, когда появится» — до общей рассылки
     await svc.announce_locations(ctx)
 
 
@@ -70,7 +73,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
         ("autorenew", 600, svc.autorenew_and_remind, 20),
         ("receipts", 300, svc.process_receipts, 30),
         ("astra_balance", 900, svc.check_astra_balance, 15),
-        ("locations", 600, _locations, 25),
+        ("locations", 300, _locations, 25),
         ("broadcasts", 60, _resume_broadcasts, 8),
         ("backup", 600, _backup, 120),
         ("health", 30, _health, 40),

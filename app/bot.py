@@ -369,9 +369,47 @@ async def buy_locations(c: CallbackQuery):
         await show(c, "⚠️ <b>Каталог временно недоступен</b>\n\nПопробуйте через пару минут.", kb_rows([]))
         return
     rows = [[(f"{l['flag']} {l['name']}" + (" · IP-локация" if l.get("virtual") else ""), f"b:l:{l['code']}")] for l in locs]
+    from . import locwatch
+    try:
+        closed = await locwatch.closed_locations(ctx(), c.from_user.id)
+    except Exception:
+        closed = []
+    open_codes = {l["code"] for l in locs}
+    rows += [[(f"{l['flag']} {l['name']} · " + ("🔔 сообщим" if l["watching"] else "скоро" if l["status"] == "soon" else "нет мест"), f"b:w:{l['code']}")]
+             for l in closed if l["code"] not in open_codes]
     virt = [f"{l['flag']} {e(l['name'])} — {e(l['description'])}" for l in locs if l.get("virtual") and l.get("description")]
     note = ("\n\n<i>IP-локации: адрес выбранной страны, сам сервер — в другом дата-центре.</i>\n" + "\n".join(virt)) if virt else ""
     await show(c, f"🌍 <b>Выберите расположение сервера</b>\n\nЦена зависит от локации. Выдача — за 1–3 минуты.{note}", kb_rows(rows))
+
+
+async def _watch_screen(c: CallbackQuery, code: str) -> None:
+    from . import locwatch
+    l = next((x for x in await locwatch.closed_locations(ctx(), c.from_user.id) if x["code"] == code), None)
+    if l is None:  # уже открылась
+        return await tariffs_screen(c, code, c.from_user.id)
+    head = f"{l['flag']} <b>{e(l['name'])}</b>\n\n" + ("Скоро откроем заказы в этой стране." if l["status"] == "soon"
+                                                         else "Места закончились — стараемся вернуть как можно скорее.")
+    if l["description"]:
+        head += f"\n<i>{e(l['description'])}</i>"
+    if l["watching"]:
+        text, btn = head + "\n\n🔔 Напишем вам, как только можно будет заказать.", ("🔕 Не сообщать", f"lw:off:{code}")
+    else:
+        text, btn = head + "\n\nПока можно выбрать другую страну — или подождать: сообщим, когда появятся места.", ("🔔 Сообщить, когда появится", f"lw:on:{code}")
+    await show(c, text, kb_rows([[btn]], back="m:buy", back_text="← Другие локации"))
+
+
+@router.callback_query(F.data.startswith("b:w:"))
+async def location_closed(c: CallbackQuery):
+    await _watch_screen(c, c.data.split(":")[2])
+
+
+@router.callback_query(F.data.startswith("lw:"))
+async def location_watch(c: CallbackQuery):
+    from . import locwatch
+    _, act, code = c.data.split(":")
+    await locwatch.set_watch(c.from_user.id, code, act == "on")
+    await c.answer("Сообщим, когда появятся места" if act == "on" else "Не будем сообщать")
+    await _watch_screen(c, code)
 
 
 @router.callback_query(F.data.startswith("b:l:"))
