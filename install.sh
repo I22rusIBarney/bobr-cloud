@@ -160,6 +160,28 @@ vnc_domain_cmd() {
 }
 
 # ───────── защита сервера ─────────
+api_token_cmd() {
+  [[ -f .env ]] || die "Сначала установите бота: sudo ./install.sh"
+  local t; t="$(env_get SERVICE_TOKEN)"
+  case "${1:-}" in
+    off) env_set SERVICE_TOKEN ""; compose up -d --force-recreate bot >/dev/null 2>&1 || compose restart bot
+         ok "Служебный API выключен"; return 0 ;;
+    new) t="" ;;
+    "") ;;
+    *) die "bcloud api-token [new|off]" ;;
+  esac
+  if [[ -z "$t" ]]; then
+    t="$(head -c 32 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | cut -c1-40)"
+    env_set SERVICE_TOKEN "$t"
+    compose up -d --force-recreate bot >/dev/null 2>&1 || compose restart bot
+    ok "Выпущен новый токен (старый больше не действует)"
+  fi
+  local m; m="$(env_get PUBLIC_URL)"
+  say "Адрес API: ${m%/}/api/svc"
+  say "Токен:     $t"
+  say "Покупки через API — только от имени админов из ADMIN_IDS, с их баланса."
+}
+
 ssh_port() { sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'; }
 
 harden() {
@@ -320,6 +342,7 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud harden    защитить сервер: файрвол, fail2ban, SSH, автообновления
   bcloud security  состояние защиты: файрвол, блокировки, вход по паролю
   bcloud vnc ДОМЕН консоль VNC под своим поддоменом (bcloud vnc off — выключить)
+  bcloud api-token токен служебного API для своих ботов (new — выпустить новый, off — выключить)
   bcloud setup     повторная настройка (токен, домен, ключи)
   bcloud help      эта справка
 EOF
@@ -379,6 +402,7 @@ case "${1:-install}" in
   harden)   harden; exit 0 ;;
   security) security_status; exit 0 ;;
   vnc)      vnc_domain_cmd "${2:-}"; exit 0 ;;
+  api-token) api_token_cmd "${2:-}"; exit 0 ;;
   help|-h|--help) usage; exit 0 ;;
   setup|install) ;;
   *) usage; die "Неизвестная команда: $1" ;;
