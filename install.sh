@@ -219,7 +219,7 @@ api_token_cmd() {
   local m; m="$(env_get PUBLIC_URL)"
   say "Адрес API: ${m%/}/api/svc"
   say "Токен:     $t"
-  say "Покупки через API — только от имени админов из ADMIN_IDS, с их баланса."
+  say "Токен даёт доступ к балансам всех клиентов (покупки от их имени) — храните как пароль."
 }
 
 ssh_port() { sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'; }

@@ -1,4 +1,4 @@
-"""Служебный API /api/svc: токен, только админы, каталог, покупка с баланса админа, статус с IP и паролем."""
+"""Служебный API /api/svc: токен, поиск клиента, каталог, покупка от имени клиента с его баланса, статус с IP и паролем."""
 import asyncio, os, sys
 TMP = sys.argv[1]
 os.environ.update(BOT_TOKEN="123:TEST", ASTRA_API_KEY="k", ADMIN_IDS="1", PUBLIC_URL="https://bot.test", WEBHOOK_SECRET="sec",
@@ -53,7 +53,7 @@ async def main():
         ok((await c.get("/api/svc/ping")).status_code == 401, "без токена — 401")
         ok((await c.get("/api/svc/ping", headers={"Authorization": "Bearer wrong"})).status_code == 401, "чужой токен — 401")
         ok((await c.get("/api/svc/ping", headers=T)).json() == {"ok": True}, "с токеном — ok")
-        ok((await c.get("/api/svc/catalog?tg_id=77", headers=T)).status_code == 403, "не-админ не может пользоваться API")
+        ok((await c.get("/api/svc/catalog?tg_id=77", headers=T)).status_code == 404, "неизвестный клиент — 404")
 
         ok((await c.get("/api/svc/balance?tg_id=1", headers=T)).status_code == 404, "аккаунта админа ещё нет — понятный 404")
         async with D.session() as s:
@@ -67,8 +67,24 @@ async def main():
         ok(nl["code"] == "nl" and len(nl["offers"]) == 2 and nl["offers"][0]["price_kop"] > 0, "каталог: локация и тарифы с ценой")
         ok({o["code"] for o in cat["os"]} == {"ubuntu2404", "debian12"} and cat["periods"][0]["code"] == "1m", "каталог: ОС и сроки")
 
+        # клиент: поиск по @username и ID, покупка от его имени с его баланса
+        async with D.session() as s:
+            s.add(D.User(tg_id=77, username="Client_77", first_name="Клиент"))
+            s.add(D.User(tg_id=78, username="banned", banned=True))
+            await s.commit()
+            await D.change_balance(s, 77, 50000, "admin_adjust")
+        r = (await c.get("/api/svc/users/resolve?q=@client_77", headers=T)).json()
+        ok(r["tg_id"] == 77 and r["balance_kop"] == 50000 and r["admin"] is False, "клиент находится по @username без учёта регистра")
+        ok((await c.get("/api/svc/users/resolve?q=77", headers=T)).json()["username"] == "Client_77", "клиент находится по ID")
+        ok((await c.get("/api/svc/users/resolve?q=@nobody", headers=T)).status_code == 404, "неизвестный @username — 404")
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 77, "idx": 0, "location": "nl", "os": "debian12"})
-        ok(r.status_code == 403, "покупка от имени не-админа запрещена")
+        ok(r.status_code == 200, "покупка от имени клиента")
+        csid = r.json()["id"]
+        ok((await c.get("/api/svc/balance?tg_id=77", headers=T)).json()["balance_kop"] < 50000, "списано с баланса клиента")
+        async with D.session() as s:
+            ok((await s.get(D.Server, csid)).tg_id == 77, "сервер в аккаунте клиента")
+        r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 78, "idx": 0, "location": "nl", "os": "debian12"})
+        ok(r.status_code == 403, "заблокированному клиенту покупать нельзя")
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 1, "idx": 0, "location": "nl", "os": "debian12", "password": "Str0ngPassw0rd"})
         ok(r.status_code == 200 and r.json()["status"] == "provisioning", "покупка с баланса админа")
         sid = r.json()["id"]
@@ -84,7 +100,7 @@ async def main():
         ok(v["status"] == "active" and v["ip"] == "198.51.100.5" and v["root_password"] == "Str0ngPassw0rd", "готов: IP и пароль")
         r = await c.post(f"/api/svc/servers/{sid}/rename", headers=T, json={"tg_id": 1, "name": "de-1"})
         ok(r.status_code == 200 and r.json()["name"] == "de-1", "переименование после готовности")
-        ok((await c.get(f"/api/svc/servers/{sid}?tg_id=77", headers=T)).status_code == 403, "чужой tg_id не видит сервер")
+        ok((await c.get(f"/api/svc/servers/{sid}?tg_id=77", headers=T)).status_code == 404, "сервер не виден от имени другого клиента")
 
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 1, "idx": 1, "location": "nl", "os": "debian12"})
         ok(r.status_code == 400 and "баланс" in r.json()["detail"].lower(), "не хватает баланса — понятная ошибка")

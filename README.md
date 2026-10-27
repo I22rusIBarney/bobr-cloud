@@ -105,11 +105,12 @@ sudo ./install.sh
 bcloud api-token        # показать или выпустить токен (bcloud api-token new — заменить, off — выключить)
 ```
 
-Запросы — с заголовком `Authorization: Bearer <токен>`. Покупать можно только от имени админов из `ADMIN_IDS` и только с их баланса: токен не даёт тратить деньги клиентов.
+Запросы — с заголовком `Authorization: Bearer <токен>`. Покупать можно от имени любого клиента и с его баланса — серверы появляются у клиента в боте и кабинете, как при обычной покупке. **Токен даёт доступ к балансам всех клиентов**: храните его как пароль от админки, при утечке — `bcloud api-token new`.
 
 | Метод | Путь | Что делает |
 | --- | --- | --- |
 | GET | `/api/svc/catalog?tg_id=` | локации с тарифами и ценой для этого аккаунта, ОС, сроки |
+| GET | `/api/svc/users/resolve?q=` | клиент по Telegram ID или @username |
 | GET | `/api/svc/balance?tg_id=` | баланс аккаунта |
 | POST | `/api/svc/servers` | покупка: `{tg_id, location, os, idx \| cpu+ram+disk, period, password}` |
 | GET | `/api/svc/servers/{id}?tg_id=` | статус, IP, root-пароль |
