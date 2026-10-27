@@ -36,6 +36,10 @@ class SvcRenameIn(BaseModel):
     name: str
 
 
+class SvcOwnerIn(BaseModel):
+    tg_id: int
+
+
 def build_service_router(ctx: svc.Ctx) -> APIRouter:
     r = APIRouter(prefix="/api/svc")
 
@@ -111,17 +115,41 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
             raise bad(ex)
         return _view(srv)
 
-    @r.get("/servers/{server_id}")
-    async def server(server_id: int, tg_id: int, fresh: int = 1, _: None = Depends(auth)):
+    async def owned(server_id: int, tg_id: int) -> Server:
         async with session() as s:
             srv = await s.get(Server, server_id)
         if srv is None or srv.tg_id != tg_id:
             raise HTTPException(404, "Сервер не найден")
-        if fresh and srv.status == "provisioning":
+        return srv
+
+    async def view(srv: Server) -> dict:
+        async with session() as s:
+            cfg = await load_settings(s)
+            u = await s.get(User, srv.tg_id)
+        return {**_view(srv), "change_ip_price_kop": svc.change_ip_price_kop(cfg, u)}
+
+    @r.get("/servers/{server_id}")
+    async def server(server_id: int, tg_id: int, fresh: int = 1, sync: int = 0, _: None = Depends(auth)):
+        """sync=1 — сначала обновить данные у провайдера (например, после смены IP в кабинете)."""
+        srv = await owned(server_id, tg_id)
+        if sync or (fresh and srv.status == "provisioning"):
             await svc.refresh_server(ctx, srv.astra_id)
-            async with session() as s:
-                srv = await s.get(Server, server_id)
-        return _view(srv)
+            srv = await owned(server_id, tg_id)
+        return await view(srv)
+
+    @r.post("/servers/{server_id}/change-ip")
+    async def change_ip(server_id: int, p: SvcOwnerIn, _: None = Depends(auth)):
+        """Смена IP у провайдера с баланса владельца сервера (как кнопка в bcloud).
+        pending=true — провайдер ответил с задержкой: bcloud сам проверит результат и вернёт деньги при отказе."""
+        await client(p.tg_id)
+        await owned(server_id, p.tg_id)
+        try:
+            await svc.server_action(ctx, p.tg_id, server_id, "change-ip")
+        except UserError as ex:
+            if "задержкой" in str(ex):
+                return {**await view(await owned(server_id, p.tg_id)), "pending": True, "message": str(ex)}
+            raise bad(ex)
+        return {**await view(await owned(server_id, p.tg_id)), "pending": False}
 
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
