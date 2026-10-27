@@ -614,7 +614,10 @@ def _left(srv: Server) -> str:
     if not srv.expires_at:
         return "—"
     d = (srv.expires_at - svc.utcnow()).total_seconds() / 86400
-    return f"<b>{srv.expires_at.astimezone(timezone.utc):%d.%m.%Y}</b> · осталось {max(0, int(d))} дн." if d >= 0 else "<b>срок истёк</b>"
+    if d < 0:
+        return "<b>срок истёк</b>"
+    rest = f"осталось {int(d)} дн." if d >= 1 else (f"осталось {int(d * 24)} ч." if d * 24 >= 1 else "меньше часа")
+    return f"<b>{srv.expires_at.astimezone(timezone.utc):%d.%m.%Y}</b> · {rest}"
 
 
 @router.callback_query(F.data == "s:list")

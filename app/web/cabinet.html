@@ -370,6 +370,13 @@ function announceBanner() {
 const discountNote = () => D.discount ? (D.discount.until ? `персональная скидка ${D.discount.pct}% до ${shortDate(D.discount.until)}` : `скидка ${D.discount.pct}% по промокоду ${D.discount.code}`) : '';
 const adminBtn = () => D.is_admin ? h('button', { class: 'pill icon-only', type: 'button', 'aria-label': 'Управление', onclick: () => location.href = '/admin' }, icon('gear')) : null;
 const shortDate = iso => iso ? new Date(iso).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' }).replace('.', '') : '—';
+function leftText(left) {
+  if (left == null) return '';
+  if (left <= 0) return 'Срок истёк';
+  if (left >= 1) { const d = Math.floor(left); return `Осталось ${d} ${UI.plural(d, 'день', 'дня', 'дней')}`; }
+  const hrs = Math.floor(left * 24);
+  return hrs >= 1 ? `Осталось ${hrs} ${UI.plural(hrs, 'час', 'часа', 'часов')}` : 'Меньше часа';
+}
 const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text);
 
 function root() {
@@ -397,9 +404,11 @@ function serversView() {
   }
   D.servers.forEach(s => {
     const st = s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
-    const days = s.days_left == null ? null : Math.max(0, Math.ceil(s.days_left));
-    const pct = days == null ? 0 : Math.max(3, Math.min(100, days / 30 * 100));
-    const bar = days == null ? '' : days < 3 ? 'bad' : days < 7 ? 'warn' : '';
+    // остаток считаем от точной даты окончания: полные дни, а в последние сутки — часы
+    const left = s.expires_at ? (new Date(s.expires_at) - Date.now()) / 864e5 : null;
+    const days = left == null ? null : Math.max(0, Math.floor(left));
+    const pct = left == null ? 0 : Math.max(3, Math.min(100, left / 30 * 100));
+    const bar = left == null ? '' : left < 3 ? 'bad' : left < 7 ? 'warn' : '';
     wrap.append(h('button', { class: 'server-card', type: 'button', 'aria-label': s.name, onclick: () => UI.nav.push(() => serverView(s.id)) },
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
         h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name), h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—'))),
@@ -409,7 +418,7 @@ function serversView() {
           : (s.members || []).some(m => m.status === 'active') ? specChip('users', 'Доступ: ' + (s.members || []).filter(m => m.status === 'active').length) : null,
         s.auto_renew && s.role !== 'member' ? specChip('renew', 'Автопродление') : null),
       days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
-        h('div', { class: 'term-row' }, h('span', {}, days > 0 ? `Осталось ${days} ${UI.plural(days, 'день', 'дня', 'дней')}` : 'Срок истёк'), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
+        h('div', { class: 'term-row' }, h('span', {}, leftText(left)), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
   });
   const due = D.servers.filter(s => s.role !== 'member' && s.days_left != null && s.days_left < 3 && !s.auto_renew);
   if (due.length) wrap.append(h('div', { class: 'group-f', style: 'margin:2px var(--gutter) 22px' }, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.'));
