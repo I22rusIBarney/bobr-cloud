@@ -222,7 +222,10 @@ api_token_cmd() {
   say "Токен даёт доступ к балансам всех клиентов (покупки от их имени) — храните как пароль."
 }
 
-ssh_port() { sshd -T 2>/dev/null | awk '/^port /{print $2; exit}'; }
+# sshd -T падает без /run/sshd (Ubuntu 24.04: SSH запускается по сокету, папка появляется при первом входе),
+# а под set -euo pipefail это молча обрывало bcloud harden
+sshd_conf() { mkdir -p /run/sshd 2>/dev/null || true; sshd -T 2>/dev/null || true; }
+ssh_port() { sshd_conf | awk '/^port /{print $2; exit}'; }
 
 harden() {
   command -v apt-get >/dev/null || die "Поддерживаются Ubuntu и Debian"
@@ -326,6 +329,7 @@ EOF
       echo "PermitRootLogin prohibit-password"
     fi
   } > /etc/ssh/sshd_config.d/00-bcloud.conf
+  mkdir -p /run/sshd 2>/dev/null || true
   if sshd -t 2>/dev/null; then
     systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
     ok "SSH усилен" ; [[ "$pw_off" == "yes" ]] && ok "Вход по паролю отключён — только по ключу"
@@ -363,8 +367,8 @@ security_status() {
   say; say "${C_B}fail2ban (SSH)${C_0}"
   if command -v fail2ban-client >/dev/null; then fail2ban-client status sshd 2>/dev/null | grep -E 'Currently|Total' || warn "fail2ban не запущен"; else warn "fail2ban не установлен — bcloud harden"; fi
   say; say "${C_B}SSH${C_0}"
-  sshd -T 2>/dev/null | grep -E '^(port|passwordauthentication|permitrootlogin|maxauthtries) ' || true
-  [[ "$(sshd -T 2>/dev/null | awk '/^passwordauthentication /{print $2}')" == "yes" ]] && warn "Вход по паролю разрешён: настройте SSH-ключ и запустите bcloud harden"
+  sshd_conf | grep -E '^(port|passwordauthentication|permitrootlogin|maxauthtries) ' || true
+  [[ "$(sshd_conf | awk '/^passwordauthentication /{print $2}')" == "yes" ]] && warn "Вход по паролю разрешён: настройте SSH-ключ и запустите bcloud harden"
   say; say "${C_B}Обновления безопасности${C_0}"
   grep -q 'Unattended-Upgrade "1"' /etc/apt/apt.conf.d/20auto-upgrades 2>/dev/null && ok "Автообновления включены" || warn "Автообновления выключены"
 }
