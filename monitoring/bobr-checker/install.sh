@@ -101,6 +101,7 @@ if [[ -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     docker compose config -q || die "Конфигурация предыдущей установки некорректна. Проверьте $INSTALL_DIR/.env."
     docker compose pull
     docker compose up -d --remove-orphans
+    install -m 755 "$SRC_DIR/cli.sh" /usr/local/bin/bobr-checker
     info "Проверяю Checker..."
     if ! wait_for_checker; then
       docker compose logs --tail=80 checker || true
