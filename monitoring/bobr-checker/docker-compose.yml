@@ -4,8 +4,8 @@ services:
     container_name: bobr-cloud-checker
     restart: unless-stopped
     env_file: .env
-    ports:
-      - "${BIND_ADDRESS:-127.0.0.1}:${HOST_PORT:-2112}:2112"
+    expose:
+      - "2112"
     volumes:
       - ./geo:/app/geo
       - ./custom:/app/custom:ro
@@ -16,3 +16,21 @@ services:
       retries: 3
       start_period: 45s
     stop_grace_period: 30s
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: bobr-cloud-caddy
+    restart: unless-stopped
+    depends_on:
+      checker:
+        condition: service_healthy
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy_data:/data
+      - ./caddy_config:/config
