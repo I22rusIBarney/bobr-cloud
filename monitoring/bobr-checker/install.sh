@@ -130,11 +130,14 @@ docker compose up -d --remove-orphans
 ok "Контейнеры запущены."
 
 for i in $(seq 1 45); do
-  if docker compose ps --status running --services | grep -qx checker && curl -fsS "http://127.0.0.1:$(docker compose port checker 2112 2>/dev/null | awk -F: '{print $NF}' | tail -n1)/health" >/dev/null 2>&1; then
+  if docker compose exec -T checker curl -fsS "http://127.0.0.1:2112/health" >/dev/null 2>&1; then
     break
   fi
   sleep 2
 done
+docker compose exec -T checker curl -fsS "http://127.0.0.1:2112/health" >/dev/null 2>&1 \
+  && ok "Проверка Checker /health пройдена." \
+  || warn "Checker пока не отвечает на /health. Проверьте: bobr-checker logs"
 
 PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
 DNS_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
