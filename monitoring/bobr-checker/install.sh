@@ -16,15 +16,23 @@ SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/bobr-checker"
 command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y curl; }
 
-if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
-  info "Устанавливаю Docker Engine и Compose plugin..."
+if ! command -v docker >/dev/null 2>&1; then
+  info "Устанавливаю Docker Engine..."
   curl -fsSL https://get.docker.com | sh
 fi
 command -v docker >/dev/null 2>&1 || die "Docker не установлен."
 if ! docker compose version >/dev/null 2>&1; then
+  info "Устанавливаю Docker Compose plugin..."
   apt-get update -qq
-  apt-get install -y docker-compose-plugin || die "Не удалось установить Docker Compose plugin."
+  if ! apt-get install -y docker-compose-plugin; then
+    ARCH="$(uname -m)"
+    case "$ARCH" in x86_64) COMPOSE_ARCH=x86_64 ;; aarch64|arm64) COMPOSE_ARCH=aarch64 ;; *) die "Неизвестная архитектура для Docker Compose: $ARCH" ;; esac
+    mkdir -p /usr/local/lib/docker/cli-plugins
+    curl -fL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$COMPOSE_ARCH" -o /usr/local/lib/docker/cli-plugins/docker-compose
+    chmod 755 /usr/local/lib/docker/cli-plugins/docker-compose
+  fi
 fi
+docker compose version >/dev/null 2>&1 || die "Docker Compose plugin не найден."
 systemctl enable --now docker >/dev/null 2>&1 || true
 
 if [[ -e "$INSTALL_DIR/.env" ]]; then
