@@ -4,9 +4,9 @@ DIR=/opt/bobr-checker
 cd "$DIR"
 case "${1:-help}" in
   status) docker compose ps ;;
-  logs) docker compose logs -f --tail=200 checker ;;
-  restart) docker compose restart checker ;;
-  update) docker compose pull checker && docker compose up -d --remove-orphans checker ;;
+  logs) docker compose logs -f --tail=200 ;;
+  restart) docker compose restart ;;
+  update) docker compose pull && docker compose up -d --remove-orphans ;;
   config) "${EDITOR:-nano}" "$DIR/.env" ;;
   uninstall)
     echo "Контейнер и файлы приложения будут удалены."
