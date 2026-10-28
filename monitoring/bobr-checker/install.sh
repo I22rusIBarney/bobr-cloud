@@ -97,6 +97,10 @@ if [[ -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/docker-compose.yml" ]]; then
     # Remnawave must be requested in app-like JSON mode so balancer members
     # are returned as individual outbounds instead of a collapsed share link.
     cp -a "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup.$(date +%Y%m%d%H%M%S)"
+    # Refresh the dashboard template/assets from the repository on every rerun.
+    mkdir -p "$INSTALL_DIR/custom"
+    cp -a "$SRC_DIR/custom/." "$INSTALL_DIR/custom/"
+    chown -R 1000:1000 "$INSTALL_DIR/custom"
     set_env "SUBSCRIPTION_JSON_FORMAT" "true"
     docker compose config -q || die "Конфигурация предыдущей установки некорректна. Проверьте $INSTALL_DIR/.env."
     docker compose pull
