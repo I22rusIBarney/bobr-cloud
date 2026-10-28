@@ -2,17 +2,17 @@
 set -Eeuo pipefail
 
 C_GREEN='\033[0;32m'; C_CYAN='\033[0;36m'; C_YELLOW='\033[0;33m'; C_RED='\033[0;31m'; C_RESET='\033[0m'
-info(){ printf "\${C_CYAN}➜\${C_RESET} %s\n" "$*"; }
-ok(){ printf "\${C_GREEN}✔\${C_RESET} %s\n" "$*"; }
-warn(){ printf "\${C_YELLOW}! \${C_RESET}%s\n" "$*"; }
-die(){ printf "\${C_RED}✖ %s\${C_RESET}\n" "$*" >&2; exit 1; }
+info(){ printf "${C_CYAN}➜${C_RESET} %s\n" "$*"; }
+ok(){ printf "${C_GREEN}✔${C_RESET} %s\n" "$*"; }
+warn(){ printf "${C_YELLOW}! ${C_RESET}%s\n" "$*"; }
+die(){ printf "${C_RED}✖ %s${C_RESET}\n" "$*" >&2; exit 1; }
 
 [[ $EUID -eq 0 ]] || die "Запустите от root: sudo ./monitoring/bobr-checker/install.sh"
 [[ -r /etc/os-release ]] || die "Не удалось определить ОС."
 . /etc/os-release
-case "\${ID:-}" in ubuntu|debian) ;; *) die "Поддерживаются Ubuntu и Debian. Обнаружено: \${PRETTY_NAME:-unknown}";; esac
+case "${ID:-}" in ubuntu|debian) ;; *) die "Поддерживаются Ubuntu и Debian. Обнаружено: ${PRETTY_NAME:-unknown}";; esac
 
-SRC_DIR="$(cd "$(dirname "\${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INSTALL_DIR="/opt/bobr-checker"
 command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y curl; }
 
@@ -21,7 +21,10 @@ if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>
   curl -fsSL https://get.docker.com | sh
 fi
 command -v docker >/dev/null 2>&1 || die "Docker не установлен."
-docker compose version >/dev/null 2>&1 || die "Docker Compose plugin не найден."
+if ! docker compose version >/dev/null 2>&1; then
+  apt-get update -qq
+  apt-get install -y docker-compose-plugin || die "Не удалось установить Docker Compose plugin."
+fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 
 if [[ -e "$INSTALL_DIR/.env" ]]; then
@@ -47,12 +50,12 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
     warn "Нужна ссылка, начинающаяся с http:// или https://."
   done
   read -r -p "Порт веб-панели [2112]: " HOST_PORT
-  HOST_PORT="\${HOST_PORT:-2112}"
+  HOST_PORT="${HOST_PORT:-2112}"
   [[ "$HOST_PORT" =~ ^[0-9]+$ ]] && (( HOST_PORT >= 1 && HOST_PORT <= 65535 )) || die "Некорректный порт."
   read -r -p "Логин администратора [admin]: " AUTH_USER
-  AUTH_USER="\${AUTH_USER:-admin}"
+  AUTH_USER="${AUTH_USER:-admin}"
   [[ "$AUTH_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "Некорректный логин."
-  command -v openssl >/dev/null 2>&1 || apt-get install -y openssl
+  command -v openssl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y openssl; }
   AUTH_PASS="$(openssl rand -hex 18)"
   cat > "$INSTALL_DIR/.env" <<EOF
 SUBSCRIPTION_URL='$SUB_URL'
@@ -92,7 +95,7 @@ docker compose pull checker
 docker compose up -d --remove-orphans
 ok "Контейнер запущен."
 
-HOST_PORT="\${HOST_PORT:-2112}"
+HOST_PORT="${HOST_PORT:-2112}"
 PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
 [[ -n "$PUBLIC_IP" ]] || PUBLIC_IP="IP-АДРЕС-СЕРВЕРА"
 for i in $(seq 1 30); do
@@ -103,7 +106,7 @@ if curl -fsS "http://127.0.0.1:$HOST_PORT/health" >/dev/null 2>&1; then ok "Пр
 
 printf '\nBOBR CLOUD CHECKER УСТАНОВЛЕН\n'
 printf 'Панель: http://%s:%s\nЛогин:  %s\n' "$PUBLIC_IP" "$HOST_PORT" "$AUTH_USER"
-if [[ "\${AUTH_CREATED:-0}" == 1 ]]; then
+if [[ "${AUTH_CREATED:-0}" == 1 ]]; then
   printf 'Пароль: %s\nСохраните его сейчас — повторно он не выводится.\n' "$AUTH_PASS"
 else
   printf 'Пароль сохранён в %s/.env\n' "$INSTALL_DIR"
