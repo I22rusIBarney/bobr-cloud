@@ -942,7 +942,7 @@
         </div>
         <label class="block">
           <span class="text-xs text-secondary">Скрывать заголовки групп по шаблонам (через запятую)</span>
-          <input x-model="hiddenGroupPatterns" @change="saveVisibilitySettings()" class="w-full mt-1 px-3 py-2 rounded-lg text-sm" placeholder="AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT" />
+          <input x-model="hiddenGroupPatterns" @change="saveVisibilitySettings()" class="w-full mt-1 px-3 py-2 rounded-lg text-sm" placeholder="АВТО-ВЫБОР,AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT" />
           <span class="text-xs text-muted block mt-1">Сами узлы внутри скрытых групп останутся в списке. По умолчанию скрывается только заголовок AUTO-SELECT.</span>
         </label>
         <label class="block">
@@ -950,7 +950,7 @@
           <input x-model="hiddenProxyPatterns" @change="saveVisibilitySettings()" class="w-full mt-1 px-3 py-2 rounded-lg text-sm" placeholder="например: test-, old-" />
         </label>
         <div class="flex justify-end">
-          <button @click="hiddenGroupPatterns='AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT'; hiddenProxyPatterns=''; saveVisibilitySettings()" class="btn px-3 py-1.5 rounded-lg text-xs">Сбросить фильтры</button>
+          <button @click="hiddenGroupPatterns='АВТО-ВЫБОР,AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT'; hiddenProxyPatterns=''; saveVisibilitySettings()" class="btn px-3 py-1.5 rounded-lg text-xs">Сбросить фильтры</button>
         </div>
       </section>
 
@@ -1207,7 +1207,7 @@
 
           collapsedGroups: {},
           settingsOpen: false,
-          hiddenGroupPatterns: localStorage.getItem('hiddenGroupPatterns') || 'AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT',
+          hiddenGroupPatterns: localStorage.getItem('hiddenGroupPatterns') || 'АВТО-ВЫБОР,AUTO-ВЫБОР,AUTO-SELECT,AUTO SELECT',
           hiddenProxyPatterns: localStorage.getItem('hiddenProxyPatterns') || '',
           get hiddenGroupRegexes() {
             return this.hiddenGroupPatterns.split(',').map(s => s.trim()).filter(Boolean).map(s => {
