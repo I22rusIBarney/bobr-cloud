@@ -217,7 +217,7 @@ async def set_autopay(tg_id: int, enabled: bool) -> bool:
                 raise UserError("Автоплатежи пока недоступны.")
             n = (await s.execute(select(func.count()).select_from(PaymentMethod).where(PaymentMethod.tg_id == tg_id, PaymentMethod.active.is_(True)))).scalar_one()
             if not n:
-                raise UserError("Сначала сохраните карту: при пополнении отметьте «Сохранить карту для автоплатежей».")
+                raise UserError("Сначала привяжите карту или счёт СБП: при пополнении отметьте привязку для автоплатежей.")
         u.autopay_enabled = bool(enabled)
         await s.commit()
     return bool(enabled)

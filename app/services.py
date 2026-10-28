@@ -1046,8 +1046,9 @@ def payment_providers(ctx: Ctx, cfg: dict) -> list[dict]:
         label = cfg.get("pay_yookassa_label") or ""
         if not label or label == "Карта или СБП · ЮKassa":  # стандартная подпись — по выбранному способу
             label = {"sbp": "СБП · ЮKassa", "bank_card": "Банковская карта · ЮKassa"}.get(mode, "Карта или СБП · ЮKassa")
-        # сохранить карту для автоплатежей можно только при оплате картой
-        out.append({"code": "yookassa", "label": label, "autopay": mode != "sbp"})
+        # для автоплатежей ЮKassa сохраняет карту или привязывает счёт СБП (если банк клиента это поддерживает)
+        what = {"sbp": "счёт СБП", "bank_card": "карту"}.get(mode, "карту или счёт СБП")
+        out.append({"code": "yookassa", "label": label, "autopay": True, "save_what": what, "sbp": mode != "bank_card"})
     if cfg.get("pay_platega_on") and ctx.platega is not None and ctx.platega.configured:
         out.append({"code": "platega", "label": cfg.get("pay_platega_label") or "Platega", "autopay": False})
     return out
@@ -1104,7 +1105,7 @@ async def create_topup(ctx: Ctx, tg_id: int, amount_rub: int, save_method: bool 
             raise
         # магазину ещё не подключили автоплатежи — проводим обычный платёж
         log.warning("save_payment_method отклонён ЮKassa: %s", ex)
-        await ctx.alert_once("yk_recurring", f"⚠️ ЮKassa не разрешает сохранять карты ({ex.status}: {ex.description}). Автоплатежи не работают — подключите их в ЮKassa или выключите в админке.")
+        await ctx.alert_once("yk_recurring", f"⚠️ ЮKassa не разрешает сохранять способ оплаты ({ex.status}: {ex.description}). Автоплатежи не работают — подключите их в ЮKassa (для СБП — отдельно «привязку счёта») или выключите в админке.")
         data = await ctx.yk.create_payment(**kw, idem_key=f"topup-{pay.id}-plain")
         async with session() as s:
             row = await s.get(Payment, pay.id)
@@ -1155,7 +1156,10 @@ def _method_fields(pm: dict) -> dict:
     card = pm.get("card") or {}
     last4 = card.get("last4")
     exp = f"{card.get('expiry_month', '')}/{str(card.get('expiry_year', ''))[-2:]}" if card.get("expiry_month") else None
-    title = pm.get("title") or (f"{card.get('card_type', 'Карта')} *{last4}" if last4 else pm.get("type", "Способ оплаты"))
+    if pm.get("type") == "sbp":  # привязанный счёт СБП: карты нет, ЮKassa может прислать название банка в title
+        title = pm.get("title") or "Счёт СБП"
+    else:
+        title = pm.get("title") or (f"{card.get('card_type', 'Карта')} *{last4}" if last4 else pm.get("type", "Способ оплаты"))
     return {"type": pm.get("type", "bank_card"), "title": str(title)[:64], "card_type": card.get("card_type"), "last4": last4, "expiry": exp}
 
 

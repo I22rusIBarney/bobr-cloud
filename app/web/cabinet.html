@@ -1371,16 +1371,22 @@ function profileView() {
   if (D.autopay.available) {
     const box = h('span', { class: 'cbox', role: 'checkbox', 'aria-checked': 'false' }, icon('check'));
     saveRow = h('div', { class: 'save-card' },
-      h('button', { type: 'button', 'aria-label': 'Сохранить карту для автоплатежей', onclick: () => { save = !save; box.classList.toggle('on', save); box.setAttribute('aria-checked', String(save)); UI.haptic('select'); } }, box),
-      h('span', {}, 'Сохранить карту для автоплатежей. Соглашаюсь с ',
-        h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правилами автоплатежей'), '.'));
+      h('button', { type: 'button', 'aria-label': 'Привязать для автоплатежей', onclick: () => { save = !save; box.classList.toggle('on', save); box.setAttribute('aria-checked', String(save)); UI.haptic('select'); } }, box),
+      h('span', {}, h('span', { class: 'save-what' }, 'Сохранить карту'), ' для автоплатежей. Соглашаюсь с ',
+        h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правилами автоплатежей'), '.',
+        h('span', { class: 'save-sbp', style: 'display:block;margin-top:4px;opacity:.7' }, 'По СБП привязку поддерживают не все банки — при оплате будут показаны только подходящие.')));
   }
   // способ оплаты: если включено несколько — выбор, карта сохраняется только там, где есть автоплатежи
   let provBox = null;
   const note = h('div', { class: 'pay-note' }, icon('shield'), h('span'));
   const paintProv = () => {
     const pv = provs.find(p => p.code === provider);
-    if (saveRow) saveRow.style.display = pv && pv.autopay ? '' : 'none';
+    if (saveRow) {
+      saveRow.style.display = pv && pv.autopay ? '' : 'none';
+      const what = (pv && pv.save_what) || 'карту';
+      saveRow.querySelector('.save-what').textContent = (what === 'счёт СБП' ? 'Привязать ' : 'Сохранить ') + what;
+      saveRow.querySelector('.save-sbp').style.display = pv && pv.sbp ? 'block' : 'none';
+    }
     note.lastChild.textContent = pv ? pv.label : 'Оплата временно недоступна';
     if (!pv) go.disabled = true;
     if (provBox) [...provBox.children].forEach(b => b.setAttribute('aria-pressed', String(b.dataset.code === provider)));
@@ -1421,7 +1427,7 @@ function profileView() {
         if (!ok) return;
         if (await UI.run(() => api('/methods/' + m.id, 'DELETE'), 'Карта удалена') !== undefined) await refresh();
       } }, 'Удалить'),
-    })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет сохранённых карт', sub: D.autopay.available ? 'Отметьте «Сохранить карту» при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
+    })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет привязанных способов', sub: D.autopay.available ? 'Отметьте привязку для автоплатежей при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
     rows.push(row({ icon: 'trash', tile: '#FF6B6B', title: 'Удалить все способы оплаты', cls: 'destructive', onClick: async () => {
       const ok = await UI.ask({ title: 'Удалить все способы оплаты?', message: ms.length ? 'Все сохранённые карты будут отвязаны, автоплатежи выключатся.' : 'Сохранённых способов оплаты сейчас нет. Отвязать всё равно?', buttons: [{ id: 'y', text: 'Удалить все', type: 'destructive' }] });
       if (!ok) return;
@@ -1431,9 +1437,9 @@ function profileView() {
     } }));
     methodsBox.replaceChildren(group('Способы оплаты', rows));
     const status = h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') });
-    const paintStatus = () => { status.className = 'badge ' + (D.autopay.enabled ? (ms.length ? 'ok' : 'warn') : ''); status.textContent = D.autopay.enabled ? (ms.length ? 'Включён' : 'Нет карты') : 'Выключен'; };
+    const paintStatus = () => { status.className = 'badge ' + (D.autopay.enabled ? (ms.length ? 'ok' : 'warn') : ''); status.textContent = D.autopay.enabled ? (ms.length ? 'Включён' : 'Нет способа') : 'Выключен'; };
     paintStatus();
-    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? 'Карта ' + (ms[0].title || '') : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
+    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? (ms[0].title || '') : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
       const r = await UI.run(() => api('/autopay', 'POST', { value: val }), val ? 'Автоплатёж включён' : 'Автоплатёж выключен');
       if (r === undefined) { inp.checked = !val; return; }
       D.autopay.enabled = r.enabled; paintStatus();

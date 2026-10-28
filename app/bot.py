@@ -583,7 +583,7 @@ async def _choose_provider(target: Message | CallbackQuery, amount: int) -> None
         if isinstance(target, CallbackQuery):
             await target.answer()
         if provs and provs[0]["autopay"] and cfg["autopay_available"]:
-            await _ask_save_card(target, amount, provs[0]["code"])
+            await _ask_save_card(target, amount, provs[0])
             return
         await _start_payment(target, amount, provs[0]["code"] if provs else None)
         return
@@ -599,19 +599,24 @@ async def topup_provider(c: CallbackQuery):
         cfg = await load_settings(s)
     prov = next((p for p in svc.payment_providers(ctx(), cfg) if p["code"] == code), None)
     if prov and prov["autopay"] and cfg["autopay_available"]:
-        await _ask_save_card(c, int(amount), code)
+        await _ask_save_card(c, int(amount), prov)
         return
     await _start_payment(c, int(amount), code)
 
 
-async def _ask_save_card(target: Message | CallbackQuery, amount: int, code: str) -> None:
+async def _ask_save_card(target: Message | CallbackQuery, amount: int, prov: dict) -> None:
     base = env().public_url.rstrip("/")
-    rows = [[("💳 Оплатить без сохранения карты", f"t:go:{amount}:{code}:0")],
-            [("💾 Оплатить и сохранить карту", f"t:go:{amount}:{code}:1")]]
+    code, what = prov["code"], prov.get("save_what", "карту")
+    verb = "привязать" if what == "счёт СБП" else "сохранить"
+    rows = [[("💳 Оплатить без привязки", f"t:go:{amount}:{code}:0")],
+            [(f"💾 Оплатить и {verb} {what}", f"t:go:{amount}:{code}:1")]]
+    sbp_note = ("\n\nПривязать счёт по СБП можно не во всех банках: при оплате ЮKassa покажет только те, что это поддерживают. "
+                "Если вашего банка там нет — вернитесь и оплатите без привязки.") if prov.get("sbp") else ""
     text = (f"💳 <b>Пополнение на {rub(amount * 100)}</b>\n\n"
-            "Можно сохранить карту для автоплатежей: если на продление сервера не хватит баланса, "
-            "спишем только недостающую сумму и сразу пришлём уведомление. Удалить карту можно в любой момент в «👤 Профиль → Способы оплаты».\n\n"
-            + (f'Сохраняя карту, вы соглашаетесь с <a href="{base}/legal/autopay">Правилами автоплатежей</a>.' if base.startswith("https://") else "Сохраняя карту, вы соглашаетесь с Правилами автоплатежей."))
+            f"Можно {verb} {what} для автоплатежей: если на продление сервера не хватит баланса, "
+            "спишем только недостающую сумму и сразу пришлём уведомление. Отвязать можно в любой момент в «👤 Профиль → Способы оплаты»."
+            + sbp_note + "\n\n"
+            + (f'Соглашаясь на привязку, вы принимаете <a href="{base}/legal/autopay">Правила автоплатежей</a>.' if base.startswith("https://") else "Соглашаясь на привязку, вы принимаете Правила автоплатежей."))
     await show(target, text, kb_rows(rows, back="m:topup"))
 
 
