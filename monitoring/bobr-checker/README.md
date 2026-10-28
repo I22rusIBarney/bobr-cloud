@@ -8,24 +8,24 @@
 
 Из корня репозитория Bobr Cloud:
 
-\`\`\`bash
+```bash
 sudo ./monitoring/bobr-checker/install.sh
-\`\`\`
+```
 
 Установщик поставит Docker Engine и Compose plugin, если их нет, запросит URL подписки, порт панели и логин. Надёжный пароль создаётся автоматически. После запуска он покажет адрес, логин и пароль.
 
 ## Команды
 
-\`\`\`bash
+```bash
 bobr-checker status
 bobr-checker logs
 bobr-checker restart
 bobr-checker update
 bobr-checker config
 bobr-checker uninstall
-\`\`\`
+```
 
-Конфигурация находится в \`/opt/bobr-checker/.env\`. Команда uninstall требует подтверждения.
+Конфигурация находится в `/opt/bobr-checker/.env`. Команда uninstall требует подтверждения.
 
 ## Настройки по умолчанию
 
@@ -37,15 +37,15 @@ bobr-checker uninstall
 - Подробности узлов отображаются только после авторизации.
 - Фирменные логотип и тёмная тема Bobr Cloud.
 
-Если источник Remnawave отдаёт полноценный JSON-конфиг с балансировщиками, включите \`SUBSCRIPTION_JSON_FORMAT=true\` в \`.env\`, затем выполните \`bobr-checker restart\`. Для обычной Base64/share-подписки оставьте \`false\`.
+Если источник Remnawave отдаёт полноценный JSON-конфиг с балансировщиками, включите `SUBSCRIPTION_JSON_FORMAT=true` в `.env`, затем выполните `bobr-checker restart`. Для обычной Base64/share-подписки оставьте `false`.
 
 ## Обновление
 
-\`bobr-checker update\` скачивает свежий официальный образ \`kutovoys/xray-checker:latest\` и пересоздаёт контейнер, сохраняя настройки и фирменные ассеты.
+`bobr-checker update` скачивает свежий официальный образ `kutovoys/xray-checker:latest` и пересоздаёт контейнер, сохраняя настройки и фирменные ассеты.
 
 ## Сеть и безопасность
 
-По умолчанию порт панели доступен на всех интерфейсах и защищён Basic Auth со случайным паролем. Для постоянного использования рекомендуется HTTPS reverse proxy (например, Caddy) и ограничение доступа к панели firewall-правилами или VPN. Не публикуйте URL подписки и файл \`.env\`.
+По умолчанию порт панели доступен на всех интерфейсах и защищён Basic Auth со случайным паролем. Для постоянного использования рекомендуется HTTPS reverse proxy (например, Caddy) и ограничение доступа к панели firewall-правилами или VPN. Не публикуйте URL подписки и файл `.env`.
 
 ## Основа проекта и лицензия
 
