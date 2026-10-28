@@ -53,7 +53,7 @@ bobr-checker config
 
 ## Формат подписки
 
-По умолчанию `SUBSCRIPTION_JSON_FORMAT=false`. Для Remnawave subscription, возвращающей JSON с balancers, установите `true` в `/opt/bobr-checker/.env`, затем выполните `bobr-checker restart`. Для Base64/share-ссылки оставьте `false`.
+Для Remnawave по умолчанию включён `SUBSCRIPTION_JSON_FORMAT=true`: Checker запрашивает JSON в формате Happ и раскрывает узлы стандартных Xray balancers в отдельные проверки. Команда `bobr-checker update` также включает этот режим, обновляет Docker-образ и перезапускает сервис. Для обычных Base64/share-подписок можно вернуть `false` в `/opt/bobr-checker/.env`.
 
 ## Безопасность
 
