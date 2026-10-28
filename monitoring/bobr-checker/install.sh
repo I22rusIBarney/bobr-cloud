@@ -15,6 +15,51 @@ set_env() {
   rm -f "$tmp"
 }
 
+
+env_value() {
+  local key="$1" value
+  value="$(sed -n "s/^\${key}=//p" "$INSTALL_DIR/.env" | tail -n1)"
+  value="\${value#\\'}"; value="\${value%\\'}"
+  value="\${value#\\"}"; value="\${value%\\"}"
+  printf '%s' "$value"
+}
+print_credentials() {
+  printf '\n========== BOBR CLOUD CHECKER ==========\n'
+  printf 'Панель: https://%s\n' "$DOMAIN"
+  printf 'Логин:  %s\n' "$AUTH_USER"
+  printf 'Пароль: %s\n' "$AUTH_PASS"
+  printf '\nКоманды: bobr-checker status | logs | restart | update\n'
+  printf 'Логи Caddy: docker logs -f bobr-cloud-caddy\n'
+  printf 'Настройки: %s/.env\n' "$INSTALL_DIR"
+  printf '========================================\n'
+}
+check_local_https() {
+  local code
+  code="$(curl -fsS -o /dev/null -w '%{http_code}' \
+    --connect-timeout 3 --max-time 6 \
+    --resolve "$DOMAIN:443:127.0.0.1" \
+    "https://$DOMAIN/" 2>/dev/null || true)"
+  [[ "$code" =~ ^[23][0-9][0-9]$ || "$code" == "401" ]]
+}
+wait_for_checker() {
+  local i
+  for i in $(seq 1 45); do
+    if docker compose exec -T checker curl -fsS http://127.0.0.1:2112/health >/dev/null 2>&1; then return 0; fi
+    sleep 2
+  done
+  return 1
+}
+wait_for_https() {
+  local i
+  for i in $(seq 1 60); do
+    if check_local_https; then return 0; fi
+    if (( i % 4 == 0 )); then printf '.'; fi
+    sleep 5
+  done
+  printf '\n'
+  return 1
+}
+
 [[ $EUID -eq 0 ]] || die "Запустите: sudo bash monitoring/bobr-checker/install.sh"
 [[ -r /etc/os-release ]] || die "Не удалось определить ОС."
 . /etc/os-release
@@ -43,6 +88,33 @@ if ! docker compose version >/dev/null 2>&1; then
 fi
 docker compose version >/dev/null 2>&1 || die "Docker Compose plugin не найден."
 systemctl enable --now docker >/dev/null 2>&1 || true
+
+if [[ -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/docker-compose.yml" ]]; then
+  DOMAIN="$(env_value DOMAIN)"
+  AUTH_USER="$(env_value METRICS_USERNAME)"
+  AUTH_PASS="$(env_value METRICS_PASSWORD)"
+  if [[ -n "$DOMAIN" && -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
+    info "Найдена предыдущая установка. Проверяю конфигурацию и контейнеры..."
+    cd "$INSTALL_DIR"
+    docker compose config -q || die "Конфигурация предыдущей установки некорректна. Проверьте $INSTALL_DIR/.env."
+    docker compose up -d --remove-orphans
+    info "Проверяю Checker..."
+    if ! wait_for_checker; then
+      docker compose logs --tail=80 checker || true
+      die "Checker не прошёл healthcheck. Реквизиты не выведены, поскольку установка не прошла проверку."
+    fi
+    ok "Checker работает."
+    info "Проверяю HTTPS и доверие сертификату для $DOMAIN..."
+    if wait_for_https; then
+      ok "HTTPS работает, сертификат доверенный."
+      print_credentials
+      exit 0
+    fi
+    warn "HTTPS не подтвердился. Последние логи Caddy:"
+    docker compose logs --tail=120 caddy || true
+    die "Предыдущая установка найдена, но HTTPS не прошёл проверку."
+  fi
+fi
 
 mkdir -p "$INSTALL_DIR"
 if [[ -f "$INSTALL_DIR/.env" ]]; then
@@ -183,33 +255,18 @@ for i in $(seq 1 45); do
 done
 [[ "$CHECKER_READY" == 1 ]] && ok "Checker отвечает." || warn "Checker пока не отвечает. Смотрите: bobr-checker logs"
 
-info "Жду выпуска HTTPS-сертификата для $DOMAIN (это может занять пару минут)..."
+info "Жду выпуска и проверки HTTPS-сертификата для $DOMAIN (до 5 минут)..."
 HTTPS_READY=0
-for i in $(seq 1 60); do
-  HTTP_CODE="$(curl -k -sS -o /dev/null -w '%{http_code}' --connect-timeout 3 --max-time 5 "https://$DOMAIN/" 2>/dev/null || true)"
-  if [[ "$HTTP_CODE" =~ ^[234] ]]; then HTTPS_READY=1; break; fi
-  sleep 5
-done
-
+if wait_for_https; then HTTPS_READY=1; fi
 printf '\n'
 if [[ "$HTTPS_READY" == 1 ]]; then
-  ok "HTTPS работает."
+  ok "HTTPS работает, сертификат проходит проверку доверия."
 else
-  warn "Панель запущена, но HTTPS пока не подтвердился. Чаще всего внешний firewall провайдера закрывает 80/443 или DNS ещё не обновился."
+  warn "HTTPS не подтвердился. Последние логи Caddy:"
+  docker compose logs --tail=120 caddy || true
 fi
-printf '\n========== BOBR CLOUD CHECKER ==========\n'
-printf 'Панель: https://%s\n' "$DOMAIN"
-printf 'Логин:  %s\n' "$AUTH_USER"
-if [[ "$AUTH_CREATED" == 1 ]]; then
-  printf 'Пароль: %s\nСохраните его сейчас!\n' "$AUTH_PASS"
-else
-  printf 'Пароль: прежний, хранится в %s/.env\n' "$INSTALL_DIR"
-fi
-printf '\nКоманды: bobr-checker status | logs | restart | update\n'
-printf 'Логи Caddy: docker logs -f bobr-cloud-caddy\n'
-printf 'Настройки: %s/.env\n' "$INSTALL_DIR"
-printf 'Публичный IPv4: %s\n' "$PUBLIC_IP"
+print_credentials
 if [[ "$HTTPS_READY" != 1 ]]; then
-  printf '\nПроверьте в панели хостера входящие TCP 80, TCP 443 и UDP 443.\n'
+  printf '\nПроверьте внешнюю доступность TCP 80 и TCP 443, DNS A/AAAA и логи Caddy.\n'
+  exit 1
 fi
-printf '========================================\n'
