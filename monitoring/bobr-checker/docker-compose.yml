@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "\${BIND_ADDRESS:-0.0.0.0}:\${HOST_PORT:-2112}:2112"
+      - "${BIND_ADDRESS:-0.0.0.0}:${HOST_PORT:-2112}:2112"
     volumes:
       - ./geo:/app/geo
       - ./custom:/app/custom:ro
