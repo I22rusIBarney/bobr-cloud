@@ -7,7 +7,7 @@ ok(){ printf "${C_GREEN}✔${C_RESET} %s\n" "$*"; }
 warn(){ printf "${C_YELLOW}! ${C_RESET}%s\n" "$*"; }
 die(){ printf "${C_RED}✖ %s${C_RESET}\n" "$*" >&2; exit 1; }
 
-[[ $EUID -eq 0 ]] || die "Запустите от root: sudo ./monitoring/bobr-checker/install.sh"
+[[ $EUID -eq 0 ]] || die "Запустите от root: sudo bash monitoring/bobr-checker/install.sh"
 [[ -r /etc/os-release ]] || die "Не удалось определить ОС."
 . /etc/os-release
 case "${ID:-}" in ubuntu|debian) ;; *) die "Поддерживаются Ubuntu и Debian. Обнаружено: ${PRETTY_NAME:-unknown}";; esac
@@ -44,7 +44,7 @@ else
   mkdir -p "$INSTALL_DIR"
 fi
 
-mkdir -p "$INSTALL_DIR/geo" "$INSTALL_DIR/custom"
+mkdir -p "$INSTALL_DIR/geo" "$INSTALL_DIR/custom" "$INSTALL_DIR/caddy_data" "$INSTALL_DIR/caddy_config"
 cp "$SRC_DIR/docker-compose.yml" "$INSTALL_DIR/docker-compose.yml"
 cp "$SRC_DIR/README.md" "$INSTALL_DIR/README.md"
 cp "$SRC_DIR/custom/"* "$INSTALL_DIR/custom/"
@@ -57,9 +57,8 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
     [[ "$SUB_URL" =~ ^https?:// ]] && break
     warn "Нужна ссылка, начинающаяся с http:// или https://."
   done
-  read -r -p "Порт веб-панели [2112]: " HOST_PORT
-  HOST_PORT="${HOST_PORT:-2112}"
-  [[ "$HOST_PORT" =~ ^[0-9]+$ ]] && (( HOST_PORT >= 1 && HOST_PORT <= 65535 )) || die "Некорректный порт."
+  read -r -p "Домен панели (например, monitor.example.com): " DOMAIN
+  [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ && "$DOMAIN" == *.* ]] || die "Некорректное доменное имя."
   read -r -p "Логин администратора [admin]: " AUTH_USER
   AUTH_USER="${AUTH_USER:-admin}"
   [[ "$AUTH_USER" =~ ^[a-zA-Z0-9_.-]+$ ]] || die "Некорректный логин."
@@ -84,41 +83,71 @@ WEB_PUBLIC=false
 WEB_SHOW_DETAILS=true
 WEB_CUSTOM_ASSETS_PATH=/app/custom
 LOG_LEVEL=info
-HOST_PORT=$HOST_PORT
-BIND_ADDRESS=127.0.0.1
+DOMAIN=$DOMAIN
 EOF
   chmod 600 "$INSTALL_DIR/.env"
   AUTH_CREATED=1
 else
   AUTH_USER="$(sed -n 's/^METRICS_USERNAME=//p' "$INSTALL_DIR/.env" | tail -n1)"
   AUTH_PASS="$(sed -n 's/^METRICS_PASSWORD=//p' "$INSTALL_DIR/.env" | tail -n1)"
-  HOST_PORT="$(sed -n 's/^HOST_PORT=//p' "$INSTALL_DIR/.env" | tail -n1)"
+  DOMAIN="$(sed -n 's/^DOMAIN=//p' "$INSTALL_DIR/.env" | tail -n1)"
+  if [[ -z "$DOMAIN" ]]; then
+    read -r -p "Домен панели (например, monitor.example.com): " DOMAIN
+  else
+    read -r -p "Домен панели [$DOMAIN]: " NEW_DOMAIN
+    DOMAIN="${NEW_DOMAIN:-$DOMAIN}"
+  fi
+  [[ "$DOMAIN" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ && "$DOMAIN" == *.* ]] || die "Некорректное доменное имя."
+  if grep -q '^DOMAIN=' "$INSTALL_DIR/.env"; then
+    sed -i "s|^DOMAIN=.*|DOMAIN=$DOMAIN|" "$INSTALL_DIR/.env"
+  else
+    printf '\nDOMAIN=%s\n' "$DOMAIN" >> "$INSTALL_DIR/.env"
+  fi
   AUTH_CREATED=0
 fi
+chmod 600 "$INSTALL_DIR/.env"
+
+cat > "$INSTALL_DIR/Caddyfile" <<'EOF'
+{$DOMAIN} {
+    encode zstd gzip
+    reverse_proxy checker:2112
+}
+EOF
 
 install -m 755 "$SRC_DIR/cli.sh" /usr/local/bin/bobr-checker
-info "Загружаю образ и запускаю мониторинг..."
-cd "$INSTALL_DIR"
-docker compose pull checker
-docker compose up -d --remove-orphans
-ok "Контейнер запущен."
 
-HOST_PORT="${HOST_PORT:-2112}"
-PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-[[ -n "$PUBLIC_IP" ]] || PUBLIC_IP="IP-АДРЕС-СЕРВЕРА"
-for i in $(seq 1 30); do
-  curl -fsS "http://127.0.0.1:$HOST_PORT/health" >/dev/null 2>&1 && break
+# If UFW is already enabled, add web ports without enabling or resetting the firewall.
+if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q "Status: active"; then
+  ufw allow 80/tcp >/dev/null || true
+  ufw allow 443/tcp >/dev/null || true
+  ufw allow 443/udp >/dev/null || true
+fi
+
+info "Загружаю Checker и Caddy..."
+cd "$INSTALL_DIR"
+docker compose pull
+docker compose up -d --remove-orphans
+ok "Контейнеры запущены."
+
+for i in $(seq 1 45); do
+  if docker compose ps --status running --services | grep -qx checker && curl -fsS "http://127.0.0.1:$(docker compose port checker 2112 2>/dev/null | awk -F: '{print $NF}' | tail -n1)/health" >/dev/null 2>&1; then
+    break
+  fi
   sleep 2
 done
-if curl -fsS "http://127.0.0.1:$HOST_PORT/health" >/dev/null 2>&1; then ok "Проверка /health пройдена."; else warn "Панель пока не отвечает. Проверьте: bobr-checker logs"; fi
 
-printf '\nBOBR CLOUD CHECKER УСТАНОВЛЕН\n'
-printf 'Панель: http://127.0.0.1:%s (доступ только локально)\nЛогин:  %s\n' "$HOST_PORT" "$AUTH_USER"
-printf 'SSH-туннель: ssh -L %s:127.0.0.1:%s root@%s\n' "$HOST_PORT" "$HOST_PORT" "$PUBLIC_IP"
+PUBLIC_IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+DNS_IP="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR==1 {print $1}' || true)"
+printf '\nBOBR CLOUD CHECKER\n'
+printf 'Панель: https://%s\n' "$DOMAIN"
+printf 'Логин:  %s\n' "$AUTH_USER"
+if [[ -n "$PUBLIC_IP" && -n "$DNS_IP" && "$PUBLIC_IP" != "$DNS_IP" ]]; then
+  warn "Домен сейчас разрешается в $DNS_IP, а публичный IPv4 сервера — $PUBLIC_IP. Проверьте DNS."
+fi
 if [[ "${AUTH_CREATED:-0}" == 1 ]]; then
   printf 'Пароль: %s\nСохраните его сейчас — повторно он не выводится.\n' "$AUTH_PASS"
 else
   printf 'Пароль сохранён в %s/.env\n' "$INSTALL_DIR"
 fi
-printf '\nУправление: bobr-checker help\nНастройки: %s/.env\n' "$INSTALL_DIR"
-warn "Панель привязана к localhost. Для постоянного доступа настройте HTTPS reverse proxy (например, Caddy)."
+printf '\nУправление: bobr-checker help\nНастройки: %s/.env\nЛоги Caddy: docker logs bobr-cloud-caddy\n' "$INSTALL_DIR"
+warn "Для выпуска HTTPS-сертификата домен должен указывать на этот сервер, а входящие TCP 80/443 должны быть доступны извне. Если у провайдера есть внешний firewall, откройте порты и там."
