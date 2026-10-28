@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 52" role="img" aria-label="Bobr Cloud">
+  <rect x="1" y="1" width="50" height="50" rx="15" fill="#17372b"/>
+  <path d="M13 31c2-10 8-16 17-16 7 0 12 4 14 10l-5 3-4-5-6 2-2 9-7 3-7-6z" fill="#8bd6a8"/>
+  <circle cx="34" cy="21" r="2" fill="#10231b"/>
+  <path d="M16 37c7 4 20 5 29-1" fill="none" stroke="#8bd6a8" stroke-width="2.5" stroke-linecap="round"/>
+  <text x="63" y="23" fill="#edf5f0" font-family="Inter,Arial,sans-serif" font-size="16" font-weight="700">BOBR CLOUD</text>
+  <text x="63" y="39" fill="#9eb5a7" font-family="Inter,Arial,sans-serif" font-size="10" letter-spacing="2">CHECKER</text>
+</svg>
