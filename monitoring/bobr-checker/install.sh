@@ -94,7 +94,12 @@ if [[ -f "$INSTALL_DIR/.env" && -f "$INSTALL_DIR/docker-compose.yml" ]]; then
   if [[ -n "$DOMAIN" && -n "$AUTH_USER" && -n "$AUTH_PASS" ]]; then
     info "Найдена предыдущая установка. Проверяю конфигурацию и контейнеры..."
     cd "$INSTALL_DIR"
+    # Remnawave must be requested in app-like JSON mode so balancer members
+    # are returned as individual outbounds instead of a collapsed share link.
+    cp -a "$INSTALL_DIR/.env" "$INSTALL_DIR/.env.backup.$(date +%Y%m%d%H%M%S)"
+    set_env "SUBSCRIPTION_JSON_FORMAT" "true"
     docker compose config -q || die "Конфигурация предыдущей установки некорректна. Проверьте $INSTALL_DIR/.env."
+    docker compose pull
     docker compose up -d --remove-orphans
     info "Проверяю Checker..."
     if ! wait_for_checker; then
@@ -209,7 +214,7 @@ if [[ ! -f "$INSTALL_DIR/.env" ]]; then
   cat > "$INSTALL_DIR/.env" <<EOF
 SUBSCRIPTION_UPDATE=true
 SUBSCRIPTION_UPDATE_INTERVAL=300
-SUBSCRIPTION_JSON_FORMAT=false
+SUBSCRIPTION_JSON_FORMAT=true
 PROXY_CHECK_INTERVAL=60
 PROXY_CHECK_CONCURRENCY=10
 PROXY_CHECK_METHOD=ip
