@@ -1,0 +1,14 @@
+/* Bobr Cloud Checker — restrained dark theme */
+:root {
+  --bg-primary: #0b1010;
+  --bg-secondary: #111a18;
+  --bg-tertiary: #172320;
+  --text-primary: #edf5f0;
+  --text-secondary: #a7b8ae;
+  --color-green: #54c58a;
+  --color-red: #ef6b70;
+  --color-yellow: #e7bd65;
+  --border-color: rgba(180, 210, 193, .13);
+  color-scheme: dark;
+}
+body { background: var(--bg-primary); }
