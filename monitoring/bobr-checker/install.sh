@@ -18,9 +18,7 @@ set_env() {
 
 env_value() {
   local key="$1" value
-  value="$(sed -n "s/^\${key}=//p" "$INSTALL_DIR/.env" | tail -n1)"
-  value="\${value#\\'}"; value="\${value%\\'}"
-  value="\${value#\\"}"; value="\${value%\\"}"
+  value="$(awk -F= -v key="$key" '$1 == key { sub(/^[^=]*=/, ""); value=$0 } END { print value }' "$INSTALL_DIR/.env" | tr -d "'\"")"
   printf '%s' "$value"
 }
 print_credentials() {
@@ -248,12 +246,12 @@ docker compose up -d --remove-orphans
 ok "Контейнеры запущены."
 
 info "Жду готовности Checker..."
-CHECKER_READY=0
-for i in $(seq 1 45); do
-  if docker compose exec -T checker curl -fsS "http://127.0.0.1:2112/health" >/dev/null 2>&1; then CHECKER_READY=1; break; fi
-  sleep 2
-done
-[[ "$CHECKER_READY" == 1 ]] && ok "Checker отвечает." || warn "Checker пока не отвечает. Смотрите: bobr-checker logs"
+if wait_for_checker; then
+  ok "Checker отвечает."
+else
+  docker compose logs --tail=80 checker || true
+  die "Checker не прошёл healthcheck. Проверьте логи выше."
+fi
 
 info "Жду выпуска и проверки HTTPS-сертификата для $DOMAIN (до 5 минут)..."
 HTTPS_READY=0
