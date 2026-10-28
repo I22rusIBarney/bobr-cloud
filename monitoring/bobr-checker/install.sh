@@ -85,7 +85,7 @@ WEB_SHOW_DETAILS=true
 WEB_CUSTOM_ASSETS_PATH=/app/custom
 LOG_LEVEL=info
 HOST_PORT=$HOST_PORT
-BIND_ADDRESS=0.0.0.0
+BIND_ADDRESS=127.0.0.1
 EOF
   chmod 600 "$INSTALL_DIR/.env"
   AUTH_CREATED=1
@@ -113,11 +113,12 @@ done
 if curl -fsS "http://127.0.0.1:$HOST_PORT/health" >/dev/null 2>&1; then ok "Проверка /health пройдена."; else warn "Панель пока не отвечает. Проверьте: bobr-checker logs"; fi
 
 printf '\nBOBR CLOUD CHECKER УСТАНОВЛЕН\n'
-printf 'Панель: http://%s:%s\nЛогин:  %s\n' "$PUBLIC_IP" "$HOST_PORT" "$AUTH_USER"
+printf 'Панель: http://127.0.0.1:%s (доступ только локально)\nЛогин:  %s\n' "$HOST_PORT" "$AUTH_USER"
+printf 'SSH-туннель: ssh -L %s:127.0.0.1:%s root@%s\n' "$HOST_PORT" "$HOST_PORT" "$PUBLIC_IP"
 if [[ "${AUTH_CREATED:-0}" == 1 ]]; then
   printf 'Пароль: %s\nСохраните его сейчас — повторно он не выводится.\n' "$AUTH_PASS"
 else
   printf 'Пароль сохранён в %s/.env\n' "$INSTALL_DIR"
 fi
 printf '\nУправление: bobr-checker help\nНастройки: %s/.env\n' "$INSTALL_DIR"
-warn "Для постоянного использования настройте HTTPS и ограничьте доступ к панели."
+warn "Панель привязана к localhost. Для постоянного доступа настройте HTTPS reverse proxy (например, Caddy)."
