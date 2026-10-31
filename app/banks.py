@@ -72,13 +72,20 @@ async def directory(fresh: bool = False) -> dict[str, dict]:
     return _dir
 
 
-async def info(bank_id: str | None) -> dict | None:
+# если справочник НСПК недоступен или банка в нём нет — крупные банки по БИК
+BIC_NAMES = {"044525225": "Сбербанк", "044525187": "ВТБ", "044525593": "Альфа-Банк", "044525974": "Т-Банк",
+             "044525700": "Райффайзенбанк", "044525823": "Газпромбанк"}
+LOGO_PATTERN = "https://qr.nspk.ru/proxyapp/logo/bank{}.png"
+
+
+async def info(bank_id: str | None, bic: str | None = None) -> dict | None:
     """{id, name, logo} для кабинета или None, если банк неизвестен."""
     if not valid_id(bank_id):
-        return None
+        return {"id": "", "name": BIC_NAMES[bic], "logo": None} if bic in BIC_NAMES else None
     b = (await directory()).get(str(bank_id))
-    if not b:
-        return None
+    if not b:  # нет в справочнике — имя по БИК, эмблема по обычному адресу НСПК (не найдётся — покажем значок)
+        name = BIC_NAMES.get(bic or "")
+        return {"id": str(bank_id), "name": name or "Банк СБП", "logo": f"/bank-logo/{bank_id}.png", "unknown": not name}
     return {"id": str(bank_id), "name": b["name"], "logo": f"/bank-logo/{bank_id}.png" if b.get("logo_src") else None}
 
 
@@ -89,7 +96,7 @@ async def logo(bank_id: str) -> bytes | None:
     f = _media / f"{bank_id}.png"
     if f.exists() and time.time() - f.stat().st_mtime < 30 * TTL:
         return f.read_bytes()
-    src = ((await directory()).get(bank_id) or {}).get("logo_src")
+    src = ((await directory()).get(bank_id) or {}).get("logo_src") or LOGO_PATTERN.format(bank_id)
     if not src or not src.startswith("https://"):
         return f.read_bytes() if f.exists() else None
     try:

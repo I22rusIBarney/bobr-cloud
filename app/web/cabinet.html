@@ -1415,6 +1415,12 @@ function profileView() {
       h('button', { type: 'button', onclick: () => { src = null; UI.haptic('select'); paintSrc(); } },
         h('span', { class: 'radio', 'aria-hidden': 'true' }), h('span', { class: 'bank-ico' }, icon('plus')), h('span', { class: 'pl' }, 'Новым способом', h('small', {}, 'через страницу банка, можно привязать ещё один'))));
     srcBox.style.display = '';
+    if (saveRow) {  // счёт уже привязан — галочка по умолчанию снята: повторная привязка того же счёта банком отклоняется
+      save = false; saveRow.querySelector('.cbox').classList.remove('on'); saveRow.querySelector('.cbox').setAttribute('aria-checked', 'false');
+      const hint = saveRow.querySelector('.save-sbp');
+      hint.textContent = 'Отмечайте, только если привязываете счёт другого банка: тот же счёт повторно не привяжется, и банк откажет. Окно привязки в банке появится только с этой галочкой.';
+      hint.dataset.always = '1';
+    }
     paintSrc();
   });
   // способ оплаты: если включено несколько — выбор, карта сохраняется только там, где есть автоплатежи
@@ -1426,7 +1432,8 @@ function profileView() {
       saveRow.style.display = pv && pv.autopay ? '' : 'none';
       const what = (pv && pv.save_what) || 'карту';
       saveRow.querySelector('.save-what').textContent = (what === 'счёт СБП' ? 'Привязать ' : 'Сохранить ') + what;
-      saveRow.querySelector('.save-sbp').style.display = pv && pv.sbp ? 'block' : 'none';
+      const hint = saveRow.querySelector('.save-sbp');
+      hint.style.display = (pv && pv.sbp) || hint.dataset.always ? 'block' : 'none';
     }
     note.lastChild.textContent = pv ? pv.label : 'Оплата временно недоступна';
     if (!pv) go.disabled = true;

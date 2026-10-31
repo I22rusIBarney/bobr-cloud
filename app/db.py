@@ -239,7 +239,8 @@ class PaymentMethod(Base):
     # счёт СБП: банк плательщика (участник СБП и БИК) — для названия и эмблемы банка
     bank_id: Mapped[str | None] = mapped_column(String(16), nullable=True)
     bank_bic: Mapped[str | None] = mapped_column(String(16), nullable=True)
-    bank_checked: Mapped[bool] = mapped_column(Boolean, default=False)
+    bank_checked: Mapped[bool] = mapped_column(Boolean, default=False)  # устарело: см. bank_checked_at
+    bank_checked_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)

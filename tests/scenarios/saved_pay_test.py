@@ -104,8 +104,32 @@ async def main():
             m = await s.get(D.PaymentMethod, mid)
             m.bank_id, m.bank_bic, m.bank_checked = None, None, False
             await s.commit()
+        for i in range(12):  # с тех пор много пополнений с привязкой — платёж привязки уже не в последних
+            r = await c.post("/api/me/topup", headers=H, json={"amount_rub": 100, "save_method": True})
+        async with D.session() as s:
+            m = await s.get(D.PaymentMethod, mid)
+            m.bank_id, m.bank_bic, m.bank_checked, m.bank_checked_at = None, None, True, None
+            await s.commit()
         ms = (await c.get("/api/me/methods", headers=H)).json()
-        ok(ms[0]["bank"] and ms[0]["bank"]["name"] == "Сбербанк", "банк у старой привязки дозаполнен из платежа")
+        ok(ms[0]["bank"] and ms[0]["bank"]["name"] == "Сбербанк", f"банк у старой привязки дозаполнен из платежа привязки: {ms[0]['bank']}")
+        async with D.session() as s:
+            m = await s.get(D.PaymentMethod, mid)
+            m.bank_id = "100000000999"; m.bank_bic = "044525187"
+            await s.commit()
+        ms = (await c.get("/api/me/methods", headers=H)).json()
+        ok(ms[0]["bank"]["name"] == "ВТБ" and ms[0]["bank"]["logo"] == "/bank-logo/100000000999.png", "банка нет в справочнике — имя по БИК")
+        yk.charge_status = "succeeded"
+        n0 = len(msgs)
+        async def cp_cancel(**kw):
+            yk.n += 1; pid = f"yk{yk.n}"
+            yk.pays[pid] = {"id": pid, "status": "canceled", "cancellation_details": {"reason": "general_decline"}}
+            return {"id": pid, "confirmation": {"confirmation_url": "https://pay/" + pid}}
+        yk.create_payment = cp_cancel
+        r = await c.post("/api/me/topup", headers=H, json={"amount_rub": 500, "save_method": True})
+        async with D.session() as s:
+            last = (await s.execute(select(D.Payment).order_by(D.Payment.id.desc()))).scalars().first()
+        await svc.credit_payment(ctx, last.yk_id)
+        ok(any("повторная привязка" in t for _, t in msgs[n0:]), "привязка в банке не прошла — клиенту понятное сообщение")
         ok((await c.get("/bank-logo/../x.png")).status_code == 404 and (await c.get("/bank-logo/abc.png")).status_code == 404,
            "эмблема — только по номеру банка")
     ok(svc._method_fields({"id": "x", "type": "sbp", "payer_bank_details": {"bank_id": "100000000004", "bic": "044525974"}})["bank_id"] == "100000000004",

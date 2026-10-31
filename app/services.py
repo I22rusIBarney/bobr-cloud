@@ -1180,29 +1180,42 @@ async def _save_method(s, tg_id: int, pm: dict) -> PaymentMethod:
 
 
 async def fill_banks(ctx: Ctx, tg_id: int) -> None:
-    """Счета СБП, привязанные до того, как bcloud начал запоминать банк: ищем банк в платеже, которым счёт привязали."""
+    """Счёт СБП без банка (привязан до того, как bcloud начал его запоминать, или банк не пришёл сразу): ищем банк
+    в платеже, которым счёт привязали, — сначала по пометке, потом среди последних платежей с привязкой.
+    Не нашли — повторим через 6 часов."""
     async with session() as s:
         todo = (await s.execute(select(PaymentMethod).where(PaymentMethod.tg_id == tg_id, PaymentMethod.active.is_(True),
-                                                            PaymentMethod.type == "sbp", PaymentMethod.bank_id.is_(None),
-                                                            PaymentMethod.bank_checked.is_(False)))).scalars().all()
+                                                            PaymentMethod.type == "sbp", PaymentMethod.bank_id.is_(None)))).scalars().all()
+        todo = [m for m in todo if not m.bank_checked_at or m.bank_checked_at < utcnow() - timedelta(hours=6)]
         if not todo or not ctx.yk.configured:
             return
-        pays = (await s.execute(select(Payment).where(Payment.tg_id == tg_id, Payment.save_method.is_(True), Payment.status == "succeeded",
-                                                      Payment.yk_id.is_not(None)).order_by(Payment.id.desc()).limit(10))).scalars().all()
         want = {m.yk_id: m for m in todo}
-        for p in pays:
+        marked = (await s.execute(select(Payment).where(Payment.tg_id == tg_id, Payment.method_yk_id.in_(list(want)), Payment.status == "succeeded",
+                                                        Payment.yk_id.is_not(None)).order_by(Payment.id))).scalars().all()
+        rest = (await s.execute(select(Payment).where(Payment.tg_id == tg_id, Payment.save_method.is_(True), Payment.status == "succeeded",
+                                                      Payment.yk_id.is_not(None)).order_by(Payment.id.desc()).limit(60))).scalars().all()
+        seen = set()
+        for p in [*marked, *rest]:
             if not want:
                 break
+            if p.yk_id in seen or p.provider not in (None, "", "yookassa"):
+                continue
+            seen.add(p.yk_id)
             try:
                 pm = (await ctx.yk.get_payment(p.yk_id)).get("payment_method") or {}
             except Exception:  # noqa: BLE001
                 continue
-            m = want.pop(pm.get("id"), None)
-            if m:
-                f = _method_fields(pm)
+            m = want.get(pm.get("id"))
+            if m is None:
+                continue
+            f = _method_fields(pm)
+            if f["bank_id"]:
                 m.bank_id, m.bank_bic = f["bank_id"], f["bank_bic"]
+                want.pop(m.yk_id)
+            else:
+                log.info("СБП банк: в платеже %s нет payer_bank_details (поля способа: %s)", p.yk_id, sorted(pm))
         for m in todo:
-            m.bank_checked = True
+            m.bank_checked_at = utcnow()
         await s.commit()
 
 
@@ -1287,6 +1300,10 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
             reason = (data.get("cancellation_details") or {}).get("reason")
             res = await s.execute(update(Payment).where(Payment.id == pay.id, Payment.status == "pending").values(status="canceled", cancel_reason=reason))
             await s.commit()
+            if res.rowcount == 1 and pay.save_method and not pay.autopay:
+                await ctx.notify(pay.tg_id, f"⚠️ <b>Пополнение не прошло</b>\n\nБанк не провёл платёж {fmt_rub(pay.amount_kop)} с привязкой счёта"
+                                 + (f" ({CANCEL_TEXT.get(reason, reason)})" if reason else "") + ". Если счёт этого банка уже привязан, "
+                                 "повторная привязка не пройдёт: оплатите им без перехода в банк или снимите галочку «Привязать».")
             if res.rowcount == 1 and pay.autopay:
                 why = CANCEL_TEXT.get(reason or "", "платёж отклонён")
                 if reason in REVOKED_REASONS:
@@ -1310,9 +1327,13 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
             return False
         saved_title = None
         pm = data.get("payment_method") or {}
+        bind_failed = bool(pay.save_method and not pm.get("saved"))
         if pay.save_method and pm.get("saved") and pm.get("id"):
             m = await _save_method(s, pay.tg_id, pm)
+            pay.method_yk_id = pay.method_yk_id or pm["id"]  # каким платежом привязан — по нему потом найдём банк
             saved_title = m.title
+            if pm.get("type") == "sbp" and not m.bank_id:
+                log.info("СБП банк: платёж %s без payer_bank_details (поля способа: %s)", yk_id, sorted(pm))
             u = await s.get(User, pay.tg_id)
             if u:
                 u.autopay_enabled = True
@@ -1327,7 +1348,9 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
     else:
         msg = f"✅ <b>Баланс пополнен</b>\n\n💰 Зачислено: <b>{fmt_rub(amount)}</b>"
         if saved_title:
-            msg += f"\n💳 Карта {html.escape(saved_title)} сохранена, автоплатежи включены. Отключить можно в личном кабинете."
+            msg += f"\n💳 {html.escape(saved_title)} привязан(а), автоплатежи включены. Отключить можно в личном кабинете."
+        elif bind_failed:
+            msg += "\nℹ️ Деньги зачислены, но банк не привязал счёт для автоплатежей — можно попробовать в другой раз или другим банком."
         await ctx.notify(tg_id, msg)
     from . import events, referral  # бонусы за приглашение — только с реальных оплат
     async with session() as s:
