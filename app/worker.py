@@ -76,6 +76,7 @@ def start_workers(ctx: svc.Ctx) -> list[asyncio.Task]:
     jobs = [
         ("sync_servers", 45, svc.sync_servers, 5),
         ("refund_undelivered", 6 * 3600, svc.refund_undelivered, 90),
+        ("relabel_astra", 24 * 3600, svc.relabel_astra, 150),
         ("poll_payments", 60, svc.poll_pending_payments, 10),
         ("autorenew", 600, svc.autorenew_and_remind, 20),
         ("receipts", 300, svc.process_receipts, 30),

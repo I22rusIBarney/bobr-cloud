@@ -75,6 +75,18 @@ class Ctx:
 _RI = range(0x1F1E6, 0x1F1FF + 1)  # regional indicator symbols
 
 
+def astra_label(location: str, user) -> str:
+    """Название сервера у провайдера (видит только владелец сервиса в Astra): флаг страны и кто купил.
+    Клиент в Bobr Cloud видит своё название — оно хранится только у нас."""
+    who = f"@{user.username}" if getattr(user, "username", None) else f"{(getattr(user, 'first_name', '') or 'id').strip()[:24]} {user.tg_id}"
+    return f"{flag(location)} {who}"[:60]
+
+
+def astra_label_plain(location: str, user) -> str:
+    """Запасная подпись без эмодзи — если провайдер не принял флаг в названии."""
+    return f"{(location or '').upper()} " + astra_label(location, user).split(" ", 1)[1]
+
+
 def flag(code: str) -> str:
     """Флаг из двухбуквенного кода страны: nl → 🇳🇱. Для не-ISO кодов — 🌍."""
     c = (code or "").strip().upper()
@@ -391,13 +403,21 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
         if not await change_balance(s, tg_id, -charge, "purchase", ref):
             raise UserError("Недостаточно средств на балансе. Пополните баланс и повторите.")
 
-    name = f"vps-{secrets.token_hex(3)}"
-    try:
+    name = f"vps-{secrets.token_hex(3)}"  # название для клиента; у провайдера — флаг и кто купил
+    label = astra_label(location, user)
+
+    async def create(lbl: str) -> dict:
         if idx is not None:
-            resp = await ctx.astra.create(idx=idx, location=location, os=os_, name=name, period=period, password=password or None)
-        else:
-            resp = await ctx.astra.create(cpu=preset["cpu"], ram=preset["ram"], disk=preset["disk"], location=location, os=os_,
-                                          name=name, period=period, password=password or None)
+            return await ctx.astra.create(idx=idx, location=location, os=os_, name=lbl, period=period, password=password or None)
+        return await ctx.astra.create(cpu=preset["cpu"], ram=preset["ram"], disk=preset["disk"], location=location, os=os_,
+                                      name=lbl, period=period, password=password or None)
+    try:
+        try:
+            resp = await create(label)
+        except AstraError as ex:
+            if ex.status not in (400, 422) or "name" not in str(ex.payload).lower():
+                raise
+            resp = await create(astra_label_plain(location, user))  # флаг в названии не приняли — без него
     except AstraError as ex:
         await _refund(tg_id, charge, "refund_create", name)
         if ex.status == 402:
@@ -546,8 +566,6 @@ def _apply_remote(srv: Server, r: dict) -> None:
     for k in ("cpu", "ram", "disk"):
         if isinstance(spec.get(k), (int, float)) and spec[k] > 0:
             setattr(srv, k, int(spec[k]))
-    if r.get("name") and isinstance(r["name"], str):
-        srv.name = r["name"][:60]
     # Astra отдаёт цену продления сервера — по ней сторож маржи видит повышения
     for k in ("renew_month_rub", "price_month_rub"):
         v = r.get(k)
@@ -823,12 +841,7 @@ async def rename_server(ctx: Ctx, tg_id: int, server_id: int, name: str) -> str:
         srv = await get_user_server(s, tg_id, server_id)
         if srv.status == "provisioning":
             raise UserError("Дождитесь, пока сервер создастся.")
-    try:
-        await ctx.astra.action(srv.astra_id, "rename", {"name": name})
-    except AstraError as ex:
-        raise UserError(f"Не удалось переименовать ({ex.code or ex.status}).") from ex
-    except AstraUncertain as ex:
-        raise UserError("Ответ от провайдера не получен. Попробуйте ещё раз.") from ex
+    # у провайдера название не меняем: там флаг и кто купил — по нему владелец сервиса находит сервер в Astra
     async with session() as s:
         row = await s.get(Server, server_id)
         row.name = name
@@ -1543,6 +1556,34 @@ async def refund_undelivered(ctx: Ctx, days: int = 14) -> int:
         await ctx.notify(srv.tg_id, f"↩️ <b>Возврат за несозданный сервер</b>\n\nСервер «{html.escape(srv.name)}» не удалось создать — "
                                     f"{fmt_rub(kop)} вернули на баланс.")
         await ctx.alert_admin(f"↩️ Сервер #{srv.astra_id} клиента {srv.tg_id} не был выдан Astra — вернул клиенту {fmt_rub(kop)}.")
+    return n
+
+
+async def relabel_astra(ctx: Ctx) -> int:
+    """Один раз: старым серверам — название у провайдера «флаг @ник», клиентское название остаётся как было."""
+    from .db import Setting
+    async with session() as s:
+        if await s.get(Setting, "astra_labels_v1"):
+            return 0
+        rows = (await s.execute(select(Server, User).join(User, User.tg_id == Server.tg_id)
+                                .where(Server.status.in_(["active", "suspended", "expired"])))).all()
+    n = 0
+    for srv, u in rows:
+        for lbl in (astra_label(srv.location, u), astra_label_plain(srv.location, u)):
+            try:
+                await ctx.astra.action(srv.astra_id, "rename", {"name": lbl})
+                n += 1
+                break
+            except AstraError as ex:
+                if ex.status not in (400, 422):
+                    log.info("relabel %s: %s", srv.astra_id, ex)
+                    break
+            except AstraUncertain:
+                break
+        await asyncio.sleep(0.3)  # не торопим провайдера
+    async with session() as s:
+        s.add(Setting(key="astra_labels_v1", value=str(n)))
+        await s.commit()
     return n
 
 

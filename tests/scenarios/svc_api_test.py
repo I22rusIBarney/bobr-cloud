@@ -21,13 +21,13 @@ class FakeAstra:
         return {"ok": True, "spec": {"cpu": cpu, "ram": ram, "disk": disk, "port": "1gbps"}, "price_rub": 100 * cpu + 50 * ram + 2 * disk}
     async def balance(s): return {"balance_rub": 5000}
     async def create(s, **kw):
-        s.n += 1; s.pw = kw.get("password"); p = PRESETS[kw.get("idx", 0)]
+        s.n += 1; s.pw = kw.get("password"); p = PRESETS[kw.get("idx", 0)]; s.names = getattr(s, "names", []) + [kw["name"]]
         return {"id": s.n, "spec": {"cpu": p["cpu"], "ram": p["ram"], "disk": p["disk"], "os": kw["os"]}, "charged_rub": 188, "expires_in_days": 30}
     async def servers(s): return []
     async def server(s, sid):
         if not s.ready:
             return {"id": sid, "status": "provisioning"}
-        return {"id": sid, "status": "active", "ip": s.ip, "root_password": s.pw}
+        return {"id": sid, "status": "active", "ip": s.ip, "root_password": s.pw, "name": "🇳🇱 @provider-label"}
     async def action(s, sid, a, body=None):
         s.renamed.append((sid, a, body))
         if a == "change-ip":
@@ -112,6 +112,14 @@ async def main():
         ok(v["status"] == "active" and v["ip"] == "198.51.100.5" and v["root_password"] == "Str0ngPassw0rd", "готов: IP и пароль")
         r = await c.post(f"/api/svc/servers/{sid}/rename", headers=T, json={"tg_id": 1, "name": "de-1"})
         ok(r.status_code == 200 and r.json()["name"] == "de-1", "переименование после готовности")
+        ok(not any(a == "rename" for _, a, _b in astra.renamed), "своё название — только в Bobr Cloud, у провайдера не меняется")
+        ok(astra.names[-1].startswith("🇳🇱 ") and len(astra.names[-1]) > 3, f"у провайдера — флаг и кто купил: {astra.names[-1]}")
+        n_rel = await svc.relabel_astra(ctx)
+        ok(n_rel >= 1 and any(a == "rename" and b["name"].startswith("🇳🇱 ") for _, a, b in astra.renamed) and await svc.relabel_astra(ctx) == 0,
+           f"старым серверам — подпись у провайдера один раз: {n_rel}")
+        astra.ready = True
+        v = (await c.get(f"/api/svc/servers/{sid}?tg_id=1&sync=1", headers=T)).json()
+        ok(v["name"] == "de-1", "опрос провайдера не возвращает его название вместо клиентского")
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=77", headers=T)).status_code == 404, "сервер не виден от имени другого клиента")
 
         # смена IP через API: с баланса владельца, новый IP сразу в ответе; sync=1 — свежие данные у провайдера
