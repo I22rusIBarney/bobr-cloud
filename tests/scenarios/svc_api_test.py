@@ -13,8 +13,12 @@ PRESETS = [{"idx": 0, "cpu": 1, "ram": 1, "disk": 10, "price_month_rub": {"nl": 
 
 
 class FakeAstra:
-    def __init__(s): s.n = 100; s.ready = False; s.renamed = []; s.ip = "198.51.100.5"
-    async def catalog(s): return {"locations": [{"code": "nl", "name": "Нидерланды", "available": True}], "presets": PRESETS, "os": ["ubuntu2404", "debian12"]}
+    def __init__(s): s.n = 100; s.ready = False; s.renamed = []; s.ip = "198.51.100.5"; s.conf = None
+    async def catalog(s):
+        return {"locations": [{"code": "nl", "name": "Нидерланды", "available": True}], "presets": PRESETS, "os": ["ubuntu2404", "debian12"],
+                **({"configurator": s.conf} if s.conf else {})}
+    async def quote(s, *, location, cpu, ram, disk, period="1m"):
+        return {"ok": True, "spec": {"cpu": cpu, "ram": ram, "disk": disk, "port": "1gbps"}, "price_rub": 100 * cpu + 50 * ram + 2 * disk}
     async def balance(s): return {"balance_rub": 5000}
     async def create(s, **kw):
         s.n += 1; s.pw = kw.get("password"); p = PRESETS[kw.get("idx", 0)]
@@ -117,6 +121,23 @@ async def main():
         astra.ip = "198.51.100.77"  # сменили в кабинете — bcloud ещё не знает
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()["ip"] == "198.51.100.66", "без sync — данные bcloud")
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1&sync=1", headers=T)).json()["ip"] == "198.51.100.77", "sync=1 — свежий IP от провайдера")
+
+        lst = (await c.get("/api/svc/servers?tg_id=1", headers=T)).json()["servers"]
+        ok(any(x["id"] == sid and x["root_password"] and x["ip"] and x["loc_name"] == "Нидерланды" for x in lst),
+           "список серверов клиента: IP, пароль, название локации")
+        ok(all(x["id"] != sid for x in (await c.get("/api/svc/servers?tg_id=77", headers=T)).json()["servers"]),
+           "у другого клиента — только его серверы")
+        ok((await c.get("/api/svc/catalog?tg_id=1", headers=T)).json()["configurator"] is None, "без конструктора у провайдера — configurator null")
+        r = await c.get("/api/svc/quote?tg_id=1&location=nl&cpu=2&ram=2&disk=20", headers=T)
+        ok(r.status_code == 400, "без конструктора цена своей конфигурации — понятный отказ")
+        astra.conf = {"cpu": {"min": 1, "max": 8, "step": 1}, "ram": {"min": 1, "max": 16, "step": 1}, "disk": {"min": 20, "max": 200, "step": 10}}
+        ctx._catalog = None
+        conf = (await c.get("/api/svc/catalog?tg_id=1", headers=T)).json()["configurator"]
+        ok(conf and conf["disk"]["step"] == 10, "конструктор: диапазоны в каталоге")
+        q = (await c.get("/api/svc/quote?tg_id=1&location=nl&cpu=2&ram=2&disk=20", headers=T)).json()
+        ok(q.get("price_kop", 0) > 0 and "cost_rub" not in q and q["cpu"] == 2, "конструктор: цена клиенту без себестоимости")
+        ok((await c.get("/api/svc/quote?tg_id=1&location=nl&cpu=2&ram=2&disk=25", headers=T)).status_code == 400, "конструктор: шаг диска проверяется")
+        astra.conf = None; ctx._catalog = None
 
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 1, "idx": 1, "location": "nl", "os": "debian12"})
         ok(r.status_code == 400 and "баланс" in r.json()["detail"].lower(), "не хватает баланса — понятная ошибка")

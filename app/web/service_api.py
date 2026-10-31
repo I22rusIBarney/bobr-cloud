@@ -78,10 +78,22 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
         for loc in locs:
             out.append({"code": loc["code"], "name": loc.get("name", ""), "flag": loc.get("flag", ""),
                         "offers": await svc.offers(ctx, loc["code"], tg_id)})
+        conf = svc.configurator(cat) if cfg.get("custom_enabled", True) else None
         return {"locations": out,
                 "os": [{"code": o, "label": svc.os_label(o)} for o in cat.get("os", [])],
                 "periods": svc.period_options(cfg, cat),
+                "configurator": conf,
                 "maintenance": bool(cfg.get("maintenance"))}
+
+    @r.get("/quote")
+    async def quote(tg_id: int, location: str, cpu: int, ram: int, disk: int, _: None = Depends(auth)):
+        """Цена своей конфигурации (конструктор) для клиента за месяц."""
+        await client(tg_id)
+        try:
+            o = await svc.custom_offer(ctx, location, cpu, ram, disk, tg_id)
+        except UserError as ex:
+            raise bad(ex)
+        return {k: v for k, v in o.items() if k != "cost_rub"}
 
     @r.get("/balance")
     async def balance(tg_id: int, _: None = Depends(auth)):
@@ -114,6 +126,17 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
         except UserError as ex:
             raise bad(ex)
         return _view(srv)
+
+    @r.get("/servers")
+    async def servers(tg_id: int, _: None = Depends(auth)):
+        """Все серверы клиента в bcloud (кроме удалённых) — с IP и root-паролем, где бы они ни были куплены."""
+        await client(tg_id)
+        async with session() as s:
+            rows = (await s.execute(select(Server).where(Server.tg_id == tg_id, Server.status != "deleted")
+                                    .order_by(Server.id))).scalars().all()
+        locs = {loc["code"]: loc for loc in await svc.locations(ctx)}
+        return {"servers": [{**_view(x), "loc_name": (locs.get(x.location) or {}).get("name", x.location),
+                             "flag": (locs.get(x.location) or {}).get("flag") or svc.flag(x.location)} for x in rows]}
 
     async def owned(server_id: int, tg_id: int) -> Server:
         async with session() as s:

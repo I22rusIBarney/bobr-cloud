@@ -109,10 +109,12 @@ bcloud api-token        # показать или выпустить токен 
 
 | Метод | Путь | Что делает |
 | --- | --- | --- |
-| GET | `/api/svc/catalog?tg_id=` | локации с тарифами и ценой для этого аккаунта, ОС, сроки |
+| GET | `/api/svc/catalog?tg_id=` | локации с тарифами и ценой для этого аккаунта, ОС, сроки, диапазоны конструктора (`configurator`) |
+| GET | `/api/svc/quote?tg_id=&location=&cpu=&ram=&disk=` | цена своей конфигурации за месяц для этого аккаунта |
 | GET | `/api/svc/users/resolve?q=` | клиент по Telegram ID или @username |
 | GET | `/api/svc/balance?tg_id=` | баланс аккаунта |
 | POST | `/api/svc/servers` | покупка: `{tg_id, location, os, idx \| cpu+ram+disk, period, password}` |
+| GET | `/api/svc/servers?tg_id=` | все серверы аккаунта (кроме удалённых): статус, IP, root-пароль, локация |
 | GET | `/api/svc/servers/{id}?tg_id=` | статус, IP, root-пароль |
 | POST | `/api/svc/servers/{id}/rename` | `{tg_id, name}` — после того как сервер готов |
 
