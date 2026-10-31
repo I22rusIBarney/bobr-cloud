@@ -60,18 +60,19 @@
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-html { -webkit-text-size-adjust: 100%; overflow-x: hidden; touch-action: pan-y; } /* фон задаёт body: он уходит на холст, и слои эффектов (z-index:-1) видны */
+html { -webkit-text-size-adjust: 100%; overflow-x: hidden; touch-action: pan-y; overscroll-behavior-y: none; } /* фон задаёт body: он уходит на холст, и слои эффектов (z-index:-1) видны */
 /* страница не масштабируется и не сдвигается вбок: только вертикальная прокрутка */
 html, body { max-width: 100%; }
 .chips, .segmented, .amount-chips { touch-action: pan-x pan-y; }
 input, textarea, select { font-size: max(16px, 1em); } /* iOS не приближает поле при фокусе */
+/* у body — clip, не hidden: hidden делает body отдельной «прокруткой» без высоты, и вместе с overscroll-behavior
+   жест пальцем на Android упирается в неё — страница не листается */
 body {
-  overflow-x: hidden; touch-action: pan-y;
+  overflow-x: clip; touch-action: pan-y;
   margin: 0; background: var(--bg); color: var(--text);
   font: 16px/1.35 var(--font); letter-spacing: -0.2px; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
   padding-top: var(--sat);
   padding-bottom: calc(100px + var(--sab));
-  overscroll-behavior-y: none;
 }
 button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
 a { color: var(--accent-text); text-decoration: none; }
