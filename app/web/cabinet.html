@@ -1594,10 +1594,17 @@ function methodSub(m) { return m.type === 'sbp' ? 'Счёт СБП' + (m.bank ? 
 function bankMark(m) {
   if (m.bank && m.bank.logo) {
     const img = h('img', { class: 'bank-mark', src: m.bank.logo, alt: '', loading: 'lazy' });
-    img.onerror = () => img.replaceWith(h('span', { class: 'bank-ico' }, icon(m.type === 'sbp' ? 'bolt' : 'card')));
+    img.onerror = () => img.replaceWith(bankInitials(m));
     return img;
   }
-  return h('span', { class: 'bank-ico' }, icon(m.type === 'sbp' ? 'bolt' : 'card'));
+  return bankInitials(m);
+}
+// эмблемы нет — первые буквы банка (ВТБ, СБ…), а без банка — значок способа
+function bankInitials(m) {
+  const n = m.bank && m.bank.name && !m.bank.unknown ? m.bank.name : '';
+  if (!n) return h('span', { class: 'bank-ico' }, icon(m.type === 'sbp' ? 'bolt' : 'card'));
+  const t = /^[А-ЯA-Z]{2,4}$/.test(n) ? n : n.replace(/[-«»"]/g, ' ').split(/\s+/).filter(Boolean).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  return h('span', { class: 'bank-ico', style: 'font-weight:700;font-size:11px;letter-spacing:-.2px' }, t);
 }
 
 async function refresh() {

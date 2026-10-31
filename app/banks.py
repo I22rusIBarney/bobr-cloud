@@ -76,16 +76,43 @@ async def directory(fresh: bool = False) -> dict[str, dict]:
 BIC_NAMES = {"044525225": "Сбербанк", "044525187": "ВТБ", "044525593": "Альфа-Банк", "044525974": "Т-Банк",
              "044525700": "Райффайзенбанк", "044525823": "Газпромбанк"}
 LOGO_PATTERN = "https://qr.nspk.ru/proxyapp/logo/bank{}.png"
+# как искать банк из BIC_NAMES в справочнике по названию (номер участника у ЮKassa и НСПК может не совпасть)
+NAME_KEYS = {"Сбербанк": ("сбербанк", "сбер"), "ВТБ": ("втб",), "Альфа-Банк": ("альфа",), "Т-Банк": ("т-банк", "тинькофф"),
+             "Райффайзенбанк": ("райффайзен",), "Газпромбанк": ("газпромбанк",)}
+
+
+def _core(name: str) -> str:
+    """«Банк ВТБ (ПАО)» → «втб», «АО «АЛЬФА-БАНК»» → «альфа»: без правовой формы, кавычек, скобок и слова «банк»."""
+    n = re.sub(r"\([^)]*\)|[«»\"']", " ", name.casefold())
+    n = re.sub(r"\b(пао|ао|оао|зао|ооо|нко|кб|акб|ак)\b", " ", n)
+    n = re.sub(r"-?банк\b|\bбанк-?", " ", n)
+    return " ".join(n.split())
+
+
+def _by_name(d: dict[str, dict], name: str) -> str | None:
+    """Номер банка в справочнике по названию. Полное совпадение сути названия важнее частичного:
+    «Банк ВТБ (ПАО)», а не «ВТБ Лизинг»."""
+    keys = NAME_KEYS.get(name) or (name.casefold(),)
+    hits = []
+    for bid, b in d.items():
+        core = _core(b["name"])
+        if any(k in b["name"].casefold() for k in keys):
+            hits.append((0 if core in keys or any(core == _core(k) for k in keys) else 1, len(core), bid))
+    return min(hits)[2] if hits else None
 
 
 async def info(bank_id: str | None, bic: str | None = None) -> dict | None:
     """{id, name, logo} для кабинета или None, если банк неизвестен."""
     if not valid_id(bank_id):
         return {"id": "", "name": BIC_NAMES[bic], "logo": None} if bic in BIC_NAMES else None
-    b = (await directory()).get(str(bank_id))
-    if not b:  # нет в справочнике — имя по БИК, эмблема по обычному адресу НСПК (не найдётся — покажем значок)
+    d = await directory()
+    b = d.get(str(bank_id))
+    if not b:  # нет в справочнике под этим номером — имя по БИК, эмблема — у того же банка в справочнике по названию
         name = BIC_NAMES.get(bic or "")
-        return {"id": str(bank_id), "name": name or "Банк СБП", "logo": f"/bank-logo/{bank_id}.png", "unknown": not name}
+        alt = _by_name(d, name) if name else None
+        log.info("СБП банк: номера %s нет в справочнике НСПК (%d банков), БИК %s → %s", bank_id, len(d), bic, alt or "не найден")
+        logo_id = alt or str(bank_id)
+        return {"id": str(bank_id), "name": name or "Банк СБП", "logo": f"/bank-logo/{logo_id}.png", "unknown": not name}
     return {"id": str(bank_id), "name": b["name"], "logo": f"/bank-logo/{bank_id}.png" if b.get("logo_src") else None}
 
 

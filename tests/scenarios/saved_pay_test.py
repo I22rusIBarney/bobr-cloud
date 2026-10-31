@@ -64,7 +64,9 @@ async def main():
     app = build_app(ctx)
     from app import banks
     from app.settings import save_settings
-    banks._dir = {"100000000111": {"name": "Сбербанк", "logo_src": "https://qr.nspk.ru/proxyapp/logo/bank100000000111.png"}}
+    banks._dir = {"100000000111": {"name": "Сбербанк", "logo_src": "https://qr.nspk.ru/proxyapp/logo/bank100000000111.png"},
+                  "110000000005": {"name": "Банк ВТБ (ПАО)", "logo_src": "https://qr.nspk.ru/proxyapp/logo/bank110000000005.png"},
+                  "100000000099": {"name": "ВТБ Лизинг", "logo_src": "https://qr.nspk.ru/proxyapp/logo/bank100000000099.png"}}
     banks._loaded_at = time.time()
     async with D.session() as s:
         await save_settings(s, {"autopay_available": True})
@@ -117,7 +119,8 @@ async def main():
             m.bank_id = "100000000999"; m.bank_bic = "044525187"
             await s.commit()
         ms = (await c.get("/api/me/methods", headers=H)).json()
-        ok(ms[0]["bank"]["name"] == "ВТБ" and ms[0]["bank"]["logo"] == "/bank-logo/100000000999.png", "банка нет в справочнике — имя по БИК")
+        ok(ms[0]["bank"]["name"] == "ВТБ" and ms[0]["bank"]["logo"] == "/bank-logo/110000000005.png",
+           f"номера банка нет в справочнике — имя по БИК, эмблема — у ВТБ в справочнике по названию: {ms[0]['bank']}")
         yk.charge_status = "succeeded"
         n0 = len(msgs)
         async def cp_cancel(**kw):
