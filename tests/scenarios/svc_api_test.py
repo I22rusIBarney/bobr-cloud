@@ -122,6 +122,18 @@ async def main():
         ok(r.status_code == 200 and r.json()["ip"] == "198.51.100.66" and r.json()["pending"] is False, f"смена IP: {r.text[:200]}")
         ok((await c.get("/api/svc/balance?tg_id=1", headers=T)).json()["balance_kop"] == bal0 - 15000, "смена IP списана с баланса владельца")
         ok((await c.post(f"/api/svc/servers/{sid}/change-ip", headers=T, json={"tg_id": 77})).status_code == 404, "чужой сервер — 404")
+        # продление и автопродление: с баланса владельца, срок сдвигается на 30 дней
+        exp0 = v["expires_at"]
+        ok(v["auto_renew"] in (True, False), "автопродление в данных сервера")
+        bal1 = (await c.get("/api/svc/balance?tg_id=1", headers=T)).json()["balance_kop"]
+        r = await c.post(f"/api/svc/servers/{sid}/renew", headers=T, json={"tg_id": 1})
+        ok(r.status_code == 200 and r.json()["expires_at"] and r.json()["expires_at"] > (exp0 or ""), f"продление: {r.text[:200]}")
+        ok((await c.get("/api/svc/balance?tg_id=1", headers=T)).json()["balance_kop"] == bal1 - v["price_kop"], "продление списано с баланса владельца")
+        ok((await c.post(f"/api/svc/servers/{sid}/renew", headers=T, json={"tg_id": 77})).status_code == 404, "чужой сервер не продлить")
+        r = await c.post(f"/api/svc/servers/{sid}/autorenew", headers=T, json={"tg_id": 1, "value": False})
+        ok(r.status_code == 200 and r.json()["auto_renew"] is False
+           and (await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()["auto_renew"] is False, "автопродление выключается")
+        await c.post(f"/api/svc/servers/{sid}/autorenew", headers=T, json={"tg_id": 1, "value": True})
         astra.ip = "198.51.100.77"  # сменили в кабинете — bcloud ещё не знает
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()["ip"] == "198.51.100.66", "без sync — данные bcloud")
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1&sync=1", headers=T)).json()["ip"] == "198.51.100.77", "sync=1 — свежий IP от провайдера")

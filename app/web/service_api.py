@@ -40,6 +40,11 @@ class SvcOwnerIn(BaseModel):
     tg_id: int
 
 
+class SvcAutoIn(BaseModel):
+    tg_id: int
+    value: bool
+
+
 def build_service_router(ctx: svc.Ctx) -> APIRouter:
     r = APIRouter(prefix="/api/svc")
 
@@ -187,6 +192,30 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
             raise bad(ex)
         return {"id": server_id, "status": "deleted", "refund_kop": refund}
 
+    @r.post("/servers/{server_id}/renew")
+    async def renew(server_id: int, p: SvcOwnerIn, _: None = Depends(auth)):
+        """Продлить на 30 дней с баланса владельца (как кнопка «Продлить» в bcloud)."""
+        await client(p.tg_id)
+        await owned(server_id, p.tg_id)
+        try:
+            await svc.renew_server(ctx, server_id, payer=p.tg_id)
+        except UserError as ex:
+            raise bad(ex)
+        return await view(await owned(server_id, p.tg_id))
+
+    @r.post("/servers/{server_id}/autorenew")
+    async def autorenew(server_id: int, p: SvcAutoIn, _: None = Depends(auth)):
+        """Включить или выключить автопродление сервера владельца."""
+        await client(p.tg_id)
+        await owned(server_id, p.tg_id)
+        async with session() as s:
+            srv = await s.get(Server, server_id)
+            srv.auto_renew = p.value
+            await s.commit()
+        from .. import serverlog
+        await serverlog.add(server_id, p.tg_id, "autorenew_on" if p.value else "autorenew_off")
+        return {"id": server_id, "auto_renew": p.value}
+
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
         try:
@@ -200,4 +229,5 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
 def _view(srv: Server) -> dict:
     return {"id": srv.id, "name": srv.name, "status": srv.status, "ip": srv.ip, "root_password": srv.root_password,
             "location": srv.location, "cpu": srv.cpu, "ram": srv.ram, "disk": srv.disk, "os": srv.os,
-            "price_kop": srv.price_kop, "expires_at": srv.expires_at.isoformat() if srv.expires_at else None}
+            "price_kop": srv.price_kop, "expires_at": srv.expires_at.isoformat() if srv.expires_at else None,
+            "auto_renew": bool(srv.auto_renew)}
