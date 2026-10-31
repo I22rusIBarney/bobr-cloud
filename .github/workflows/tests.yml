@@ -27,7 +27,14 @@ jobs:
           node --check /tmp/cabinet.js
           node --check /tmp/admin.js
           node --check app/web/static/ui.js
-      - run: pytest -q
+      - name: Тесты
+        # упавшие проверки — ещё и аннотацией: её видно через API без скачивания логов
+        run: |
+          set -o pipefail
+          pytest -q -rA 2>&1 | tee /tmp/pytest.out || {
+            { grep -E 'FAIL ' /tmp/pytest.out | grep -v PASS | head -20; echo ----; grep -v ' PASS ' /tmp/pytest.out | tail -50; } \
+              | cut -c1-400 | python3 -c 'import sys; print("::error::" + sys.stdin.read().replace("%", "%25").replace("\n", "%0A"))'
+            exit 1; }
 
   # Готовый образ для серверов: только с main и только если тесты прошли.
   # bcloud update скачивает ghcr.io/<владелец>/<репозиторий>:sha-<коммит> вместо сборки на VPS.
