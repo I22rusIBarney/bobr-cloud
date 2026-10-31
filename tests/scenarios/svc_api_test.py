@@ -13,7 +13,7 @@ PRESETS = [{"idx": 0, "cpu": 1, "ram": 1, "disk": 10, "price_month_rub": {"nl": 
 
 
 class FakeAstra:
-    def __init__(s): s.n = 100; s.ready = False; s.renamed = []; s.ip = "198.51.100.5"; s.conf = None
+    def __init__(s): s.n = 100; s.ready = False; s.renamed = []; s.ip = "198.51.100.5"; s.conf = None; s.deleted = []
     async def catalog(s):
         return {"locations": [{"code": "nl", "name": "Нидерланды", "available": True}], "presets": PRESETS, "os": ["ubuntu2404", "debian12"],
                 **({"configurator": s.conf} if s.conf else {})}
@@ -33,6 +33,10 @@ class FakeAstra:
         if a == "change-ip":
             s.ip = "198.51.100.66"
         return {"ok": True}
+    async def delete(s, sid):
+        s.deleted.append(sid)
+        return {"ok": True}
+
     async def close(s): pass
 
 
@@ -122,6 +126,11 @@ async def main():
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1", headers=T)).json()["ip"] == "198.51.100.66", "без sync — данные bcloud")
         ok((await c.get(f"/api/svc/servers/{sid}?tg_id=1&sync=1", headers=T)).json()["ip"] == "198.51.100.77", "sync=1 — свежий IP от провайдера")
 
+        ok((await c.post(f"/api/svc/servers/{csid}/delete", headers=T, json={"tg_id": 1})).status_code == 404, "чужой сервер не удалить")
+        r = await c.post(f"/api/svc/servers/{csid}/delete", headers=T, json={"tg_id": 77})
+        ok(r.status_code == 200 and r.json()["status"] == "deleted" and len(astra.deleted) == 1,
+           "удаление сервера владельца")
+        ok(all(x["id"] != csid for x in (await c.get("/api/svc/servers?tg_id=77", headers=T)).json()["servers"]), "удалённый — не в списке")
         lst = (await c.get("/api/svc/servers?tg_id=1", headers=T)).json()["servers"]
         ok(any(x["id"] == sid and x["root_password"] and x["ip"] and x["loc_name"] == "Нидерланды" for x in lst),
            "список серверов клиента: IP, пароль, название локации")

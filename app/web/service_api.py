@@ -174,6 +174,19 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
             raise bad(ex)
         return {**await view(await owned(server_id, p.tg_id)), "pending": False}
 
+    @r.post("/servers/{server_id}/delete")
+    async def delete(server_id: int, p: SvcOwnerIn, _: None = Depends(auth)):
+        """Удалить сервер владельца (как кнопка «Удалить» в bcloud): возврат остатка — по настройкам bcloud."""
+        await client(p.tg_id)
+        srv = await owned(server_id, p.tg_id)
+        if srv.status == "deleted":
+            return {"id": server_id, "status": "deleted", "refund_kop": 0}
+        try:
+            refund = await svc.cancel_server(ctx, p.tg_id, server_id)
+        except UserError as ex:
+            raise bad(ex)
+        return {"id": server_id, "status": "deleted", "refund_kop": refund}
+
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
         try:

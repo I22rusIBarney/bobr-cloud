@@ -117,6 +117,7 @@ bcloud api-token        # показать или выпустить токен 
 | GET | `/api/svc/servers?tg_id=` | все серверы аккаунта (кроме удалённых): статус, IP, root-пароль, локация |
 | GET | `/api/svc/servers/{id}?tg_id=` | статус, IP, root-пароль |
 | POST | `/api/svc/servers/{id}/rename` | `{tg_id, name}` — после того как сервер готов |
+| POST | `/api/svc/servers/{id}/delete` | `{tg_id}` — удалить сервер владельца, возврат остатка по настройкам bcloud |
 
 ## Структура
 
