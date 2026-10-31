@@ -514,11 +514,20 @@ async def refresh_server(ctx: Ctx, astra_id: int) -> None:
     except Exception:
         log.warning("refresh_server %s failed", astra_id, exc_info=True)
         return
+    failed = None
     async with session() as s:
         srv = (await s.execute(select(Server).where(Server.astra_id == astra_id))).scalar_one_or_none()
         if srv:
+            was = srv.status
             _apply_remote(srv, r)
+            # Astra ответила, что сервер не создан: сразу как неудачное создание — с возвратом, не ждём синхронизации
+            if was == "provisioning" and not srv.ip and srv.status in ("deleted", "failed", "error"):
+                srv.status, srv.auto_renew, srv.deleted_at = "deleted", False, utcnow()
+                failed = srv
             await s.commit()
+    if failed is not None and not await _refunded(failed):
+        await _refund(failed.tg_id, int(failed.period_paid_kop or 0) or paid_base(failed), "refund_failed", str(failed.astra_id))
+        await ctx.notify(failed.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
 
 
 def _apply_remote(srv: Server, r: dict) -> None:

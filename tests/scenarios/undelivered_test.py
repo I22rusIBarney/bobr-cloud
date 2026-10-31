@@ -10,6 +10,7 @@ from app import db as D, services as svc
 
 class FakeAstra:
     async def servers(s): return []
+    async def server(s, sid): return {"id": sid, "status": "deleted"}
     async def close(s): pass
 
 
@@ -63,6 +64,15 @@ async def main():
     ok(n == 1 and await bal(7) == 65000, f"разовая починка: вернул за удалённый без возврата, остальных не трогает: {n}, {await bal(7)}")
     ok(await svc.refund_undelivered(ctx) == 0 and await bal(7) == 65000, "починка повторно ничего не возвращает")
     ok(any(uid == 7 and "Возврат" in t for uid, t in sent), "клиенту — сообщение о возврате")
+    # опрос сервера (как из Bobr Nodes) сразу узнаёт, что Astra его не создала: деньги — сразу и один раз
+    async with D.session() as s:
+        s.add(D.Server(astra_id=106, tg_id=7, name="s106", location="nl", price_kop=12000, status="provisioning", period_paid_kop=12000))
+        await s.commit()
+    b0 = await bal(7)
+    await svc.refresh_server(ctx, 106)
+    await svc.refresh_server(ctx, 106)
+    await svc.sync_servers(ctx)
+    ok(await bal(7) == b0 + 12000, f"Astra ответила «не создан» при опросе — возврат сразу и один раз: {await bal(7) - b0}")
     print(f"FAILS: {ok.fails}")
 
 
