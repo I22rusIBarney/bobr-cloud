@@ -45,6 +45,13 @@ class SvcAutoIn(BaseModel):
     value: bool
 
 
+class SvcTopupIn(BaseModel):
+    tg_id: int
+    amount_rub: int
+    provider: str | None = None
+    method_id: int | None = None
+
+
 def build_service_router(ctx: svc.Ctx) -> APIRouter:
     r = APIRouter(prefix="/api/svc")
 
@@ -104,6 +111,36 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
     async def balance(tg_id: int, _: None = Depends(auth)):
         u = await client(tg_id)
         return {"balance_kop": u.balance_kop}
+
+    @r.get("/topup")
+    async def topup_options(tg_id: int, _: None = Depends(auth)):
+        """Чем можно пополнить баланс клиента: способы, пределы суммы, привязанные карты и счета СБП."""
+        from .. import account as acc
+        u = await client(tg_id)
+        async with session() as s:
+            cfg = await load_settings(s)
+        provs = svc.payment_providers(ctx, cfg)
+        saved = []
+        if any(p["code"] == "yookassa" for p in provs):
+            saved = [{"id": m["id"], "title": m["title"], "type": m["type"], "last4": m["last4"],
+                      "bank": (m.get("bank") or {}).get("name") if isinstance(m.get("bank"), dict) else None}
+                     for m in await acc.methods(tg_id)]
+        return {"balance_kop": u.balance_kop, "min_rub": cfg["min_topup_rub"], "max_rub": cfg["max_topup_rub"],
+                "providers": [{"code": p["code"], "label": p["label"]} for p in provs], "methods": saved}
+
+    @r.post("/topup")
+    async def topup(p: SvcTopupIn, _: None = Depends(auth)):
+        """Пополнить баланс клиента: ссылка на оплату (url) или списание привязанным способом (status)."""
+        await client(p.tg_id)
+        try:
+            if p.method_id:
+                return await svc.topup_saved(ctx, p.tg_id, p.amount_rub, p.method_id)
+            _, url = await svc.create_topup(ctx, p.tg_id, p.amount_rub, False, p.provider, source="svc")
+        except UserError as ex:
+            raise bad(ex)
+        except Exception as ex:  # noqa: BLE001 — платёжка не ответила
+            raise HTTPException(502, "Не удалось создать платёж — попробуйте позже") from ex
+        return {"url": url}
 
     @r.get("/users/resolve")
     async def resolve(q: str, _: None = Depends(auth)):

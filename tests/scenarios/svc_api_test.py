@@ -163,6 +163,27 @@ async def main():
         r = await c.post("/api/svc/servers", headers=T, json={"tg_id": 1, "idx": 1, "location": "nl", "os": "debian12"})
         ok(r.status_code == 400 and "баланс" in r.json()["detail"].lower(), "не хватает баланса — понятная ошибка")
 
+        # пополнение баланса из своего бота
+        o = (await c.get("/api/svc/topup?tg_id=1", headers=T)).json()
+        ok(o["providers"] == [] and o["methods"] == [] and o["min_rub"] > 0 and "balance_kop" in o, "пополнение: без платёжки способов нет")
+        r = await c.post("/api/svc/topup", headers=T, json={"tg_id": 1, "amount_rub": 500})
+        ok(r.status_code == 400 and "недоступна" in r.json()["detail"], "пополнение без платёжки — понятный отказ")
+
+        class FakeYK:
+            configured = True; enabled = True; calls = []
+            async def create_payment(s, **kw): s.calls.append(kw); return {"id": "yk-1", "confirmation": {"confirmation_url": "https://yoomoney.test/pay/1"}}
+            async def close(s): pass
+        ctx.yk = FakeYK()
+        o = (await c.get("/api/svc/topup?tg_id=1", headers=T)).json()
+        ok([x["code"] for x in o["providers"]] == ["yookassa"], f"пополнение: способ ЮKassa: {o['providers']}")
+        r = await c.post("/api/svc/topup", headers=T, json={"tg_id": 1, "amount_rub": 500})
+        ok(r.status_code == 200 and r.json()["url"] == "https://yoomoney.test/pay/1" and FakeYK.calls[-1]["amount_kop"] == 50000
+           and FakeYK.calls[-1]["metadata"]["tg_id"] == 1, f"пополнение: ссылка на оплату на счёт клиента: {r.json()}")
+        r = await c.post("/api/svc/topup", headers=T, json={"tg_id": 1, "amount_rub": 1})
+        ok(r.status_code == 400 and "Сумма" in r.json()["detail"], "сумма вне пределов — отказ")
+        ok((await c.post("/api/svc/topup", headers=T, json={"tg_id": 1, "amount_rub": 500, "method_id": 999})).status_code == 400, "чужой или неизвестный способ — отказ")
+        ok((await c.post("/api/svc/topup", json={"tg_id": 1, "amount_rub": 500})).status_code == 401, "пополнение без токена — 401")
+
     os.environ["SERVICE_TOKEN"] = ""
     from app.config import env
     env.cache_clear()
