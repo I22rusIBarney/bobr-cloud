@@ -16,7 +16,7 @@ from sqlalchemy import func, select, update
 
 from .astra import Astra, AstraError, AstraUncertain, parse_dt
 from .config import env
-from .db import Consent, Payment, PaymentMethod, Server, User, change_balance, session, utcnow
+from .db import Consent, Payment, PaymentMethod, Server, Tx, User, change_balance, session, utcnow
 from .nalog import Nalog, NalogError
 from .settings import cost_kop, fmt_rub, load_settings, no_markup_cfg, sell_price_kop, user_price_cfg
 from .yookassa import YooKassa, YooKassaError
@@ -1472,7 +1472,11 @@ async def sync_servers(ctx: Ctx) -> None:
         for srv in rows:
             r = remote.get(srv.astra_id)
             if r is None:
-                if srv.status == "provisioning" and utcnow() - srv.created_at > timedelta(minutes=4):
+                # Astra не выдала сервер: услуга исчезает из списка, деньги реселлеру возвращаются. Сервер ни разу не
+                # получил IP — значит, клиенту его так и не выдали (статус мог успеть смениться, например при опросе
+                # GET /servers/{id}): это тоже неудачное создание, а не пропажа рабочего сервера, — деньги клиенту
+                undelivered = srv.status == "provisioning" or not srv.ip
+                if undelivered and (srv.status != "provisioning" or utcnow() - srv.created_at > timedelta(minutes=4)):
                     srv.status = "deleted"
                     srv.auto_renew = False
                     srv.deleted_at = utcnow()
@@ -1494,12 +1498,43 @@ async def sync_servers(ctx: Ctx) -> None:
                 f"✅ <b>Сервер готов</b>\n\n🖥 <b>{html.escape(srv.name)}</b>\nIP: <code>{html.escape(str(srv.ip))}</code>\nЛогин: <code>root</code>\nПароль: <code>{html.escape(str(srv.root_password))}</code>\n\nУправление — в разделе «🖥 Мои серверы» или в личном кабинете.",
             )
         elif kind == "failed":
+            if await _refunded(srv):
+                continue
             await _refund(srv.tg_id, int(srv.period_paid_kop or 0) or paid_base(srv), "refund_failed", str(srv.astra_id))
             await ctx.notify(srv.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
         elif kind == "vanished":
             await ctx.alert_admin(f"⚠️ Сервер #{srv.astra_id} клиента {srv.tg_id} пропал из списка Astra.")
             from .shares import revoke_all
             await revoke_all(ctx, srv.id, "сервер удалён")
+
+
+async def _refunded(srv: Server) -> bool:
+    """За этот сервер уже был возврат (неудачное создание или отмена) — второй раз деньги не возвращаем."""
+    async with session() as s:
+        n = (await s.execute(select(func.count()).select_from(Tx).where(
+            Tx.tg_id == srv.tg_id, Tx.ref == str(srv.astra_id), Tx.amount_kop > 0, Tx.kind.like("refund_%")))).scalar_one()
+    return n > 0
+
+
+async def refund_undelivered(ctx: Ctx, days: int = 14) -> int:
+    """Разовая починка: серверы, которые Astra не выдала (без IP), удалены недавно, а деньги клиенту не вернулись
+    (раньше такой сервер считался «пропавшим», а не неудачным). Возвращает число возвратов."""
+    async with session() as s:
+        rows = (await s.execute(select(Server).where(Server.status == "deleted", Server.ip.is_(None),
+                                                     Server.deleted_at > utcnow() - timedelta(days=days)))).scalars().all()
+    n = 0
+    for srv in rows:
+        if await _refunded(srv):
+            continue
+        kop = int(srv.period_paid_kop or 0)  # только реально оплаченное: бесплатные серверы не возвращаем
+        if kop <= 0:
+            continue
+        await _refund(srv.tg_id, kop, "refund_failed", str(srv.astra_id))
+        n += 1
+        await ctx.notify(srv.tg_id, f"↩️ <b>Возврат за несозданный сервер</b>\n\nСервер «{html.escape(srv.name)}» не удалось создать — "
+                                    f"{fmt_rub(kop)} вернули на баланс.")
+        await ctx.alert_admin(f"↩️ Сервер #{srv.astra_id} клиента {srv.tg_id} не был выдан Astra — вернул клиенту {fmt_rub(kop)}.")
+    return n
 
 
 async def autorenew_and_remind(ctx: Ctx, only_tg: int | None = None) -> None:
