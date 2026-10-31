@@ -78,7 +78,8 @@ _RI = range(0x1F1E6, 0x1F1FF + 1)  # regional indicator symbols
 def astra_label(location: str, user) -> str:
     """Название сервера у провайдера (видит только владелец сервиса в Astra): флаг страны и кто купил.
     Клиент в Bobr Cloud видит своё название — оно хранится только у нас."""
-    who = f"@{user.username}" if getattr(user, "username", None) else f"{(getattr(user, 'first_name', '') or 'id').strip()[:24]} {user.tg_id}"
+    # Telegram ID провайдеру не отдаём: ник, а без ника — имя
+    who = f"@{user.username}" if getattr(user, "username", None) else ((getattr(user, "first_name", "") or "").strip()[:30] or "без ника")
     return f"{flag(location)} {who}"[:60]
 
 

@@ -88,7 +88,9 @@ async def main():
         ok(j["discount"] is None, "скидка израсходована")
         ok(j["servers"][0]["price_rub"] == 270 and j["servers"][0]["refund_rub"] <= 216, "продление по полной цене, возврат не больше оплаченного")
         import re
-        ok(re.fullmatch(r"vps-[0-9a-f]{6}", ctx.astra.last["name"]) is not None, f"имя для Astra без Telegram ID ({ctx.astra.last['name']})")
+        ok(ctx.astra.last["name"] == "🇳🇱 @user2" and "2" not in ctx.astra.last["name"].replace("user2", ""),
+           f"имя для Astra: флаг и ник, без Telegram ID ({ctx.astra.last['name']})")
+        ok(re.fullmatch(r"vps-[0-9a-f]{6}", j["servers"][0]["name"]) is not None, f"клиент видит своё название ({j['servers'][0]['name']})")
 
         # пополнение с сохранением карты: пока автоплатежи выключены — флаг игнорируется
         r = await c.post("/api/me/topup", headers=H2, json={"amount_rub": 500, "save_method": True}); ok(r.status_code == 200 and not ctx.yk.last.get("save_payment_method"), "без включённых автоплатежей карта не сохраняется")
