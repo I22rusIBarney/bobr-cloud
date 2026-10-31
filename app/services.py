@@ -1160,7 +1160,10 @@ def _method_fields(pm: dict) -> dict:
         title = pm.get("title") or "Счёт СБП"
     else:
         title = pm.get("title") or (f"{card.get('card_type', 'Карта')} *{last4}" if last4 else pm.get("type", "Способ оплаты"))
-    return {"type": pm.get("type", "bank_card"), "title": str(title)[:64], "card_type": card.get("card_type"), "last4": last4, "expiry": exp}
+    bank = pm.get("payer_bank_details") or {}
+    return {"type": pm.get("type", "bank_card"), "title": str(title)[:64], "card_type": card.get("card_type"), "last4": last4, "expiry": exp,
+            "bank_id": (str(bank.get("bank_id")) if bank.get("bank_id") else None), "bank_bic": (str(bank.get("bic")) if bank.get("bic") else None),
+            "bank_checked": True}
 
 
 async def _save_method(s, tg_id: int, pm: dict) -> PaymentMethod:
@@ -1174,6 +1177,80 @@ async def _save_method(s, tg_id: int, pm: dict) -> PaymentMethod:
             setattr(row, k, v)
         row.active, row.deleted_at, row.deleted_by = True, None, None
     return row
+
+
+async def fill_banks(ctx: Ctx, tg_id: int) -> None:
+    """Счета СБП, привязанные до того, как bcloud начал запоминать банк: ищем банк в платеже, которым счёт привязали."""
+    async with session() as s:
+        todo = (await s.execute(select(PaymentMethod).where(PaymentMethod.tg_id == tg_id, PaymentMethod.active.is_(True),
+                                                            PaymentMethod.type == "sbp", PaymentMethod.bank_id.is_(None),
+                                                            PaymentMethod.bank_checked.is_(False)))).scalars().all()
+        if not todo or not ctx.yk.configured:
+            return
+        pays = (await s.execute(select(Payment).where(Payment.tg_id == tg_id, Payment.save_method.is_(True), Payment.status == "succeeded",
+                                                      Payment.yk_id.is_not(None)).order_by(Payment.id.desc()).limit(10))).scalars().all()
+        want = {m.yk_id: m for m in todo}
+        for p in pays:
+            if not want:
+                break
+            try:
+                pm = (await ctx.yk.get_payment(p.yk_id)).get("payment_method") or {}
+            except Exception:  # noqa: BLE001
+                continue
+            m = want.pop(pm.get("id"), None)
+            if m:
+                f = _method_fields(pm)
+                m.bank_id, m.bank_bic = f["bank_id"], f["bank_bic"]
+        for m in todo:
+            m.bank_checked = True
+        await s.commit()
+
+
+async def topup_saved(ctx: Ctx, tg_id: int, amount_rub: int, method_id: int) -> dict:
+    """Пополнение привязанным способом (карта или счёт СБП) без страницы оплаты. Вернёт url, если банк всё же
+    попросит подтверждение, иначе status: succeeded | pending (итог придёт вебхуком)."""
+    async with session() as s:
+        cfg = await load_settings(s)
+        m = await s.get(PaymentMethod, method_id)
+        if m is None or m.tg_id != tg_id or not m.active:
+            raise UserError("Этот способ оплаты больше не привязан — выберите другой.")
+        if not ctx.yk.configured or not any(p["code"] == "yookassa" for p in payment_providers(ctx, cfg)):
+            raise UserError("Оплата привязанным способом сейчас недоступна.")
+        if not (cfg["min_topup_rub"] <= amount_rub <= cfg["max_topup_rub"]):
+            raise UserError(f"Сумма пополнения: от {cfg['min_topup_rub']} до {cfg['max_topup_rub']} ₽.")
+        recent = (await s.execute(select(func.count()).select_from(Payment).where(
+            Payment.tg_id == tg_id, Payment.method_yk_id == m.yk_id, Payment.status == "pending",
+            Payment.created_at > utcnow() - timedelta(minutes=10)))).scalar_one()
+        if recent:
+            raise UserError("Прошлый платёж этим способом ещё обрабатывается — подождите пару минут.")
+        pay = Payment(tg_id=tg_id, amount_kop=amount_rub * 100, method_yk_id=m.yk_id, method_title=m.title)
+        s.add(pay)
+        await s.commit()
+        yk_id, title = m.yk_id, m.title
+    try:
+        data = await ctx.yk.charge_saved(amount_kop=pay.amount_kop, method_id=yk_id, description=f"Пополнение баланса #{pay.id}",
+                                         metadata={"payment_id": pay.id, "tg_id": tg_id}, idem_key=f"topup-saved-{pay.id}")
+    except YooKassaError as ex:
+        async with session() as s:
+            row = await s.get(Payment, pay.id)
+            row.status, row.cancel_reason = "canceled", "api_error"
+            await s.commit()
+        log.warning("оплата привязанным способом: %s", ex)
+        raise UserError("Банк не принял платёж привязанным способом. Оплатите обычным способом.") from ex
+    async with session() as s:
+        row = await s.get(Payment, pay.id)
+        row.yk_id = data.get("id")
+        await s.commit()
+    url = ((data.get("confirmation") or {}).get("confirmation_url"))
+    if url:
+        return {"url": url}
+    if data.get("status") in ("succeeded", "canceled"):
+        ok = await credit_payment(ctx, data["id"])
+        if not ok and data.get("status") == "canceled":
+            why = ((data.get("cancellation_details") or {}).get("reason")) or ""
+            raise UserError("Платёж отклонён банком" + (f" ({why})" if why else "") + f". {title} — попробуйте другой способ.")
+        return {"status": "succeeded"}
+    return {"status": "pending"}
 
 
 async def deactivate_method(tg_id: int, method_id: int | None, by: str) -> int:

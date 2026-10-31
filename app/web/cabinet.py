@@ -61,6 +61,7 @@ class TopupIn(BaseModel):
     amount_rub: int
     save_method: bool = False
     provider: str | None = None  # yookassa | platega; пусто — первый включённый
+    method_id: int | None = None  # привязанный способ: оплата без страницы банка
 
 
 class ConsentIn(BaseModel):
@@ -311,6 +312,10 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
 
     @r.get("/methods")
     async def my_methods(m: dict = Depends(me_ok)):
+        try:
+            await svc.fill_banks(ctx, m["id"])
+        except Exception:  # noqa: BLE001 — банк для эмблемы не важнее списка
+            log.exception("fill banks")
         return await acc.methods(m["id"])
 
     @r.delete("/methods/{mid}")
@@ -424,6 +429,11 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
 
     @r.post("/topup")
     async def topup(p: TopupIn, m: dict = Depends(me_ok)):
+        if p.method_id:
+            try:
+                return await svc.topup_saved(ctx, m["id"], p.amount_rub, p.method_id)
+            except UserError as ex:
+                raise wrap(ex)
         try:
             _, url = await svc.create_topup(ctx, m["id"], p.amount_rub, p.save_method, p.provider)
         except UserError as ex:

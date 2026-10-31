@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, Response
 from pydantic import BaseModel
 from sqlalchemy import func, or_, select
 
@@ -232,6 +232,17 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
             if f.exists():
                 return f, {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[ext]
         return None, None
+
+    from .. import banks
+    banks.setup(MEDIA)
+
+    @app.get("/bank-logo/{bank_id}.png")
+    async def bank_logo(bank_id: str):
+        """Эмблема банка СБП (из справочника НСПК, кэш на диске) — для привязанных счетов в кабинете."""
+        data = await banks.logo(bank_id)
+        if not data:
+            raise HTTPException(404)
+        return Response(data, media_type="image/png", headers={"Cache-Control": "public, max-age=604800"})
 
     @app.get("/media/bg")
     async def media_bg():

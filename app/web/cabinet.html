@@ -82,6 +82,12 @@
   .prov-list .radio { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 2px var(--hint-2); flex: none; transition: box-shadow var(--t) var(--ease-spring); }
   .prov-list button[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
   .prov-list button[aria-pressed="true"] .radio { box-shadow: inset 0 0 0 6px var(--accent); }
+  .bank-mark { width: 34px; height: 34px; border-radius: 10px; object-fit: contain; background: #fff; display: block; }
+  .prov-list .bank-mark, .prov-list .bank-ico { width: 28px; height: 28px; border-radius: 8px; flex: none; }
+  .bank-ico { display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
+  .bank-ico svg { width: 16px; height: 16px; }
+  .prov-list .pl small { display: block; font-size: 12px; font-weight: 400; color: var(--hint); margin-top: 1px; }
+  .flag-tile:has(.bank-mark) { background: none; border-radius: 10px; }
   .pay-note { display: flex; align-items: center; gap: 8px; justify-content: center; font-size: 12px; color: var(--hint); margin-top: 12px; }
   .pay-note svg { width: 14px; height: 14px; color: var(--ok); }
 
@@ -1341,6 +1347,9 @@ function profileView() {
   wrap.append(refBox);
   api('/referral').then(r => { if (r.enabled) refBox.replaceChildren(referralCard(r)); }).catch(() => {});
 
+  // привязанные способы оплаты — нужны и в пополнении, и в списке ниже
+  const methodsP = api('/methods').catch(() => []);
+
   // пополнение
   const presets = [300, 500, 1000, 2000, 3000, 5000].filter(a => a >= D.cfg.min_topup_rub && a <= D.cfg.max_topup_rub);
   let amount = topupPrefill || presets[1] || presets[0] || D.cfg.min_topup_rub;
@@ -1361,7 +1370,17 @@ function profileView() {
   input.addEventListener('input', () => { amount = Math.round(+input.value || 0); sync(); });
   const provs = D.cfg.providers || [];
   let provider = (provs.find(p => p.code === pref.get('prov')) || provs[0] || {}).code;
+  let src = null;  // привязанный способ (id) или null — новым способом через страницу банка
   go.onclick = UI.busy(go, async () => {
+    if (src) {
+      const r = await UI.run(() => api('/topup', 'POST', { amount_rub: amount, method_id: src }));
+      if (!r) return;
+      if (r.url) return UI.openLink(r.url);
+      if (r.status === 'succeeded') { UI.haptic('success'); UI.toast('Баланс пополнен'); return refresh(); }
+      UI.toast('Платёж обрабатывается банком — баланс обновится сам');
+      [5000, 15000, 40000].forEach(t => setTimeout(() => refresh(), t));
+      return;
+    }
     const pv = provs.find(p => p.code === provider);
     const r = await UI.run(() => api('/topup', 'POST', { amount_rub: amount, save_method: save && !!(pv && pv.autopay), provider }));
     if (r) UI.openLink(r.url);
@@ -1376,6 +1395,28 @@ function profileView() {
         h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правилами автоплатежей'), '.',
         h('span', { class: 'save-sbp', style: 'display:block;margin-top:4px;opacity:.7' }, 'По СБП привязку поддерживают не все банки — при оплате будут показаны только подходящие.')));
   }
+  // чем оплатить: привязанные способы (без перехода в банк) или новым способом
+  const srcBox = h('div', { class: 'prov-list', role: 'group', 'aria-label': 'Чем оплатить', style: 'display:none' });
+  const paintSrc = () => {
+    [...srcBox.children].forEach(b => b.setAttribute('aria-pressed', String((b.dataset.mid ? +b.dataset.mid : null) === src)));
+    const m = src && savedMs.find(x => x.id === src);
+    if (saveRow) saveRow.style.display = src ? 'none' : '';
+    if (provBox) provBox.style.display = src ? 'none' : '';
+    if (src) note.lastChild.textContent = 'Спишем с ' + (m ? methodName(m) : 'привязанного способа') + ' без перехода в банк';
+    else paintProv();
+  };
+  let savedMs = [];
+  methodsP.then(ms => {
+    savedMs = ms.filter(m => m.active !== false);
+    if (!savedMs.length || !provs.some(p => p.code === 'yookassa')) return;
+    src = savedMs[0].id;
+    srcBox.replaceChildren(...savedMs.map(m => h('button', { type: 'button', 'data-mid': m.id, onclick: () => { src = m.id; UI.haptic('select'); paintSrc(); } },
+      h('span', { class: 'radio', 'aria-hidden': 'true' }), bankMark(m), h('span', { class: 'pl' }, methodName(m), h('small', {}, methodSub(m))))),
+      h('button', { type: 'button', onclick: () => { src = null; UI.haptic('select'); paintSrc(); } },
+        h('span', { class: 'radio', 'aria-hidden': 'true' }), h('span', { class: 'bank-ico' }, icon('plus')), h('span', { class: 'pl' }, 'Новым способом', h('small', {}, 'через страницу банка, можно привязать ещё один'))));
+    srcBox.style.display = '';
+    paintSrc();
+  });
   // способ оплаты: если включено несколько — выбор, карта сохраняется только там, где есть автоплатежи
   let provBox = null;
   const note = h('div', { class: 'pay-note' }, icon('shield'), h('span'));
@@ -1399,7 +1440,7 @@ function profileView() {
     }));
   }
   wrap.append(UI.section('Пополнение', h('div', { class: 'card' }, chips, h('label', { class: 'input' }, input, h('span', { class: 'unit' }, '₽')),
-    provBox, saveRow || h('div', { style: 'height:14px' }), go, note),
+    srcBox, provBox, saveRow || h('div', { style: 'height:14px' }), go, note),
     `От ${rub(D.cfg.min_topup_rub)} до ${rub(D.cfg.max_topup_rub)}. После оплаты вернитесь сюда — баланс обновится сам.`));
   paintProv();
 
@@ -1421,7 +1462,7 @@ function profileView() {
   wrap.append(methodsBox, autoBox);
   const paintMethods = ms => {
     const rows = ms.length ? ms.map(m => row({
-      icon: 'card', tile: '#438CFF', title: m.title || ('Карта *' + (m.last4 || '')), sub: m.expiry ? 'Действует до ' + m.expiry : 'Сохранена для автоплатежей', chevron: false,
+      flag: bankMark(m), title: methodName(m), sub: methodSub(m) + ' · для автоплатежей', chevron: false,
       right: h('button', { class: 'btn small danger', type: 'button', onclick: async () => {
         const ok = await UI.ask({ title: 'Удалить карту?', message: `${m.title} больше не будет использоваться для автоплатежей.`, buttons: [{ id: 'y', text: 'Удалить', type: 'destructive' }] });
         if (!ok) return;
@@ -1439,7 +1480,7 @@ function profileView() {
     const status = h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') });
     const paintStatus = () => { status.className = 'badge ' + (D.autopay.enabled ? (ms.length ? 'ok' : 'warn') : ''); status.textContent = D.autopay.enabled ? (ms.length ? 'Включён' : 'Нет способа') : 'Выключен'; };
     paintStatus();
-    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? (ms[0].title || '') : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
+    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? methodName(ms[0]) : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
       const r = await UI.run(() => api('/autopay', 'POST', { value: val }), val ? 'Автоплатёж включён' : 'Автоплатёж выключен');
       if (r === undefined) { inp.checked = !val; return; }
       D.autopay.enabled = r.enabled; paintStatus();
@@ -1448,7 +1489,7 @@ function profileView() {
       h('span', {}, 'Спишем только недостающую сумму для продления сервера с включённым автопродлением и сразу пришлём уведомление. ',
         h('a', { href: '#', onclick: e => { e.preventDefault(); UI.nav.push(() => docView('autopay')); } }, 'Правила автоплатежей'))));
   };
-  api('/methods').then(paintMethods).catch(() => paintMethods([]));
+  methodsP.then(paintMethods).catch(() => paintMethods([]));
 
   // история — последние операции
   const histBox = h('div', { class: 'list' }, h('div', { class: 'skeleton' }));
@@ -1540,6 +1581,18 @@ function historyView() {
 }
 
 // ───────── обновление ─────────
+// привязанный способ оплаты: банк (СБП) с эмблемой или карта
+function methodName(m) { return m.bank ? m.bank.name : (m.title || ('Карта *' + (m.last4 || ''))); }
+function methodSub(m) { return m.type === 'sbp' ? 'Счёт СБП' + (m.bank ? '' : (m.title && m.title !== 'Счёт СБП' ? ' · ' + m.title : '')) : (m.expiry ? 'Карта · до ' + m.expiry : 'Карта'); }
+function bankMark(m) {
+  if (m.bank && m.bank.logo) {
+    const img = h('img', { class: 'bank-mark', src: m.bank.logo, alt: '', loading: 'lazy' });
+    img.onerror = () => img.replaceWith(h('span', { class: 'bank-ico' }, icon(m.type === 'sbp' ? 'bolt' : 'card')));
+    return img;
+  }
+  return h('span', { class: 'bank-ico' }, icon(m.type === 'sbp' ? 'bolt' : 'card'));
+}
+
 async function refresh() {
   try { await load(); } catch (e) { return; }
   if (tab !== 'new' || UI.nav.stack.length) UI.nav.refresh();

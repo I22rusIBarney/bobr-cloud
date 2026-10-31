@@ -203,9 +203,14 @@ async def methods(tg_id: int, include_deleted: bool = False) -> list[dict]:
         if not include_deleted:
             q = q.where(PaymentMethod.active.is_(True))
         rows = (await s.execute(q)).scalars().all()
-    return [{"id": m.id, "title": m.title, "type": m.type, "card_type": m.card_type, "last4": m.last4, "expiry": m.expiry,
-             "active": m.active, "created": m.created_at.isoformat(), "deleted_at": m.deleted_at.isoformat() if m.deleted_at else None,
-             "deleted_by": m.deleted_by} for m in rows]
+    from . import banks
+    out = []
+    for m in rows:
+        bank = await banks.info(m.bank_id) if m.bank_id else None
+        out.append({"id": m.id, "title": m.title, "type": m.type, "card_type": m.card_type, "last4": m.last4, "expiry": m.expiry,
+                    "bank": bank, "active": m.active, "created": m.created_at.isoformat(),
+                    "deleted_at": m.deleted_at.isoformat() if m.deleted_at else None, "deleted_by": m.deleted_by})
+    return out
 
 
 async def set_autopay(tg_id: int, enabled: bool) -> bool:
