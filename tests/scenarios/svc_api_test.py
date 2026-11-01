@@ -192,6 +192,22 @@ async def main():
         ok((await c.post("/api/svc/topup", headers=T, json={"tg_id": 1, "amount_rub": 500, "method_id": 999})).status_code == 400, "чужой или неизвестный способ — отказ")
         ok((await c.post("/api/svc/topup", json={"tg_id": 1, "amount_rub": 500})).status_code == 401, "пополнение без токена — 401")
 
+        # списание за услугу своего бота: идемпотентно по ref, без ухода в минус
+        bal = (await c.get("/api/svc/balance?tg_id=77", headers=T)).json()["balance_kop"]
+        r = await c.post("/api/svc/charge", headers=T, json={"tg_id": 77, "amount_kop": 1000, "ref": "bn:sub:77:1", "comment": "BobrNet"})
+        ok(r.status_code == 200 and r.json()["balance_kop"] == bal - 1000 and r.json()["repeat"] is False, f"списание: {r.json()}")
+        r = await c.post("/api/svc/charge", headers=T, json={"tg_id": 77, "amount_kop": 1000, "ref": "bn:sub:77:1"})
+        ok(r.status_code == 200 and r.json()["repeat"] is True and r.json()["balance_kop"] == bal - 1000, "повтор с тем же ref не списывает второй раз")
+        r = await c.post("/api/svc/charge", headers=T, json={"tg_id": 77, "amount_kop": 10_000_000, "ref": "bn:sub:77:2"})
+        ok(r.status_code == 402 and r.json()["detail"]["balance_kop"] == bal - 1000, f"не хватает — 402, ничего не списано: {r.json()}")
+        ok((await c.post("/api/svc/charge", headers=T, json={"tg_id": 77, "amount_kop": -5, "ref": "x"})).status_code == 400, "отрицательная сумма — отказ")
+        ok((await c.post("/api/svc/charge", headers=T, json={"tg_id": 77, "amount_kop": 5, "ref": " "})).status_code == 400, "без ref — отказ")
+        ok((await c.post("/api/svc/charge", json={"tg_id": 77, "amount_kop": 5, "ref": "y"})).status_code == 401, "без токена — 401")
+        ok((await c.post("/api/svc/charge", headers=T, json={"tg_id": 78, "amount_kop": 5, "ref": "z"})).status_code == 403, "заблокированному — 403")
+        from app import account as acc
+        hist = await acc.history(77)
+        ok(hist[0]["kind"] == "svc_charge" and hist[0]["title"] == "Оплата услуги" and hist[0]["amount_rub"] == -10, f"в истории клиента: {hist[0]}")
+
     os.environ["SERVICE_TOKEN"] = ""
     from app.config import env
     env.cache_clear()
