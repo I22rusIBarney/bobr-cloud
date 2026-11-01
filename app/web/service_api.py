@@ -14,7 +14,7 @@ from sqlalchemy import func, select
 
 from .. import services as svc
 from ..config import env
-from ..db import Server, User, session
+from ..db import Server, User, change_balance, session
 from ..services import UserError
 from ..settings import load_settings
 
@@ -29,6 +29,13 @@ class SvcBuyIn(BaseModel):
     disk: int | None = None
     period: str = "1m"
     password: str | None = None
+
+
+class SvcChargeIn(BaseModel):
+    tg_id: int
+    amount_kop: int
+    ref: str            # ключ операции от вызывающего бота: повтор с тем же ref не спишет второй раз
+    comment: str = ""
 
 
 class SvcRenameIn(BaseModel):
@@ -111,6 +118,29 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
     async def balance(tg_id: int, _: None = Depends(auth)):
         u = await client(tg_id)
         return {"balance_kop": u.balance_kop}
+
+    @r.post("/charge")
+    async def charge(p: SvcChargeIn, _: None = Depends(auth)):
+        """Списать с баланса клиента оплату услуги своего бота (например, подписки BobrNet).
+        Идемпотентно по ref: повтор вернёт прежний результат. Не хватает денег — 402 и баланс, ничего не списано."""
+        from ..db import Tx
+        if not 0 < p.amount_kop <= 10_000_000:
+            raise HTTPException(400, "Сумма списания: от 1 коп. до 100 000 ₽")
+        ref = (p.ref or "").strip()[:64]
+        if not ref:
+            raise HTTPException(400, "Нужен ref — ключ операции")
+        await client(p.tg_id)
+        async with session() as s:
+            done = (await s.execute(select(Tx).where(Tx.tg_id == p.tg_id, Tx.kind == "svc_charge", Tx.ref == ref))).scalars().first()
+            if done is not None:
+                bal = (await s.get(User, p.tg_id)).balance_kop
+                return {"ok": True, "repeat": True, "tx_id": done.id, "balance_kop": bal}
+            if not await change_balance(s, p.tg_id, -p.amount_kop, "svc_charge", ref):
+                bal = (await s.get(User, p.tg_id)).balance_kop
+                raise HTTPException(402, {"detail": "Недостаточно средств на балансе", "balance_kop": bal, "need_kop": p.amount_kop})
+            tx = (await s.execute(select(Tx).where(Tx.tg_id == p.tg_id, Tx.kind == "svc_charge", Tx.ref == ref))).scalars().first()
+            bal = (await s.get(User, p.tg_id)).balance_kop
+        return {"ok": True, "repeat": False, "tx_id": tx.id if tx else None, "balance_kop": bal}
 
     @r.get("/topup")
     async def topup_options(tg_id: int, _: None = Depends(auth)):
