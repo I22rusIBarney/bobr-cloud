@@ -516,7 +516,8 @@ function serverView(id) {
     row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Переустановка', async os => {
       const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(os)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
       if (!ok) return;
-      await withCode(s, 'reinstall', 'переустановку', code => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os, code }), 'Переустановка запущена');
+      const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os }), 'Переустановка запущена');
+      if (r !== undefined) await refresh();
     }, { cpu: s.cpu, ram: s.ram, disk: s.disk }, true) }),
   ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
 

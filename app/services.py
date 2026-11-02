@@ -731,6 +731,23 @@ async def verify_change_ip(ctx: Ctx, server_id: int, astra_id: int, old_ip: str 
     return "unknown"
 
 
+ACTION_FAILED = ("error", "failed")
+
+
+async def verify_action(ctx: Ctx, astra_id: int, action: str, tg_id: int, delay: float = 150.0) -> str:
+    """Проверка действия после таймаута: ok — сервер в нормальном статусе, failed — клиенту и админу сообщили."""
+    await asyncio.sleep(delay)
+    await refresh_server(ctx, astra_id)
+    async with session() as s:
+        srv = (await s.execute(select(Server).where(Server.astra_id == astra_id))).scalar_one_or_none()
+    if srv is None or srv.status not in ACTION_FAILED:
+        return "ok"
+    what = {"reinstall": "Переустановка", "password": "Сброс пароля", "start": "Запуск", "stop": "Остановка", "reboot": "Перезагрузка"}.get(action, action)
+    await ctx.notify(tg_id, f"❌ <b>{what} сервера {html.escape(srv.name)} не удалась</b>\n\nПопробуйте ещё раз или напишите в поддержку.")
+    await ctx.alert_admin(f"⚠️ {what} #{astra_id} (клиент {tg_id}) после таймаута: статус {srv.status}.")
+    return "failed"
+
+
 def change_ip_price_kop(cfg: dict, user: User | None) -> int:
     """Смена IP: клиентам без наценки — по себестоимости Astra, остальным — цена из настроек."""
     if user is not None and user.no_markup:
@@ -780,8 +797,13 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         if action == "change-ip":  # таймаут ≠ отказ: проверим результат по статусу операции, деньги пока удержаны
             asyncio.get_running_loop().create_task(verify_change_ip(ctx, server_id, srv.astra_id, srv.ip, utcnow(), charge, tg_id))
             raise UserError("Провайдер отвечает с задержкой. Проверим смену IP автоматически и пришлём результат в течение 10 минут.") from ex
-        await ctx.alert_admin(f"⚠️ Неизвестный итог действия {action} #{srv.astra_id} (таймаут).")
-        raise UserError("Ответ от провайдера не получен. Проверьте статус сервера через минуту.") from ex
+        if action == "vnc":  # без ответа нет ссылки — тут честно ошибка
+            raise UserError("Провайдер не прислал ссылку на консоль. Попробуйте через минуту.") from ex
+        # таймаут ≠ отказ: Astra обычно уже выполняет операцию (переустановка отвечает долго).
+        # Считаем запущенной, а через пару минут сверяем статус и пишем, только если что-то пошло не так.
+        log.warning("action %s #%s: ответ не получен, проверим статус позже", action, srv.astra_id)
+        asyncio.get_running_loop().create_task(verify_action(ctx, srv.astra_id, action, tg_id))
+        resp = {}
     if action == "vnc":
         link = vnc_link(resp)
         if not link:

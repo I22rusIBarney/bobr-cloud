@@ -100,7 +100,10 @@ class Astra:
         return await self._req("POST", "/servers", json=body, mutating=True)
 
     async def action(self, sid: int, action: str, body: dict | None = None) -> dict:
-        return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True)
+        # переустановка и сброс пароля у Astra отвечают долго — 30 с бывает мало, ответ теряется, хотя операция идёт
+        slow = action in ("reinstall", "password")
+        kw = {"timeout": httpx.Timeout(120.0, connect=10.0)} if slow else {}
+        return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True, **kw)
 
     async def delete(self, sid: int) -> dict:
         return await self._req("DELETE", f"/servers/{sid}", mutating=True)
