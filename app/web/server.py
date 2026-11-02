@@ -120,6 +120,17 @@ class EscalateIn(BaseModel):
     server_id: int | None = None
 
 
+class BackupKeyIn(BaseModel):
+    key: str = ""        # пусто — сгенерировать новый
+    off: bool = False    # убрать ключ: копии снова без секретов и без шифрования
+
+
+class UpdateCfgIn(BaseModel):
+    on: bool | None = None
+    hour: int | None = None
+    tz: int | None = None
+
+
 def _media_dir() -> Path:
     """Папка для загруженных файлов — рядом с базой (в Docker это смонтированный том data/)."""
     url = env().database_url
@@ -130,6 +141,8 @@ def _media_dir() -> Path:
 
 def build_app(ctx: svc.Ctx) -> FastAPI:
     app = FastAPI(title="vpsbot", docs_url=None, redoc_url=None, openapi_url=None)
+    from ..audit import AuditMiddleware
+    app.add_middleware(AuditMiddleware)  # журнал действий админов — сам, по успешным изменяющим запросам
 
     # ───── публичное ─────
 
@@ -437,6 +450,7 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
                 "client_balances_rub": float_kop / 100,
             },
             "astra": ab,
+            "version": __import__("app.selfupdate", fromlist=["version"]).version(),
             "tickets": {k: v for k, v in (await tk.list_admin("active")).items() if k in ("counts", "unread")},
         }
 
@@ -564,6 +578,108 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         from .. import health, security
         h = await health.check_now(ctx) if fresh or not health.current()["checks"] else health.current()
         return {**h, "security": security.info()}
+
+    @app.get("/api/admin/audit")
+    async def audit_list(q: str = "", before: int | None = None, _: dict = Depends(admin)):
+        from .. import audit
+        return {"items": await audit.view(q, before)}
+
+    @app.get("/api/admin/backup")
+    async def backup_info(_: dict = Depends(admin)):
+        from .. import backup
+        import os
+        data = os.path.dirname(backup.db_path()) or "."
+        return {"has_key": bool(await backup.get_key()), "last_ts": await backup.last_ts(), "local": backup.local_copies(data), "keep": backup.KEEP}
+
+    @app.post("/api/admin/backup/key")
+    async def backup_key(p: BackupKeyIn, _: dict = Depends(admin)):
+        """Ключ копий: показываем один раз — без него зашифрованные копии не открыть."""
+        from .. import backup
+        if p.off:
+            await backup.set_key("")
+            return {"ok": True, "has_key": False}
+        key = p.key.strip() or backup.new_key()
+        if len(backup.norm_key(key)) < 12:
+            raise HTTPException(400, "Ключ слишком короткий: от 12 букв и цифр")
+        await backup.set_key(key)
+        return {"ok": True, "has_key": True, "key": key}
+
+    @app.put("/api/admin/backup/restore")
+    async def backup_restore(request: Request, key: str = "", _: dict = Depends(admin)):
+        """Файл копии в теле запроса, ключ — в ?key=. Проверяем и кладём рядом; бот перезапустится и подменит базу."""
+        import asyncio
+        import os
+        from .. import backup
+        blob = await request.body()
+        if not blob:
+            raise HTTPException(400, "Пустой файл")
+        if len(blob) > 200 * 1024 * 1024:
+            raise HTTPException(400, "Файл больше 200 МБ")
+        try:
+            db = await asyncio.to_thread(backup.open_copy, blob, key)
+            data = os.path.dirname(backup.db_path()) or "."
+            await asyncio.to_thread(backup.stage, db, data)
+        except backup.BackupError as ex:
+            raise HTTPException(400, str(ex))
+
+        async def restart():  # Docker перезапустит контейнер (restart: unless-stopped), при запуске база подменится
+            await asyncio.sleep(1.5)
+            os._exit(0)
+        asyncio.create_task(restart())
+        return {"ok": True, "message": "Копия проверена — бот перезапускается с ней (около 20 секунд)"}
+
+    @app.get("/api/admin/update")
+    async def update_get(_: dict = Depends(admin)):
+        from .. import selfupdate as su
+        import json as _json
+        try:
+            req = _json.loads(await su.get_setting("self_update_req") or "{}")
+        except ValueError:
+            req = {}
+        return {**await su.cfg(), "version": su.version(), "window": su.WINDOW, "changelog": su.changelog(),
+                "request": req, "pending": bool(await su.get_setting("self_update_pending"))}
+
+    @app.get("/api/admin/update/check")
+    async def update_check(force: int = 0, _: dict = Depends(admin)):
+        from .. import selfupdate as su
+        return await su.check_remote(force=bool(force))
+
+    @app.post("/api/admin/update")
+    async def update_save(p: UpdateCfgIn, _: dict = Depends(admin)):
+        from .. import selfupdate as su
+        import json as _json
+        try:
+            c = su.clean({k: v for k, v in p.model_dump().items() if v is not None}, await su.cfg())
+        except (TypeError, ValueError) as ex:
+            raise HTTPException(400, str(ex) or "Неверные данные")
+        await su.set_setting(su.KEY, _json.dumps(c))
+        return {**c, "version": su.version(), "window": su.WINDOW, "changelog": su.changelog()}
+
+    @app.post("/api/admin/update/now")
+    async def update_now(_: dict = Depends(admin)):
+        from .. import selfupdate as su
+        import json as _json
+        import time as _time
+        rem = await su.check_remote(force=True)
+        if rem["state"] == "latest":
+            raise HTTPException(400, "У вас уже последняя версия")
+        if rem["state"] != "ready":
+            raise HTTPException(400, {"testing": "Новая версия ещё проходит тесты — подождите пару минут",
+                                      "failed": "Новая версия не прошла тесты — обновление недоступно"}.get(rem["state"], "GitHub не ответил — попробуйте позже"))
+        (su.data_dir() / su.NOW_FILE).write_text(rem["sha"] or "now")
+        await su.set_setting("self_update_req", _json.dumps({"sha": rem["sha"], "at": int(_time.time()), "mode": "now"}))
+        return {"ok": True, "message": "Обновление начнётся в течение минуты — бот перезапустится на ~20 секунд"}
+
+    @app.post("/api/admin/update/night")
+    async def update_night(_: dict = Depends(admin)):
+        from .. import selfupdate as su
+        import json as _json
+        import time as _time
+        rem = await su.check_remote()
+        c = {**await su.cfg(), "once": True}
+        await su.set_setting(su.KEY, _json.dumps(c))
+        await su.set_setting("self_update_req", _json.dumps({"sha": rem.get("sha", ""), "at": int(_time.time()), "mode": "night"}))
+        return {"ok": True, "message": f"Обновлюсь ночью в {c['hour']:02d}:00"}
 
     @app.post("/api/admin/backup")
     async def backup_now(_: dict = Depends(admin)):
@@ -773,8 +889,11 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         return JSONResponse({"detail": f"Неверные данные: {msgs}"}, status_code=422)
 
     @app.exception_handler(Exception)
-    async def on_error(_: Request, ex: Exception):
+    async def on_error(request: Request, ex: Exception):
         log.exception("unhandled")
+        if request.url.path.startswith("/api/admin/"):  # админу — где именно, чтобы не гадать по «internal»
+            from ..errors import where
+            return JSONResponse({"error": "internal", "detail": f"Ошибка сервера: {type(ex).__name__}: {str(ex)[:150]} ({where(ex)})"}, status_code=500)
         return JSONResponse({"error": "internal"}, status_code=500)
 
     return app

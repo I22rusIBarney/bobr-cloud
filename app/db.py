@@ -185,6 +185,18 @@ class ServerLog(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
 
 
+class Audit(Base):
+    """Журнал действий админов: кто, когда и что поменял (пишется сам — см. app/audit.py)."""
+    __tablename__ = "audit"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow, index=True)
+    uid: Mapped[int] = mapped_column(BigInteger, default=0, index=True)
+    who: Mapped[str] = mapped_column(String(80), default="")
+    action: Mapped[str] = mapped_column(String(40), default="")
+    label: Mapped[str] = mapped_column(String(120), default="")
+    detail: Mapped[str] = mapped_column(Text, default="")
+
+
 class ServerShare(Base):
     """Общий доступ к серверу: владелец приглашает другого клиента, тот видит сервер у себя."""
     __tablename__ = "server_shares"
