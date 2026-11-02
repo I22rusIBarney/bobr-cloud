@@ -143,6 +143,18 @@ async def main():
         async with D.session() as s: ba = (await s.get(D.User, 51)).balance_kop
         ok(r.status_code == 400 and "автоматически" in r.json()["detail"] and called and bb - ba == 15000, "таймаут смены IP: деньги удержаны, запущена проверка")
         svc.verify_change_ip = orig; astra.action_exc = None
+        # ── переустановка без кода; таймаут Astra — не ошибка, а проверка статуса позже
+        vcalled = []
+        orig_v = svc.verify_action
+        async def vrec(*a, **k): vcalled.append(a)
+        svc.verify_action = vrec
+        astra.action_exc = AstraUncertain("timeout")
+        r = await c.post(f"/api/me/servers/{srv.id}/action", headers=A, json={"action": "reinstall", "os": srv.os})
+        await asyncio.sleep(0.05)
+        ok(r.status_code == 200 and vcalled and vcalled[0][2] == "reinstall", "таймаут переустановки: ответ «запущена», статус проверим позже")
+        svc.verify_action = orig_v; astra.action_exc = None
+        r = await c.post(f"/api/me/servers/{srv.id}/code", headers=A, json={"action": "reinstall"})
+        ok(r.status_code == 400, "код для переустановки больше не запрашивается")
         started = D.utcnow()
         # 1) IP сменился
         astra.ip_status = [{"ip": "1.1.1.1", "last_operation": {"status": "pending", "created_at": started.isoformat()}},
