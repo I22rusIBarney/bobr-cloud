@@ -27,6 +27,49 @@ cd "${dir}" || { echo "Папка бота ${dir} не найдена — зап
 exec ./install.sh "\${@:-help}"
 EOF
   chmod 755 /usr/local/bin/bcloud
+  install_autoupdate
+}
+
+# Автообновление: таймер раз в час (bcloud _auto решает, пора ли) и «Обновить сейчас» из админки (файл data/update-now)
+install_autoupdate() {
+  command -v systemctl >/dev/null || return 0
+  local dir; dir="$(pwd)"
+  cat > /etc/systemd/system/bcloud-auto.service <<'EOF2'
+[Unit]
+Description=Bobr Cloud: автообновление
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/bcloud _auto
+EOF2
+  cat > /etc/systemd/system/bcloud-auto.timer <<'EOF2'
+[Unit]
+Description=Bobr Cloud: проверка обновлений раз в час
+[Timer]
+OnCalendar=*-*-* *:17:00
+RandomizedDelaySec=120
+[Install]
+WantedBy=timers.target
+EOF2
+  cat > /etc/systemd/system/bcloud-update-now.path <<EOF2
+[Unit]
+Description=Bobr Cloud: обновление по кнопке из админки
+[Path]
+PathExists=${dir}/data/update-now
+Unit=bcloud-auto.service
+[Install]
+WantedBy=multi-user.target
+EOF2
+  systemctl daemon-reload >/dev/null 2>&1 || true
+  systemctl enable --now bcloud-auto.timer bcloud-update-now.path >/dev/null 2>&1 || true
+}
+
+# версия для админки: коммит, дата, заголовок; откуда обновляться
+write_version() {
+  [[ -d .git ]] || return 0
+  mkdir -p data
+  git log -1 --format='%H%x09%cd%x09%s' --date=format:'%d.%m.%Y %H:%M' > data/version.txt 2>/dev/null || true
+  git config --get remote.origin.url > data/origin.txt 2>/dev/null || true
 }
 
 # ───────── Готовый образ из GitHub ─────────
@@ -59,6 +102,7 @@ pull_image() {  # $1 — полный sha коммита. 0 — образ ск�
 # запуск: готовый образ из GitHub или сборка на месте. $1 — к какой версии откатиться, если тесты не прошли
 deploy() {
   local sha rc=1
+  write_version
   sha="$(git rev-parse HEAD 2>/dev/null || true)"
   if [[ -n "$sha" ]]; then pull_image "$sha" && rc=0 || rc=$?; fi
   if [[ $rc == 2 ]]; then
@@ -382,7 +426,7 @@ ${C_B}bcloud${C_0} — управление Bobr Cloud
   bcloud logs      логи бота (выход — Ctrl+C)
   bcloud status    состояние сервисов и версия
   bcloud backup    резервная копия базы и настроек в /root/bcloud-backups
-  bcloud restore Ф восстановить базу из копии (файл из Telegram *.db.gz или bot.db)
+  bcloud restore Ф восстановить базу из копии (файл из Telegram *.db.gz или bot.db; зашифрованную *.bcb — в админке)
   bcloud harden    защитить сервер: файрвол, fail2ban, SSH, автообновления
   bcloud security  состояние защиты: файрвол, блокировки, вход по паролю
   bcloud vnc ДОМЕН консоль VNC под своим поддоменом (bcloud vnc off — выключить)
@@ -414,6 +458,18 @@ case "${1:-install}" in
     deploy "${2:-}"
     [[ -n "$vd" || -n "$extra" ]] && { compose up -d --force-recreate caddy >/dev/null 2>&1 || compose restart caddy; }
     install_cli; ok "Обновлено и перезапущено"; exit 0 ;;
+  _auto)  # таймер раз в час или «Обновить сейчас»: новая версия + готовый образ + бот говорит «пора» → обновиться
+    [[ -d .git ]] || exit 0
+    now=""; [[ -f data/update-now ]] && { now="--now"; rm -f data/update-now; }   # убрать сразу: иначе path-юнит сработает снова
+    git fetch -q origin main 2>/dev/null || exit 0
+    before="$(git rev-parse HEAD)"; after="$(git rev-parse origin/main)"
+    [[ "$before" == "$after" ]] && exit 0
+    git merge-base --is-ancestor HEAD origin/main || exit 0   # локальные правки — только вручную
+    repo="$(gh_repo)"; [[ -n "$repo" ]] || exit 0
+    docker pull -q "ghcr.io/${repo,,}:sha-$after" >/dev/null 2>&1 || exit 0   # тесты ещё идут или не прошли
+    compose exec -T bot python -m app.selfupdate check $now >/dev/null 2>&1 || exit 0
+    git merge -q --ff-only origin/main || exit 1
+    exec ./install.sh _rebuild "${before:0:7}" ;;
   restart) compose restart bot; ok "Бот перезапущен"; exit 0 ;;
   logs)    compose logs -f --tail=100 bot; exit 0 ;;
   status)

@@ -23,6 +23,14 @@ from app.yookassa import YooKassa
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     e = env()
+    from app import backup as bk
+    restored = None
+    try:  # восстановление из копии (загрузили в админке): подменить базу до того, как её откроем
+        restored = bk.apply_pending(bk.db_path())
+    except bk.BackupError:
+        pass
+    except OSError:
+        logging.getLogger(__name__).exception("restore")
     await init_db()
 
     bot = Bot(e.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
@@ -58,6 +66,7 @@ async def main() -> None:
     server = uvicorn.Server(uvicorn.Config(build_app(ctx), host=e.web_host, port=e.web_port, log_level="info"))
     workers = start_workers(ctx)
     web = asyncio.create_task(server.serve(), name="web")
+    asyncio.create_task(_announce(ctx), name="announce")
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])  # подписку проверяем запросом, chat_member не нужен
     finally:
@@ -70,6 +79,33 @@ async def main() -> None:
         await ctx.nalog.close()
         await ctx.platega.close()
         await bot.session.close()
+
+
+async def _announce(ctx) -> None:
+    """После запуска: что нового (если версия сменилась) и что база восстановлена из копии."""
+    import os
+    from app import backup as bk, selfupdate as su
+    await asyncio.sleep(3)
+    texts = []
+    try:
+        note = bk.restored_note(os.path.dirname(bk.db_path()) or ".")
+        if note:
+            texts.append("♻️ " + note)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        seen = await su.get_setting("seen_version") or ""
+        cur = su.current()
+        if cur and seen != cur:
+            await su.set_setting("seen_version", cur)
+            msg = su.whats_new_text(seen)
+            if msg:
+                texts.append(msg)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("whats new")
+    for t in texts:
+        for aid in env().admins:
+            await ctx.notify(aid, t)
 
 
 if __name__ == "__main__":

@@ -17,8 +17,13 @@ async def _loop(name: str, every_s: int, fn: Callable[[svc.Ctx], Awaitable[None]
             await fn(ctx)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as ex:
             log.exception("worker %s failed", name)
+            try:  # админу — что и где упало, не чаще раза в час на задачу
+                from .errors import describe
+                await ctx.alert_once(f"worker:{name}", f"⚠️ Фоновая задача «{name}» упала: {describe(ex)}", 3600)
+            except Exception:  # noqa: BLE001
+                log.exception("worker alert")
         await asyncio.sleep(every_s)
 
 

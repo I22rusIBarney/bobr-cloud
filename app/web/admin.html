@@ -159,6 +159,10 @@ function rootView() {
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
   ]));
+  const ver = S.version || {};
+  v.append(group('Система', [
+    row({ icon: 'receipt', tile: '#8E8E93', title: 'Журнал действий', sub: 'кто и что менял в админке', onClick: () => UI.nav.push(auditView) }),
+    row({ icon: 'sparkle', tile: '#0A84FF', title: 'Версия и обновления', detail: ver.number ? 'v' + ver.number : '', onClick: () => UI.nav.push(updateView) })]));
 
   // цены
   const example = h('span');
@@ -471,9 +475,127 @@ function healthView() {
 // ───────── уведомления и бэкапы ─────────
 const BK_LABEL = { 6: 'каждые 6 ч', 12: 'каждые 12 ч', 24: 'раз в сутки', 168: 'раз в неделю' };
 const EV_ICON = { health: ['stack', '#34C759'], security: ['shield', '#FF9500'], alerts: ['alert', '#FF3B30'], tickets: ['chat', '#34C759'], sales: ['store', '#0A84FF'], locations: ['globe', '#34AADC'], payments: ['card', '#AF52DE'], referrals: ['users', '#30B0C7'], backups: ['receipt', '#FF9500'] };
+let BKI = null;
+function backupKeySheet() {
+  UI.sheet('Ключ копий', close => {
+    const st = statusLine();
+    const out = h('div', {});
+    const show = key => out.replaceChildren(group(null, [h('div', { style: 'padding:14px 16px;font:600 20px/1.3 ui-monospace,monospace;letter-spacing:.5px;word-break:break-all;user-select:all' }, key),
+      row({ title: 'Скопировать', cls: 'accent', onClick: () => UI.copy(key, 'Ключ') })],
+      'Сохраните ключ в надёжном месте — в менеджере паролей или на бумаге. Бот его больше не покажет, а без ключа копии не открыть.'));
+    const gen = h('button', { class: 'btn', type: 'button' }, BKI && BKI.has_key ? 'Сменить ключ' : 'Создать ключ');
+    gen.onclick = UI.busy(gen, async () => {
+      if (BKI && BKI.has_key && !await UI.ask({ title: 'Сменить ключ?', message: 'Старые копии откроются только старым ключом.', buttons: [{ id: 'y', text: 'Сменить' }] })) return;
+      try { const r = await api('backup/key', 'POST', {}); BKI = { ...BKI, has_key: true }; show(r.key); gen.remove(); UI.nav.refresh(); }
+      catch (e) { showStatus(st, { ok: false, message: e.message }); }
+    });
+    const off = BKI && BKI.has_key ? row({ title: 'Убрать ключ', cls: 'destructive', onClick: async () => {
+      if (!await UI.ask({ title: 'Убрать ключ?', message: 'Копии снова будут без ключей ЮKassa и «Мой налог» и без шифрования.', buttons: [{ id: 'y', text: 'Убрать', type: 'destructive' }] })) return;
+      if (await UI.run(() => api('backup/key', 'POST', { off: true }), 'Ключ убран') !== undefined) { BKI = { ...BKI, has_key: false }; close(); UI.nav.refresh(); }
+    } }) : null;
+    return h('div', { style: 'padding-bottom:var(--s5)' },
+      h('div', { class: 'subtitle', style: 'white-space:normal;margin:0 var(--gutter) 16px' }, 'С ключом копия базы — полная, со всеми ключами платёжек, и зашифрованная: даже если файл утечёт из канала, без ключа его не прочитать.'),
+      out, off ? group(null, [off]) : null, h('div', { class: 'pad', style: 'padding:0 var(--gutter)' }, st, gen));
+  });
+}
+function restoreSheet() {
+  UI.sheet('Восстановить из копии', close => {
+    const st = statusLine();
+    const file = h('input', { type: 'file', accept: '.bcb,.gz,.db', style: 'display:none' });
+    const name = h('span', {}, 'не выбран');
+    const key = h('input', { type: 'text', class: 'code', placeholder: 'XXXX-XXXX-XXXX-XXXX-XXXX-XXXX', autocomplete: 'off', style: 'text-align:left' });
+    file.onchange = () => { name.textContent = file.files[0] ? file.files[0].name : 'не выбран'; };
+    const go = h('button', { class: 'btn danger', type: 'button' }, 'Восстановить');
+    go.onclick = UI.busy(go, async () => {
+      const f = file.files[0];
+      if (!f) { showStatus(st, { ok: false, message: 'Выберите файл копии' }); return; }
+      if (!await UI.ask({ title: 'Восстановить из копии?', message: 'Текущая база сохранится на сервере, бот перезапустится с копией.', buttons: [{ id: 'y', text: 'Восстановить', type: 'destructive' }] })) return;
+      try {
+        const res = await fetch('/api/admin/backup/restore?key=' + encodeURIComponent(key.value.trim()), { method: 'PUT', headers: { 'X-Init-Data': UI.initData(), 'Content-Type': 'application/octet-stream' }, body: f });
+        let j = null; try { j = await res.json(); } catch (e) {}
+        if (!res.ok) throw new Error(UI.errText(j, res.status));
+        showStatus(st, { ok: true, message: j.message });
+        setTimeout(() => location.reload(), 20000);
+      } catch (e) { showStatus(st, { ok: false, message: e.message }); }
+    });
+    return h('div', { style: 'padding-bottom:var(--s5)' },
+      group(null, [row({ title: 'Файл копии', detail: name, onClick: () => file.click() }), h('label', { class: 'field stack' }, h('span', { class: 'lbl' }, 'Ключ', h('span', { class: 'opt' }, ' для зашифрованной копии')), key)],
+        'Файл из Telegram: *.bcb (зашифрованная, нужен ключ) или *.db.gz. Бот проверит копию, отложит текущую базу (data/bot.db.before-restore-…) и перезапустится с копией.'),
+      file, h('div', { class: 'pad', style: 'padding:0 var(--gutter)' }, st, go));
+  });
+}
+
+// ───────── журнал действий ─────────
+const AUDF = { q: '' };
+function auditView() {
+  const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  let items = [], more = false;
+  const draw = () => {
+    if (!items.length) { list.replaceChildren(h('div', { class: 'empty' }, icon('receipt'), h('b', {}, AUDF.q ? 'Ничего не нашлось' : 'Пока пусто'), 'Здесь появятся изменения из админки.')); return; }
+    const byDay = {};
+    items.forEach(x => { const d = (x.ts || '').slice(0, 10); (byDay[d] = byDay[d] || []).push(x); });
+    list.replaceChildren(...Object.entries(byDay).map(([d, xs]) => group(UI.date(d + 'T12:00:00Z').replace(/,.*$/, ''), xs.map(x => row({ cls: 'wrap', chevron: false,
+      title: x.label, sub: [x.who, new Date(x.ts).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' }), x.detail].filter(Boolean).join(' · ') })))),
+      more ? h('div', { class: 'pad', style: 'padding:0 var(--gutter) 24px' }, h('button', { class: 'btn tinted', type: 'button', onclick: () => load(true) }, 'Показать ещё')) : '');
+  };
+  const load = async (next) => {
+    try {
+      const r = await api('audit?q=' + encodeURIComponent(AUDF.q) + (next && items.length ? '&before=' + items[items.length - 1].id : ''));
+      items = next ? items.concat(r.items) : r.items; more = r.items.length === 50; draw();
+    } catch (e) { list.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)); }
+  };
+  const inp = h('input', { type: 'search', placeholder: 'Поиск: клиент, промокод, настройка…', value: AUDF.q });
+  let t = 0; inp.oninput = () => { clearTimeout(t); t = setTimeout(() => { AUDF.q = inp.value.trim(); load(); }, 300); };
+  load();
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Журнал'),
+    h('div', { class: 'search' }, inp), list);
+}
+
+// ───────── версия и обновления ─────────
+const KIND = { new: ['Новое', 'ok'], better: ['Лучше', ''], fix: ['Исправлено', 'warn'] };
+function updateView() {
+  const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
+  const remote = h('div', {});
+  const paintRemote = r => {
+    const st = statusLine();
+    const rows = [];
+    if (r.state === 'latest') rows.push(row({ icon: 'check', tile: '#34C759', title: 'Последняя версия', sub: 'проверено только что', chevron: false }));
+    else if (r.state === 'ready') {
+      rows.push(row({ icon: 'sparkle', tile: '#0A84FF', title: 'Доступна версия ' + (r.version || r.sha), sub: 'тесты пройдены, можно ставить', chevron: false }));
+      (r.changes || []).forEach(c => rows.push(h('div', { style: 'padding:10px 16px' }, h('b', {}, c.version + ' — ' + c.title),
+        ...(c.items || []).map(i => h('div', { style: 'margin-top:6px;font-size:15px' }, '• ' + i.text)))));
+      const now = h('button', { class: 'btn', type: 'button' }, 'Обновить сейчас');
+      now.onclick = UI.busy(now, async () => { try { showStatus(st, await api('update/now', 'POST')); } catch (e) { showStatus(st, { ok: false, message: e.message }); } });
+      const night = h('button', { class: 'btn tinted', type: 'button' }, 'Обновить ночью');
+      night.onclick = UI.busy(night, async () => { try { showStatus(st, await api('update/night', 'POST')); } catch (e) { showStatus(st, { ok: false, message: e.message }); } });
+      rows.push(h('div', { class: 'two', style: 'padding:12px 16px;display:flex;gap:10px' }, now, night));
+    } else rows.push(row({ icon: 'alert', tile: '#FF9500', title: { testing: 'Новая версия проходит тесты', failed: 'Новая версия не прошла тесты' }[r.state] || 'GitHub не ответил',
+      sub: r.state === 'testing' ? 'обычно 2–3 минуты' : r.error || '', chevron: false }));
+    remote.replaceChildren(group('На GitHub', rows, h('span', {}, st, 'Обновление занимает около минуты: бот перезапускается, клиенты в это время видят «сервис обновляется».')));
+  };
+  const check = force => api('update/check' + (force ? '?force=1' : '')).then(paintRemote).catch(e => remote.replaceChildren(h('div', { class: 'empty' }, e.message)));
+  api('update').then(u => {
+    const v = u.version || {};
+    const save = async patch => { const r = await UI.run(() => api('update', 'POST', { ...patch, tz: -new Date().getTimezoneOffset() })); if (r) Object.assign(u, r); };
+    const hours = h('select', { class: 'code' }, ...Array.from({ length: 24 }, (_, i) => h('option', { value: i, selected: i === u.hour }, String(i).padStart(2, '0') + ':00')));
+    hours.onchange = () => save({ hour: +hours.value });
+    box.replaceChildren(
+      group('Сейчас', [row({ title: 'Версия', detail: v.number ? 'v' + v.number : '—', chevron: false }),
+        v.sha ? row({ title: 'Сборка', detail: v.sha + (v.date ? ' · ' + v.date : ''), chevron: false }) : null].filter(Boolean)),
+      remote,
+      group('Автообновление', [row({ title: 'Обновляться само', sub: 'когда вышла версия, прошедшая тесты, и не создаётся сервер', cls: 'wrap', chevron: false, right: UI.toggle(u.on, on => save({ on }), 'Автообновление') }),
+        row({ title: 'Во сколько', right: hours, chevron: false })],
+        u.request && u.request.mode === 'night' ? 'Запланировано обновление ночью.' : 'Время — ваше местное. Если в этот час создаётся сервер, бот подождёт.'),
+      group('Что нового', (u.changelog || []).slice(0, 10).map(r => h('div', { style: 'padding:12px 16px' }, h('b', {}, 'v' + r.version + ' — ' + r.title), h('div', { class: 'sub', style: 'color:var(--hint);font-size:13px' }, r.date),
+        ...(r.items || []).map(i => h('div', { style: 'margin-top:6px;font-size:15px' }, h('span', { class: 'badge ' + (KIND[i.kind] || ['', ''])[1], style: 'margin-right:6px' }, (KIND[i.kind] || [i.kind])[0]), i.text))))));
+    check(false);
+  }).catch(e => box.replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось загрузить'), e.message)));
+  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Обновления'), box);
+}
+
 function eventsView() {
   const box = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
-  api('events').then(info => {
+  Promise.all([api('events'), api('backup').catch(() => null)]).then(([info, b]) => { if (b) BKI = b;
     const out = [];
     info.events.forEach(ev => {
       const chat = textField('Куда', `ev_${ev.key}_chat`, 'Личка админов или @канал');
@@ -499,9 +621,13 @@ function eventsView() {
           if (r.ok) UI.toast(`Копия отправлена · ${r.size_kb} КБ`); else UI.alert('Копия создана, но не дошла: ' + r.error);
         });
         rows.push(row({ title: 'Последняя копия', sub: info.backup_last_ts ? UI.date(new Date(info.backup_last_ts * 1000).toISOString()) : 'ещё не было', right: now }));
+        rows.push(row({ icon: 'shield', tile: '#34C759', title: 'Ключ копий', sub: 'полные зашифрованные копии, со всеми ключами', cls: 'wrap',
+          right: h('span', { class: 'badge ' + (BKI && BKI.has_key ? 'ok' : '') }, BKI && BKI.has_key ? 'Задан' : 'Нет'), onClick: () => backupKeySheet() }));
+        rows.push(row({ icon: 'stack', tile: '#FF9500', title: 'Восстановить из копии', sub: 'загрузить файл из Telegram', onClick: () => restoreSheet() }));
       }
       out.push(group(null, rows, h('span', {}, st, ev.key === 'backups'
-        ? 'Копия базы без ключей ЮKassa и «Мой налог», сжатая. Восстановление на сервере: bcloud restore файл. Канал для бэкапов — только закрытый: в копии данные клиентов.'
+        ? (BKI && BKI.has_key ? 'Копия полная и зашифрована вашим ключом — без ключа её не открыть. Последние ' + BKI.keep + ' копий лежат и на сервере, в data/backups. Канал для бэкапов — только закрытый.'
+          : 'Копия базы без ключей ЮKassa и «Мой налог», сжатая. Задайте ключ копий — копии станут полными и зашифрованными, а восстанавливать их можно прямо отсюда. Канал для бэкапов — только закрытый: в копии данные клиентов.')
         : null)));
     });
     box.replaceChildren(...out);
