@@ -1,6 +1,8 @@
 """Клиент реселлерского API Astra VPS (https://astravps.co/reseller)."""
 from __future__ import annotations
 
+import asyncio
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -18,10 +20,30 @@ class AstraError(Exception):
         super().__init__(f"Astra API {status}: {payload}")
 
     @property
+    def transient(self) -> bool:
+        """Временный сбой на стороне Astra (шлюз, перегрузка) — стоит повторить позже."""
+        return self.status in TRANSIENT_STATUSES
+
+    @property
     def code(self) -> str:
         if isinstance(self.payload, dict):
             return str(self.payload.get("error", ""))
         return ""
+
+
+TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+_RETRY_DELAYS = (1.0, 3.0)   # повторы только для чтения: GET безопасно переспросить
+
+
+def _short_html(text: str) -> str:
+    """HTML-страница ошибки nginx → «502 Bad Gateway», а не простыня разметки."""
+    m = re.search(r"<title>(.*?)</title>", text, re.I | re.S) or re.search(r"<h1>(.*?)</h1>", text, re.I | re.S)
+    return " ".join(m.group(1).split()) if m else " ".join(re.sub(r"<[^>]+>", " ", text).split())[:200]
+
+
+def is_transient(ex: BaseException) -> bool:
+    """Сетевая ошибка или 5xx/429 от Astra — сбой временный, не повод будить админа с первого раза."""
+    return isinstance(ex, (httpx.TransportError, AstraUncertain)) or (isinstance(ex, AstraError) and ex.transient)
 
 
 class AstraUncertain(Exception):
@@ -51,6 +73,17 @@ class Astra:
         await self._http.aclose()
 
     async def _req(self, method: str, path: str, *, mutating: bool = False, **kw) -> Any:
+        delays = () if mutating or method != "GET" else _RETRY_DELAYS
+        for attempt in range(len(delays) + 1):
+            try:
+                return await self._once(method, path, mutating=mutating, **kw)
+            except (AstraError, httpx.TransportError) as ex:
+                if attempt >= len(delays) or not is_transient(ex):
+                    raise
+                await asyncio.sleep(delays[attempt])
+        raise AssertionError("unreachable")
+
+    async def _once(self, method: str, path: str, *, mutating: bool, **kw) -> Any:
         try:
             r = await self._http.request(method, path, **kw)
         except httpx.HTTPError as ex:
@@ -60,7 +93,7 @@ class Astra:
         try:
             data = r.json()
         except ValueError:
-            data = {"raw": r.text[:500]}
+            data = {"raw": _short_html(r.text) if "<" in r.text else r.text[:500]}
         if r.status_code >= 400:
             raise AstraError(r.status_code, data)
         return data

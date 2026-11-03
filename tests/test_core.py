@@ -144,3 +144,44 @@ def test_admin_dependency_declared_before_use():
         if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             seen.add(st.name)
     assert not bad, bad
+
+
+def test_astra_transient_502_retried_and_shortened(monkeypatch):
+    import asyncio
+    import httpx
+    from app import astra as A
+
+    calls = []
+
+    def handler(req):
+        calls.append(req.method)
+        if len(calls) < 3:
+            return httpx.Response(502, text="<html><head><title>502 Bad Gateway</title></head><body>x</body></html>")
+        return httpx.Response(200, json={"locations": []})
+
+    async def nosleep(_):
+        return None
+
+    monkeypatch.setattr(A.asyncio, "sleep", nosleep)
+    cli = A.Astra.__new__(A.Astra)
+    cli._http = httpx.AsyncClient(base_url="http://x", transport=httpx.MockTransport(handler))
+    assert asyncio.run(cli.catalog()) == {"locations": []}
+    assert len(calls) == 3
+
+    calls.clear()
+    cli._http = httpx.AsyncClient(base_url="http://x", transport=httpx.MockTransport(
+        lambda r: (calls.append(r.method), httpx.Response(502, text="<html><title>502 Bad Gateway</title></html>"))[1]))
+    try:
+        asyncio.run(cli.catalog())
+        raise AssertionError("должно упасть")
+    except A.AstraError as ex:
+        assert ex.transient and A.is_transient(ex)
+        assert ex.payload == {"raw": "502 Bad Gateway"}
+    assert len(calls) == 3
+
+    calls.clear()  # изменяющие запросы не повторяем никогда
+    try:
+        asyncio.run(cli._req("POST", "/servers", json={}, mutating=True))
+    except A.AstraError:
+        pass
+    assert len(calls) == 1
