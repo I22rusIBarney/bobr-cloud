@@ -195,4 +195,4 @@ def test_worker_alerts_with_location():
         t.cancel()
         return ctx.sent
     sent = asyncio.run(run())
-    assert sent and "«demo»" in sent[0] and "ValueError: сломалось" in sent[0] and "test_system.py:" in sent[0]
+    assert sent and "demo — не получилось" in sent[0] and "разработчику" in sent[0] and "ValueError: сломалось" in sent[0] and "test_system.py:" in sent[0]
