@@ -16,6 +16,7 @@ TRANSIENT_GRACE_S = 15 * 60   # временные сбои Astra терпим �
 
 async def _loop(name: str, every_s: int, fn: Callable[[svc.Ctx], Awaitable[None]], ctx: svc.Ctx, first_delay: int = 5) -> None:
     from .astra import is_transient
+    from .errors import human
 
     await asyncio.sleep(first_delay)
     failing_since: float | None = None   # начало серии временных сбоев
@@ -32,13 +33,11 @@ async def _loop(name: str, every_s: int, fn: Callable[[svc.Ctx], Awaitable[None]
                 log.warning("worker %s: временный сбой Astra: %s", name, ex)
                 if now - failing_since >= TRANSIENT_GRACE_S:
                     mins = int((now - failing_since) // 60)
-                    await _alert(ctx, name, f"⚠️ Astra API не отвечает уже {mins} мин — фоновая задача «{name}» "
-                                            f"не может выполниться ({ex}). Бот повторяет попытки сам.")
+                    await _alert(ctx, name, human(name, ex, minutes=mins))
             else:
                 failing_since = None
                 log.exception("worker %s failed", name)
-                from .errors import describe
-                await _alert(ctx, name, f"⚠️ Фоновая задача «{name}» упала: {describe(ex)}")
+                await _alert(ctx, name, human(name, ex))
         await asyncio.sleep(every_s)
 
 
