@@ -185,3 +185,13 @@ def test_astra_transient_502_retried_and_shortened(monkeypatch):
     except A.AstraError:
         pass
     assert len(calls) == 1
+
+
+def test_human_error_texts():
+    from app.astra import AstraError
+    from app.errors import human
+
+    t = human("locations", AstraError(502, {"raw": "502 Bad Gateway"}))
+    assert "Проверка локаций Astra" in t and "Astra" in t and "не у вас" in t and "<html" not in t
+    t = human("receipts", ZeroDivisionError("x"))
+    assert "разработчику" in t and "🐞" in t
