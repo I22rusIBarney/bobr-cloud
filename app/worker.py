@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Awaitable, Callable
 
 from . import services as svc
@@ -10,21 +11,42 @@ from . import services as svc
 log = logging.getLogger(__name__)
 
 
+TRANSIENT_GRACE_S = 15 * 60   # временные сбои Astra терпим молча, пока не длятся дольше
+
+
 async def _loop(name: str, every_s: int, fn: Callable[[svc.Ctx], Awaitable[None]], ctx: svc.Ctx, first_delay: int = 5) -> None:
+    from .astra import is_transient
+
     await asyncio.sleep(first_delay)
+    failing_since: float | None = None   # начало серии временных сбоев
     while True:
         try:
             await fn(ctx)
+            failing_since = None
         except asyncio.CancelledError:
             raise
         except Exception as ex:
-            log.exception("worker %s failed", name)
-            try:  # админу — что и где упало, не чаще раза в час на задачу
+            now = time.monotonic()
+            if is_transient(ex):
+                failing_since = failing_since or now
+                log.warning("worker %s: временный сбой Astra: %s", name, ex)
+                if now - failing_since >= TRANSIENT_GRACE_S:
+                    mins = int((now - failing_since) // 60)
+                    await _alert(ctx, name, f"⚠️ Astra API не отвечает уже {mins} мин — фоновая задача «{name}» "
+                                            f"не может выполниться ({ex}). Бот повторяет попытки сам.")
+            else:
+                failing_since = None
+                log.exception("worker %s failed", name)
                 from .errors import describe
-                await ctx.alert_once(f"worker:{name}", f"⚠️ Фоновая задача «{name}» упала: {describe(ex)}", 3600)
-            except Exception:  # noqa: BLE001
-                log.exception("worker alert")
+                await _alert(ctx, name, f"⚠️ Фоновая задача «{name}» упала: {describe(ex)}")
         await asyncio.sleep(every_s)
+
+
+async def _alert(ctx: svc.Ctx, name: str, text: str) -> None:
+    try:  # админу — что и где упало, не чаще раза в час на задачу
+        await ctx.alert_once(f"worker:{name}", text, 3600)
+    except Exception:  # noqa: BLE001
+        log.exception("worker alert")
 
 
 async def _resume_broadcasts(ctx: svc.Ctx) -> None:
