@@ -189,6 +189,13 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         if not isinstance(body, dict):
             raise HTTPException(400)
         obj = body.get("object") or {}
+        if body.get("event") == "refund.succeeded" and obj.get("id"):
+            try:
+                await svc.handle_refund(ctx, str(obj["id"]))  # перепроверяет возврат через API ЮKassa
+            except Exception:
+                log.exception("webhook refund failed")
+                raise HTTPException(500)
+            return {"ok": True}
         if body.get("event") in ("payment.succeeded", "payment.canceled") and obj.get("id"):
             try:
                 # перепроверяет платёж через API ЮKassa; номер из metadata — если id ЮKassa у нас не записан (таймаут при создании)

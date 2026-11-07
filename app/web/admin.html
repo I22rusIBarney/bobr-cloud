@@ -789,7 +789,7 @@ function ykView() {
     h('div', { class: 'actions' }, testBtn, saveBtn),
     group('Уведомления о платежах', [
       row({ title: h('span', { class: 'mono' }, wh), right: h('button', { class: 'icon-btn', type: 'button', style: 'border:0;background:none;color:var(--accent-text);padding:8px;cursor:pointer', 'aria-label': 'Скопировать', onclick: () => UI.copy(wh, 'Адрес') }, icon('copy')) }),
-    ], 'Вставьте этот адрес в ЮKassa → Интеграция → HTTP-уведомления и отметьте события payment.succeeded и payment.canceled.'));
+    ], 'Вставьте этот адрес в ЮKassa → Интеграция → HTTP-уведомления и отметьте события payment.succeeded, payment.canceled и refund.succeeded (возвраты списываются с баланса клиента).'));
 }
 
 // ───────── Мой налог ─────────

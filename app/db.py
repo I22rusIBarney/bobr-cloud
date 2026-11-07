@@ -401,10 +401,10 @@ async def get_or_create_user(s: AsyncSession, tg_id: int, username: str | None =
     return u
 
 
-async def change_balance(s: AsyncSession, tg_id: int, delta_kop: int, kind: str, ref: str = "") -> bool:
-    """Атомарно меняет баланс. Списание не уйдёт в минус. Возвращает успех."""
+async def change_balance(s: AsyncSession, tg_id: int, delta_kop: int, kind: str, ref: str = "", allow_negative: bool = False) -> bool:
+    """Атомарно меняет баланс. Списание не уйдёт в минус (allow_negative — только для отозванных платежей). Возвращает успех."""
     stmt = update(User).where(User.tg_id == tg_id)
-    if delta_kop < 0:
+    if delta_kop < 0 and not allow_negative:
         stmt = stmt.where(User.balance_kop + delta_kop >= 0)
     res = await s.execute(stmt.values(balance_kop=User.balance_kop + delta_kop))
     if res.rowcount != 1:

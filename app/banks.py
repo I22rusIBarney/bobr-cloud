@@ -76,6 +76,8 @@ async def directory(fresh: bool = False) -> dict[str, dict]:
 BIC_NAMES = {"044525225": "Сбербанк", "044525187": "ВТБ", "044525593": "Альфа-Банк", "044525974": "Т-Банк",
              "044525700": "Райффайзенбанк", "044525823": "Газпромбанк"}
 LOGO_PATTERN = "https://qr.nspk.ru/proxyapp/logo/bank{}.png"
+LOGO_HOST = "https://qr.nspk.ru/"
+_logo_fail: dict[str, float] = {}  # bank_id → когда не удалось скачать
 # как искать банк из BIC_NAMES в справочнике по названию (номер участника у ЮKassa и НСПК может не совпасть)
 NAME_KEYS = {"Сбербанк": ("сбербанк", "сбер"), "ВТБ": ("втб",), "Альфа-Банк": ("альфа",), "Т-Банк": ("т-банк", "тинькофф"),
              "Райффайзенбанк": ("райффайзен",), "Газпромбанк": ("газпромбанк",)}
@@ -123,11 +125,16 @@ async def logo(bank_id: str) -> bytes | None:
     f = _media / f"{bank_id}.png"
     if f.exists() and time.time() - f.stat().st_mtime < 30 * TTL:
         return f.read_bytes()
-    src = ((await directory()).get(bank_id) or {}).get("logo_src") or LOGO_PATTERN.format(bank_id)
-    if not src or not src.startswith("https://"):
+    if time.time() - _logo_fail.get(bank_id, 0) < 3600:  # адрес публичный: не ходим к НСПК на каждый запрос неизвестного номера
         return f.read_bytes() if f.exists() else None
+    src = ((await directory()).get(bank_id) or {}).get("logo_src") or LOGO_PATTERN.format(bank_id)
+    if not src.startswith(LOGO_HOST):  # только эмблемы НСПК — никаких других адресов из справочника
+        return f.read_bytes() if f.exists() else None
+    _logo_fail[bank_id] = time.time()  # снимем отметку, если скачается
+    if len(_logo_fail) > 5000:
+        _logo_fail.clear()
     try:
-        async with httpx.AsyncClient(timeout=10, follow_redirects=True) as c:
+        async with httpx.AsyncClient(timeout=10, follow_redirects=False) as c:
             r = await c.get(src)
             r.raise_for_status()
         data = r.content
@@ -135,6 +142,7 @@ async def logo(bank_id: str) -> bytes | None:
             return None
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(data)
+        _logo_fail.pop(bank_id, None)
         return data
     except Exception as ex:  # noqa: BLE001
         log.info("эмблема банка %s: %s", bank_id, ex)
