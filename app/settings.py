@@ -91,7 +91,7 @@ DEFAULTS: dict[str, Any] = {
     # оформление кабинета
     "theme_bg": "none",          # none | aurora | night | ocean | sunset | forest | image
     "theme_bg_image": "",        # адрес своей картинки (заполняется при загрузке)
-    "theme_effect": "auto",      # auto (по календарю) | none | snow | newyear | halloween | leaves | hearts | flowers | confetti
+    "theme_effect": "none",      # auto (по календарю) | none | snow | newyear | halloween | leaves | hearts | flowers | confetti
     "theme_client_choice": True,  # клиенты могут выбрать свой фон
 }
 

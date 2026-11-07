@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import timezone
 from typing import Any
 
 import httpx
@@ -107,5 +108,19 @@ class YooKassa:
 
     async def get_payment(self, yk_id: str) -> dict:
         r = await self._client().get(f"/payments/{yk_id}")
+        r.raise_for_status()
+        return r.json()
+
+    async def get_refund(self, refund_id: str) -> dict:
+        r = await self._client().get(f"/refunds/{refund_id}")
+        r.raise_for_status()
+        return r.json()
+
+    async def list_payments(self, since, cursor: str | None = None) -> dict:
+        """Платежи магазина, созданные не раньше since: {"items": [...], "next_cursor": ...}."""
+        params = {"created_at.gte": since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"), "limit": 100}
+        if cursor:
+            params["cursor"] = cursor
+        r = await self._client().get("/payments", params=params)
         r.raise_for_status()
         return r.json()

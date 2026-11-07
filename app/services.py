@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Awaitable, Callable
 
+import httpx
 from sqlalchemy import func, select, update
 
 from .astra import Astra, AstraError, AstraUncertain, parse_dt
@@ -398,10 +399,16 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
         discount_pct = max(0, min(100, int(user.promo_discount_pct or 0)))
         if user.promo_until and user.promo_until < utcnow():
             discount_pct = 0
+        promo = (user.promo_discount_pct, user.promo_code, user.promo_until)
+        if discount_pct:  # скидка одна на покупку: забираем её сразу, параллельная покупка её уже не увидит
+            took = await s.execute(update(User).where(User.tg_id == tg_id, User.promo_discount_pct == promo[0])
+                                   .values(promo_discount_pct=0, promo_code=None, promo_until=None))
+            if took.rowcount != 1:
+                discount_pct = 0
         # промокод — скидка на первый месяц, скидка за срок — на весь срок
         charge = max(0, period_price(price, months, opt["pct"]) - (price - apply_discount(price, discount_pct)))
         ref = f"{location}:{idx}" if idx is not None else f"{location}:{preset['cpu']}-{preset['ram']}-{preset['disk']}"
-        if not await change_balance(s, tg_id, -charge, "purchase", ref):
+        if not await change_balance(s, tg_id, -charge, "purchase", ref):  # при неудаче откатывает и взятую скидку
             raise UserError("Недостаточно средств на балансе. Пополните баланс и повторите.")
 
     name = f"vps-{secrets.token_hex(3)}"  # название для клиента; у провайдера — флаг и кто купил
@@ -421,6 +428,11 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
             resp = await create(astra_label_plain(location, user))  # флаг в названии не приняли — без него
     except AstraError as ex:
         await _refund(tg_id, charge, "refund_create", name)
+        if discount_pct:  # сервер не создан — скидка возвращается клиенту
+            async with session() as s:
+                await s.execute(update(User).where(User.tg_id == tg_id).values(
+                    promo_discount_pct=promo[0], promo_code=promo[1], promo_until=promo[2]))
+                await s.commit()
         if ex.status == 402:
             await ctx.alert_once("astra_balance", "⚠️ Баланс Astra закончился — покупки не проходят. Пополните через @astravpsbot.")
             raise UserError("Сервис временно не может выдать сервер. Деньги возвращены на баланс.") from ex
@@ -445,7 +457,7 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
         disk=spec.get("disk", preset["disk"]),
         os=spec.get("os", os_),
         price_kop=price,
-        period_paid_kop=charge,
+        period_paid_kop=max(1, charge),  # 0 значит «старая запись»; покупка за 0 ₽ (скидка 100%) — 1 коп.
         period_months=float(months),
         # себестоимость месяца для маржи и продления — цена продления у Astra
         cost_kop=cost_kop(max(renew_rub, charged / months)) if charged is not None else cost_kop(renew_rub),
@@ -456,8 +468,6 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
     async with session() as s:
         s.add(srv)
         u = await s.get(User, tg_id)
-        if discount_pct:
-            u.promo_discount_pct, u.promo_code, u.promo_until = 0, None, None
         await s.commit()
     from . import serverlog
     await serverlog.add(srv.id, tg_id, "purchase", f"{months} мес" if months > 1 else "")
@@ -511,7 +521,8 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None, free:
         # остаток уже оплаченного срока (важно при покупке на несколько месяцев) + новый месяц
         months_old = float(row.period_months or 1.0)
         left = min(max(0.0, (base - now).total_seconds() / 86400 / 30.0), months_old)
-        row.period_paid_kop = int(round(paid_base(row) * left)) + price
+        # 0 в period_paid_kop значит «старая запись, считать по цене»; оплачено ноль (бесплатный месяц) — 1 коп.
+        row.period_paid_kop = max(1, int(round(paid_base(row) * left)) + price)
         row.period_months = round(left + 1.0, 4)
         row.expires_at = base + timedelta(days=30)
         row.notified_stage = 0
@@ -546,8 +557,7 @@ async def refresh_server(ctx: Ctx, astra_id: int) -> None:
                 srv.status, srv.auto_renew, srv.deleted_at = "deleted", False, utcnow()
                 failed = srv
             await s.commit()
-    if failed is not None and not await _refunded(failed):
-        await _refund(failed.tg_id, int(failed.period_paid_kop or 0) or paid_base(failed), "refund_failed", str(failed.astra_id))
+    if failed is not None and await _refund_failed(failed):
         await ctx.notify(failed.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
 
 
@@ -1129,9 +1139,23 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
     async with session() as s:
         srv = await get_user_server(s, tg_id, server_id)
         cfg = await load_settings(s)
+        prev_status, prev_auto = srv.status, srv.auto_renew  # до update: он синхронизирует и объект srv
+        # занимаем сервер до запроса к Astra: второе нажатие и синхронизация его уже не тронут, возврат — один
+        res = await s.execute(update(Server).where(Server.id == server_id, Server.status == prev_status)
+                              .values(status="deleted", auto_renew=False, deleted_at=utcnow()))
+        await s.commit()
+        if res.rowcount != 1:
+            raise UserError("Сервер уже удаляется.")
+
+    async def release() -> None:  # Astra не удалила (или итог неизвестен) — сервер снова как был
+        async with session() as s2:
+            await s2.execute(update(Server).where(Server.id == server_id)
+                             .values(status=prev_status, auto_renew=prev_auto, deleted_at=None))
+            await s2.commit()
     try:
         await ctx.astra.delete(srv.astra_id)
     except AstraError as ex:
+        await release()
         if ex.code == "refund_requires_reconciliation":
             # Astra не может сама подтвердить оплаченные периоды для возврата: ни удаления, ни возврата не было.
             # Решается через поддержку Astra (нужны данные оплаты), повторный DELETE после этого безопасен.
@@ -1150,23 +1174,74 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
             ) from ex
         raise UserError(f"Не удалось удалить сервер ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
+        await release()  # если Astra всё же удалила, синхронизация увидит пропажу и сообщит админу
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте список серверов через минуту.") from ex
     do_refund = refund
     refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"], paid_months(srv)) if do_refund else 0
-    async with session() as s:
-        row = await s.get(Server, server_id)
-        row.status = "deleted"
-        row.auto_renew = False
-        row.deleted_at = utcnow()
-        await s.commit()
-        if refund > 0:
-            await change_balance(s, tg_id, refund, "refund_cancel", str(srv.astra_id))
+    parts = await refund_parts(srv, refund)
+    for who, kop in parts.items():
+        await _refund(who, kop, "refund_cancel", str(srv.astra_id))
+        if who != tg_id:
+            await ctx.notify(who, f"↩️ Сервер <b>{html.escape(srv.name)}</b> удалён владельцем — {fmt_rub(kop)} за оплаченное вами продление вернули на баланс.")
+    refund = parts.get(tg_id, 0)
     from .shares import revoke_all
     from . import serverlog
     await serverlog.add(server_id, actor or tg_id, "delete", "" if do_refund else "без возврата")
     await revoke_all(ctx, server_id, "владелец удалил сервер")
     return refund
+
+
+async def refund_parts(srv: Server, total: int) -> dict[int, int]:
+    """Кому сколько вернуть при удалении: оставшиеся дни покрыты последними продлениями — их часть получает тот,
+    кто платил (участник общего доступа), остальное — владелец. Делим пропорционально дням."""
+    if total <= 0:
+        return {}
+    left = max(0.0, (srv.expires_at - utcnow()).total_seconds() / 86400) if srv.expires_at else 0.0
+    from .db import ServerShare
+    async with session() as s:
+        members = set((await s.execute(select(ServerShare.member_tg).where(ServerShare.server_id == srv.id))).scalars())
+        txs = (await s.execute(select(Tx).where(Tx.ref == str(srv.astra_id), Tx.kind.in_(("renew", "refund_renew")))
+                               .order_by(Tx.id.desc()))).scalars().all() if members else []
+    # продление, которое Astra не выполнила, вернули (refund_renew) — его дни никто не оплатил
+    paid = []
+    for tx in reversed(txs):  # от старых к новым: возврат гасит ближайшее предыдущее продление того же плательщика
+        if tx.kind == "renew" and tx.amount_kop < 0:
+            paid.append(tx)
+        elif tx.kind == "refund_renew":
+            for i in range(len(paid) - 1, -1, -1):
+                if paid[i].tg_id == tx.tg_id:
+                    paid.pop(i)
+                    break
+    txs = list(reversed(paid))
+    if not members or left <= 0:
+        return {srv.tg_id: total}
+    days: dict[int, float] = {}
+    rest = left
+    for tx in txs:  # новые продления покрывают конец срока
+        if rest <= 0:
+            break
+        d = min(30.0, rest)
+        rest -= d
+        who = tx.tg_id if tx.tg_id in members else srv.tg_id
+        days[who] = days.get(who, 0.0) + d
+    days[srv.tg_id] = days.get(srv.tg_id, 0.0) + rest
+    out = {who: int(total * d / left) for who, d in days.items()}
+    out[srv.tg_id] = out.get(srv.tg_id, 0) + total - sum(out.values())  # копейки от округления — владельцу
+    return {k: v for k, v in out.items() if v > 0}
+
+
+async def refill_passwords(ctx: Ctx) -> int:
+    """После восстановления копии без ключа (в ней нет паролей root) берём пароли у Astra."""
+    async with session() as s:
+        rows = (await s.execute(select(Server.astra_id).where(Server.status.in_(["active", "suspended"]),
+                                                              Server.root_password.is_(None)))).scalars().all()
+    for aid in rows:
+        await refresh_server(ctx, aid)
+    async with session() as s:
+        left = (await s.execute(select(func.count()).select_from(Server).where(
+            Server.astra_id.in_(rows), Server.root_password.is_(None)))).scalar_one() if rows else 0
+    return len(rows) - left
 
 
 def paid_base(srv: Server) -> int:
@@ -1396,7 +1471,12 @@ async def topup_saved(ctx: Ctx, tg_id: int, amount_rub: int, method_id: int) -> 
     try:
         data = await ctx.yk.charge_saved(amount_kop=pay.amount_kop, method_id=yk_id, description=f"Пополнение баланса #{pay.id}",
                                          metadata={"payment_id": pay.id, "tg_id": tg_id}, idem_key=f"topup-saved-{pay.id}")
-    except YooKassaError as ex:
+    except Exception as ex:
+        if _charge_uncertain(ex):  # списание могло пройти — платёж ждёт уведомления ЮKassa, не отменяем
+            log.warning("оплата привязанным способом #%s: ответ не получен: %s", pay.id, ex)
+            await ctx.alert_admin(f"⚠️ Оплата привязанным способом #{pay.id} клиента {tg_id}: ЮKassa не ответила ({ex}). "
+                                  "Если списание прошло, баланс пополнится по уведомлению ЮKassa — проверьте платёж, если зачисления не будет.")
+            raise UserError("Банк отвечает с задержкой. Если деньги списались, баланс пополнится автоматически в течение нескольких минут.") from ex
         async with session() as s:
             row = await s.get(Payment, pay.id)
             row.status, row.cancel_reason = "canceled", "api_error"
@@ -1438,13 +1518,28 @@ async def deactivate_method(tg_id: int, method_id: int | None, by: str) -> int:
     return len(rows)
 
 
-async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
-    """Идемпотентно проверяет платёж у провайдера (ЮKassa или Platega) и зачисляет. True — если зачислили сейчас."""
+async def credit_payment(ctx: Ctx, yk_id: str, local_id: Any = None) -> bool:
+    """Идемпотентно проверяет платёж у провайдера (ЮKassa или Platega) и зачисляет. True — если зачислили сейчас.
+    local_id — наш номер платежа из metadata уведомления: если ответ на создание платежа потерялся (таймаут),
+    id ЮKassa у нас не записан, и платёж находим по номеру — но только если ЮKassa подтверждает его в metadata."""
     async with session() as s:
         found = (await s.execute(select(Payment).where(Payment.yk_id == yk_id))).scalar_one_or_none()
+        if found is None and str(local_id or "").isdigit():
+            cand = await s.get(Payment, int(local_id))
+            if cand is not None and cand.yk_id is None and cand.provider in (None, "", "yookassa"):
+                found = cand
     if found is None:
         return False
     data = await provider_client(ctx, found.provider).get_payment(yk_id)  # источник истины — API провайдера, а не тело уведомления
+    if found.status == "succeeded" and str(data.get("raw_status") or "").upper() in CHARGEBACK_STATUSES:
+        await reverse_payment(ctx, found, found.amount_kop, f"chargeback:{found.id}", "чарджбэк в Platega")
+        return False
+    if found.yk_id is None:
+        if str((data.get("metadata") or {}).get("payment_id")) != str(found.id):
+            return False
+        async with session() as s:
+            await s.execute(update(Payment).where(Payment.id == found.id, Payment.yk_id.is_(None)).values(yk_id=yk_id))
+            await s.commit()
     async with session() as s:
         pay = (await s.execute(select(Payment).where(Payment.yk_id == yk_id))).scalar_one_or_none()
         if pay is None:
@@ -1453,6 +1548,12 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
             reason = (data.get("cancellation_details") or {}).get("reason")
             res = await s.execute(update(Payment).where(Payment.id == pay.id, Payment.status == "pending").values(status="canceled", cancel_reason=reason))
             await s.commit()
+            if res.rowcount == 0 and str(data.get("raw_status") or "").upper() in CHARGEBACK_STATUSES:
+                fresh = await s.get(Payment, pay.id)
+                await s.refresh(fresh)
+                if fresh.status == "succeeded":  # параллельное зачисление успело раньше — отзываем
+                    await reverse_payment(ctx, fresh, fresh.amount_kop, f"chargeback:{fresh.id}", "чарджбэк в Platega")
+                    return False
             if res.rowcount == 1 and pay.save_method and not pay.autopay:
                 await ctx.notify(pay.tg_id, f"⚠️ <b>Пополнение не прошло</b>\n\nБанк не провёл платёж {fmt_rub(pay.amount_kop)} с привязкой счёта"
                                  + (f" ({CANCEL_TEXT.get(reason, reason)})" if reason else "") + ". Если счёт этого банка уже привязан, "
@@ -1518,6 +1619,11 @@ async def credit_payment(ctx: Ctx, yk_id: str) -> bool:
     return True
 
 
+def _charge_uncertain(ex: Exception) -> bool:
+    """Итог списания неизвестен: сеть оборвалась или ЮKassa ответила 5xx (по её правилам — результат не определён)."""
+    return isinstance(ex, httpx.HTTPError) or (isinstance(ex, YooKassaError) and ex.status >= 500)
+
+
 async def charge_autopay(ctx: Ctx, tg_id: int, need_kop: int, server_name: str) -> str:
     """Списывает недостающую сумму с сохранённой карты. Возвращает: done | pending | failed | skipped."""
     async with session() as s:
@@ -1544,6 +1650,10 @@ async def charge_autopay(ctx: Ctx, tg_id: int, need_kop: int, server_name: str) 
             metadata={"payment_id": pay.id, "tg_id": tg_id, "autopay": "1"}, idem_key=f"autopay-{pay.id}",
         )
     except Exception as ex:
+        if _charge_uncertain(ex):
+            # ответ не получен — списание с карты могло пройти: платёж остаётся в ожидании, вебхук ЮKassa зачислит его по номеру
+            await ctx.alert_admin(f"⚠️ Автоплатёж #{pay.id} клиента {tg_id}: ЮKassa не ответила ({ex}). Если списание прошло, баланс пополнится по уведомлению ЮKassa.")
+            return "pending"
         async with session() as s:
             row = await s.get(Payment, pay.id)
             row.status, row.cancel_reason = "canceled", "api_error"
@@ -1562,6 +1672,10 @@ async def charge_autopay(ctx: Ctx, tg_id: int, need_kop: int, server_name: str) 
 
 async def poll_pending_payments(ctx: Ctx) -> None:
     """Подстраховка на случай потерянного вебхука."""
+    try:
+        await reconcile_lost(ctx)
+    except Exception:  # noqa: BLE001 — сверка не важнее опроса известных платежей
+        log.warning("сверка потерянных платежей не удалась", exc_info=True)
     async with session() as s:
         rows = (
             await s.execute(
@@ -1575,6 +1689,93 @@ async def poll_pending_payments(ctx: Ctx) -> None:
             await credit_payment(ctx, p.yk_id)
         except Exception:
             log.warning("poll payment %s failed", p.yk_id, exc_info=True)
+
+
+LIST_PAGES = 20  # до 2000 платежей магазина за окно сверки
+
+
+async def reconcile_lost(ctx: Ctx) -> int:
+    """Платёж без id ЮKassa (ответ на создание потерялся, уведомления нет): ищем его среди платежей магазина
+    по нашему номеру в metadata и зачисляем. Если ЮKassa его так и не создала — через сутки закрываем."""
+    if not ctx.yk.configured:
+        return 0
+    now = utcnow()
+    async with session() as s:
+        rows = (await s.execute(select(Payment).where(
+            Payment.status == "pending", Payment.yk_id.is_(None), Payment.provider == "yookassa",
+            Payment.created_at < now - timedelta(minutes=2), Payment.created_at > now - timedelta(days=7)))).scalars().all()
+    if not rows:
+        return 0
+    found: dict[str, str] = {}
+    cursor, complete = None, False
+    for _ in range(LIST_PAGES):
+        page = await ctx.yk.list_payments(min(p.created_at for p in rows) - timedelta(minutes=5), cursor)
+        for it in page.get("items") or []:
+            pid = str((it.get("metadata") or {}).get("payment_id") or "")
+            if pid and it.get("id"):
+                found[pid] = it["id"]
+        cursor = page.get("next_cursor")
+        if not cursor:
+            complete = True
+            break
+    n = 0
+    for p in rows:
+        yid = found.get(str(p.id))
+        if yid:
+            n += bool(await credit_payment(ctx, yid, p.id))
+        elif complete and now - p.created_at > timedelta(days=1):  # просмотрели все платежи окна — у ЮKassa его нет
+            async with session() as s:
+                await s.execute(update(Payment).where(Payment.id == p.id, Payment.status == "pending", Payment.yk_id.is_(None))
+                                .values(status="canceled", cancel_reason="not_created"))
+                await s.commit()
+    return n
+
+
+# ───────────────────────── возвраты платежей и чарджбэки ─────────────────────────
+
+CHARGEBACK_STATUSES = {"CHARGEBACK", "CHARGEBACKED"}
+
+
+class RefundNotReady(Exception):
+    """Возврат по платежу, который мы ещё не зачислили: уведомление нужно принять позже."""
+_reverse_lock = asyncio.Lock()
+
+
+async def reverse_payment(ctx: Ctx, pay: Payment, kop: int, ref: str, why: str) -> bool:
+    """Платёж отозван (возврат в ЮKassa или чарджбэк): списываем сумму с баланса, даже в минус, блокируем клиента
+    и выключаем ему автоплатёж. Серверы не трогаем — решает админ. Один раз на ref."""
+    async with _reverse_lock:
+        async with session() as s:
+            if (await s.execute(select(Tx.id).where(Tx.kind == "chargeback", Tx.ref == ref))).first():
+                return False
+            await change_balance(s, pay.tg_id, -kop, "chargeback", ref, allow_negative=True)
+        async with session() as s:
+            u = await s.get(User, pay.tg_id)
+            if u is not None:
+                u.banned, u.autopay_enabled = True, False
+                await s.commit()
+            bal = u.balance_kop if u is not None else -kop
+    await ctx.alert_admin(f"↩️ <b>Возврат платежа #{pay.id}</b> ({why}): с баланса клиента {pay.tg_id} списано {fmt_rub(kop)}, "
+                          f"баланс теперь {fmt_rub(bal)}. Клиент заблокирован, автоплатёж выключен, серверы работают — решите, что с ними делать. "
+                          "Чек «Мой налог» за это пополнение аннулируйте вручную; реферальный бонус, если был, не отозван.")
+    return True
+
+
+async def handle_refund(ctx: Ctx, refund_id: str) -> bool:
+    """Уведомление ЮKassa refund.succeeded: проверяем возврат через API и отзываем деньги с баланса."""
+    r = await ctx.yk.get_refund(refund_id)
+    if r.get("status") != "succeeded" or not r.get("payment_id"):
+        return False
+    async with session() as s:
+        pay = (await s.execute(select(Payment).where(Payment.yk_id == r["payment_id"]))).scalar_one_or_none()
+    if pay is None or pay.status == "pending":
+        # платёж ещё не зачислен (или id ЮKassa у нас пока не записан): ответим ошибкой — ЮKassa повторит уведомление,
+        # а сверка к тому времени его зачислит. Иначе возврат потеряется, а деньги потом зачислятся полностью
+        raise RefundNotReady(r["payment_id"])
+    if pay.status != "succeeded":
+        return False
+    kop = min(int(round(float(r["amount"]["value"]) * 100)), pay.amount_kop)
+    return await reverse_payment(ctx, pay, kop, f"refund:{refund_id}"[:64], "возврат в ЮKassa")
 
 
 # ───────────────────────── чеки ─────────────────────────
@@ -1651,9 +1852,8 @@ async def sync_servers(ctx: Ctx) -> None:
                 f"✅ <b>Сервер готов</b>\n\n🖥 <b>{html.escape(srv.name)}</b>\nIP: <code>{html.escape(str(srv.ip))}</code>\nЛогин: <code>root</code>\nПароль: <code>{html.escape(str(srv.root_password))}</code>\n\nУправление — в разделе «🖥 Мои серверы» или в личном кабинете.",
             )
         elif kind == "failed":
-            if await _refunded(srv):
+            if not await _refund_failed(srv):
                 continue
-            await _refund(srv.tg_id, int(srv.period_paid_kop or 0) or paid_base(srv), "refund_failed", str(srv.astra_id))
             await ctx.notify(srv.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
         elif kind == "vanished":
             await ctx.alert_admin(f"⚠️ Сервер #{srv.astra_id} клиента {srv.tg_id} пропал из списка Astra.")
@@ -1669,6 +1869,19 @@ async def _refunded(srv: Server) -> bool:
     return n > 0
 
 
+_refund_lock = asyncio.Lock()
+
+
+async def _refund_failed(srv: Server, kop: int | None = None) -> bool:
+    """Возврат за несозданный сервер ровно один раз: синхронизация и опрос статуса могут заметить отказ одновременно."""
+    kop = (int(srv.period_paid_kop or 0) or paid_base(srv)) if kop is None else kop
+    async with _refund_lock:
+        if await _refunded(srv):
+            return False
+        await _refund(srv.tg_id, kop, "refund_failed", str(srv.astra_id))
+    return True
+
+
 async def refund_undelivered(ctx: Ctx, days: int = 14) -> int:
     """Разовая починка: серверы, которые Astra не выдала (без IP), удалены недавно, а деньги клиенту не вернулись
     (раньше такой сервер считался «пропавшим», а не неудачным). Возвращает число возвратов."""
@@ -1677,12 +1890,9 @@ async def refund_undelivered(ctx: Ctx, days: int = 14) -> int:
                                                      Server.deleted_at > utcnow() - timedelta(days=days)))).scalars().all()
     n = 0
     for srv in rows:
-        if await _refunded(srv):
-            continue
         kop = int(srv.period_paid_kop or 0)  # только реально оплаченное: бесплатные серверы не возвращаем
-        if kop <= 0:
+        if kop <= 0 or not await _refund_failed(srv, kop):
             continue
-        await _refund(srv.tg_id, kop, "refund_failed", str(srv.astra_id))
         n += 1
         await ctx.notify(srv.tg_id, f"↩️ <b>Возврат за несозданный сервер</b>\n\nСервер «{html.escape(srv.name)}» не удалось создать — "
                                     f"{fmt_rub(kop)} вернули на баланс.")

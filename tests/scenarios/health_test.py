@@ -97,7 +97,7 @@ async def main():
             h.write("мусор\n")
         POSTS.clear(); await security.tick(ctx)
         ok(len(POSTS) == 1 and POSTS[0][0] == "@bobr_sec" and "новый IP" in POSTS[0][1] and "1.2.3.4" in POSTS[0][1], "вход по SSH с нового IP — предупреждение")
-        ok(os.path.getsize(f) == 0, "файл событий очищен после чтения")
+        ok(not os.path.exists(f) or os.path.getsize(f) == 0, "файл событий забран после чтения")
         with open(f, "a") as h: h.write(json.dumps({"type": "login", "user": "root", "ip": "1.2.3.4", "ts": time.time()}) + "\n")
         POSTS.clear(); await security.tick(ctx)
         ok(len(POSTS) == 1 and "новый IP" not in POSTS[0][1], "знакомый IP — просто уведомление")

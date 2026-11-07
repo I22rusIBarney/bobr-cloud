@@ -149,12 +149,14 @@ function rootView() {
     legalOk ? null : 'Укажите ФИО, ИНН и почту — без них документы для клиентов неполные.'));
 
   // подключения
-  const badge = ok => h('span', { class: 'badge ' + (ok ? 'ok' : 'bad') }, ok ? 'Подключено' : 'Не настроено');
+  // красный — только когда без подключения что-то не работает; необязательное и неподключённое — нейтрально
+  const badge = (ok, need) => h('span', { class: 'badge ' + (ok ? 'ok' : need || '') }, ok ? 'Подключено' : 'Не настроено');
+  const anyPay = INT && (INT.yookassa.configured || (INT.platega && INT.platega.configured));
   v.append(group('Подключения', [
-    row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured) : null, onClick: () => UI.nav.push(ykView) }),
+    row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured, anyPay ? '' : 'bad') : null, onClick: () => UI.nav.push(ykView) }),
     row({ icon: 'bolt', tile: '#30B0C7', title: 'Platega', right: INT ? badge(INT.platega && INT.platega.configured) : null, onClick: () => UI.nav.push(plategaView) }),
     row({ icon: 'wallet', tile: '#AF52DE', title: 'Способы оплаты', detail: [S.settings.pay_yookassa_on && 'ЮKassa', S.settings.pay_platega_on && 'Platega'].filter(Boolean).join(' + ') || 'выключены', onClick: () => UI.nav.push(payMethodsView) }),
-    row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured) : null, onClick: () => UI.nav.push(nalogView) }),
+    row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured, S.settings.receipts_enabled ? 'warn' : '') : null, onClick: () => UI.nav.push(nalogView) }),
     row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
@@ -787,7 +789,7 @@ function ykView() {
     h('div', { class: 'actions' }, testBtn, saveBtn),
     group('Уведомления о платежах', [
       row({ title: h('span', { class: 'mono' }, wh), right: h('button', { class: 'icon-btn', type: 'button', style: 'border:0;background:none;color:var(--accent-text);padding:8px;cursor:pointer', 'aria-label': 'Скопировать', onclick: () => UI.copy(wh, 'Адрес') }, icon('copy')) }),
-    ], 'Вставьте этот адрес в ЮKassa → Интеграция → HTTP-уведомления и отметьте события payment.succeeded и payment.canceled.'));
+    ], 'Вставьте этот адрес в ЮKassa → Интеграция → HTTP-уведомления и отметьте события payment.succeeded, payment.canceled и refund.succeeded (возвраты списываются с баланса клиента).'));
 }
 
 // ───────── Мой налог ─────────

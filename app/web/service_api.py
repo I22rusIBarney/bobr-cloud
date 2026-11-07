@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import hmac
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -57,6 +58,10 @@ class SvcTopupIn(BaseModel):
     amount_rub: int
     provider: str | None = None
     method_id: int | None = None
+
+
+# shortcut: замок внутри процесса — bcloud работает одной копией (SQLite); для нескольких копий нужен уникальный индекс в базе
+_charge_lock = asyncio.Lock()
 
 
 def build_service_router(ctx: svc.Ctx) -> APIRouter:
@@ -130,7 +135,8 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
         if not ref:
             raise HTTPException(400, "Нужен ref — ключ операции")
         await client(p.tg_id)
-        async with session() as s:
+        # проверка ref и списание — под замком: повтор запроса по таймауту, пришедший параллельно, не спишет второй раз
+        async with _charge_lock, session() as s:
             done = (await s.execute(select(Tx).where(Tx.tg_id == p.tg_id, Tx.kind == "svc_charge", Tx.ref == ref))).scalars().first()
             if done is not None:
                 bal = (await s.get(User, p.tg_id)).balance_kop

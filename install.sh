@@ -99,10 +99,14 @@ pull_image() {  # $1 — полный sha коммита. 0 — образ ск�
     sleep 20; waited=$((waited + 20))
   done
 }
+# бот в контейнере работает от пользователя 10001 (см. Dockerfile): ему нужна запись в data/
+BOT_UID=10001
+fix_perms() { mkdir -p data && chown -R "$BOT_UID:$BOT_UID" data 2>/dev/null || true; }
 # запуск: готовый образ из GitHub или сборка на месте. $1 — к какой версии откатиться, если тесты не прошли
 deploy() {
   local sha rc=1
   write_version
+  fix_perms
   sha="$(git rev-parse HEAD 2>/dev/null || true)"
   if [[ -n "$sha" ]]; then pull_image "$sha" && rc=0 || rc=$?; fi
   if [[ $rc == 2 ]]; then
@@ -132,10 +136,7 @@ write_caddyfile() {  # $1 — домен бота, $2 — домен консо�
 
 # консоль VNC под своим доменом: прозрачный прокси на Astra (страница и WebSocket)
 $2 {
-	log {
-		output stdout
-		format console
-	}
+	# без журнала запросов: путь /<токен> — это пропуск в консоль сервера
 	# страница консоли — через бота: в ней адрес подключения Astra заменяется на наш домен
 	@page path_regexp ^/[A-Za-z0-9_-]{16,128}$
 	handle @page {
@@ -324,6 +325,7 @@ case "\$1" in
          printf '{"type":"login","user":"%s","ip":"%s","ts":%s}\n' "\$(clean "\$PAM_USER")" "\$(clean "\$PAM_RHOST")" "\$(date +%s)" >> "\$F" ;;
   ban)   printf '{"type":"ban","ip":"%s","jail":"%s","ts":%s}\n' "\$(clean "\$2")" "\$(clean "\$3")" "\$(date +%s)" >> "\$F" ;;
 esac
+chmod 644 "\$F" 2>/dev/null  # бот работает не от root — файл должен читаться всеми
 exit 0
 EOF
   chmod 755 /usr/local/sbin/bcloud-event
@@ -449,7 +451,7 @@ case "${1:-install}" in
       # дальше — уже свежей версией скрипта
       exec ./install.sh _rebuild "$before"
     fi
-    compose up -d --build; install_cli; ok "Обновлено"; exit 0 ;;
+    fix_perms; compose up -d --build; install_cli; ok "Обновлено"; exit 0 ;;
   _rebuild)
     # свой домен консоли: пересобираем Caddyfile, чтобы исправления прокси приходили с обновлением
     vd="$(env_get VNC_DOMAIN)"
@@ -479,6 +481,8 @@ case "${1:-install}" in
   backup)
     mkdir -p /root/bcloud-backups
     f="/root/bcloud-backups/bcloud-$(date +%Y%m%d-%H%M%S).tar.gz"
+    # база в режиме WAL: сначала сливаем журнал в bot.db, чтобы в архиве был цельный файл
+    compose exec -T bot python -c "import sqlite3; sqlite3.connect('/srv/data/bot.db').execute('PRAGMA wal_checkpoint(TRUNCATE)')" >/dev/null 2>&1 || true
     tar -czf "$f" data .env $( [ -f Caddyfile ] && echo Caddyfile ) 2>/dev/null || die "Не удалось создать копию"
     chmod 600 "$f"
     ls -1t /root/bcloud-backups/bcloud-*.tar.gz | tail -n +11 | xargs -r rm -f  # храним 10 последних
@@ -493,11 +497,15 @@ case "${1:-install}" in
     head -c 15 "$tmp" | grep -q "SQLite format 3" || { rm -f "$tmp"; die "Это не файл базы SQLite"; }
     read -r -p "Текущая база будет заменена (её копия сохранится). Продолжить? [y/N] " a
     [[ "$a" =~ ^[yYдД] ]] || { rm -f "$tmp"; say "Отменено"; exit 0; }
+    # база в режиме WAL: свежие изменения сливаем в файл, иначе они пропадут из сохранённой прежней базы
+    compose exec -T bot python -c "import sqlite3; sqlite3.connect('/srv/data/bot.db').execute('PRAGMA wal_checkpoint(TRUNCATE)')" >/dev/null 2>&1 || true
     compose stop bot
     mkdir -p data
-    [[ -f data/bot.db ]] && cp data/bot.db "data/bot.db.before-restore-$(date +%Y%m%d-%H%M%S)"
-    rm -f data/bot.db-wal data/bot.db-shm
+    keep="data/bot.db.before-restore-$(date +%Y%m%d-%H%M%S)"
+    [[ -f data/bot.db ]] && cp data/bot.db "$keep"
+    for x in -wal -shm; do [[ -f "data/bot.db$x" ]] && mv "data/bot.db$x" "$keep$x"; done
     mv "$tmp" data/bot.db
+    fix_perms
     compose start bot
     ok "База восстановлена. Если копия из Telegram — введите заново ключи ЮKassa и «Мой налог» в админке."
     exit 0 ;;

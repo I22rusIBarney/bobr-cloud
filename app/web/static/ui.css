@@ -29,6 +29,7 @@
   --accent-soft: rgba(67, 140, 255, .14);
   --accent-ring: rgba(67, 140, 255, .55);
   --on-accent: #FFFFFF;
+  --accent-fill: #2A6FE0; --accent-fill-hi: #2563D6; /* заливка под белым текстом: контраст ≥4.5:1 (WCAG AA) */
   --ok: #34D399;  --ok-soft: rgba(52, 211, 153, .14);
   --warn: #FBBF5B; --warn-soft: rgba(251, 191, 91, .14);
   --danger: #FF6B6B; --danger-soft: rgba(255, 107, 107, .14);
@@ -36,9 +37,10 @@
   /* форма */
   --r-xs: 10px; --r-sm: 12px; --r-md: 16px; --r-lg: 20px; --r-xl: 24px; --r-pill: 999px;
   --r-group: var(--r-lg); --r-ctl: var(--r-sm);
-  --shadow-card: 0 1px 0 rgba(255, 255, 255, .03) inset, 0 10px 30px -12px rgba(0, 0, 0, .55);
+  /* глубина — короткая тень со смещением; без цветных ореолов */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, .28);
   --shadow-float: 0 18px 50px -12px rgba(0, 0, 0, .7);
-  --glow-accent: 0 8px 26px -8px rgba(67, 140, 255, .65);
+  --glow-accent: 0 1px 2px rgba(0, 0, 0, .3);
   --f-thumb-shadow: 0 2px 8px rgba(0, 0, 0, .45), 0 0 0 4px rgba(67, 140, 255, .18);
 
   /* движение */
@@ -74,7 +76,7 @@ body {
   padding-top: var(--sat);
   padding-bottom: calc(100px + var(--sab));
 }
-button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; caret-color: var(--accent); }
 a { color: var(--accent-text); text-decoration: none; }
 .num { font-variant-numeric: tabular-nums; }
 .mono { font-family: var(--mono); letter-spacing: 0; }
@@ -174,7 +176,7 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
   content: ""; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff;
   box-shadow: 0 2px 6px rgba(0, 0, 0, .35); transition: transform var(--t) var(--ease-spring);
 }
-.switch input:checked + span { background: var(--accent); box-shadow: 0 0 16px -4px rgba(67, 140, 255, .8); }
+.switch input:checked + span { background: var(--accent); }
 .switch input:checked + span::after { transform: translateX(20px); }
 .switch input:focus-visible + span { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
 
@@ -210,17 +212,18 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
   transition: background var(--t-fast) var(--ease), box-shadow var(--t-fast) var(--ease), transform var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
 }
 .amount-chips button:active { transform: scale(.95); }
-.amount-chips button[aria-pressed="true"] { background: var(--accent-soft); color: #fff; box-shadow: inset 0 0 0 1.5px var(--accent), 0 0 18px -6px rgba(67, 140, 255, .8); }
+.amount-chips button[aria-pressed="true"] { background: var(--accent-soft); color: #fff; box-shadow: inset 0 0 0 1.5px var(--accent); }
 
 /* ── Кнопки ── */
 .btn {
   display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; min-height: 52px; border: 0; padding: 0 18px;
   border-radius: var(--r-md); color: var(--on-accent); font-size: 16px; font-weight: 600; letter-spacing: -0.2px; cursor: pointer;
-  background: linear-gradient(180deg, var(--accent-hi), var(--accent-lo)); box-shadow: var(--glow-accent), inset 0 1px 0 rgba(255, 255, 255, .18);
+  background: var(--accent-fill); box-shadow: var(--glow-accent);
   transition: opacity var(--t-fast) var(--ease), transform var(--t-fast) var(--ease), box-shadow var(--t) var(--ease), filter var(--t-fast);
 }
 .btn svg { width: 20px; height: 20px; flex: none; }
 .btn:active { transform: scale(.975); filter: brightness(.94); }
+@media (hover: hover) { .btn:not(.tinted, .secondary, .danger, .plain):hover { background: var(--accent-fill-hi); } .btn.secondary:hover { background: var(--surface-3); } }
 /* неактивная кнопка остаётся непрозрачной: частицы фона не просвечивают сквозь неё */
 .btn[disabled] { pointer-events: none; box-shadow: none; background: var(--surface-2); color: var(--hint-2); }
 .btn.plain[disabled] { background: none; }
@@ -264,7 +267,7 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
 .tabbar button svg { width: 24px; height: 24px; transition: transform var(--t) var(--ease-spring), filter var(--t); }
 .tabbar button:active svg { transform: scale(.88); }
 .tabbar button[aria-selected="true"] { color: var(--text); }
-.tabbar button[aria-selected="true"] svg { color: var(--accent); filter: drop-shadow(0 2px 8px rgba(67, 140, 255, .55)); }
+.tabbar button[aria-selected="true"] svg { color: var(--accent); }
 .tabbar .count { position: absolute; top: -2px; left: calc(50% + 6px); min-width: 17px; height: 17px; font-size: 11px; padding: 0 5px; }
 
 /* ── Нижний лист ── */
@@ -340,6 +343,10 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
 }
 @media (min-width: 640px) {
   body > #root { max-width: 600px; margin: 0 auto; }
+  /* широкий экран: фон и размытие панелей — во всю ширину, кнопки и поля — в колонке контента */
+  .tabbar { padding-left: calc(50% - 300px); padding-right: calc(50% - 300px); }
+  .bottom-bar, .composer { padding-left: calc(50% - 300px + var(--gutter)); padding-right: calc(50% - 300px + var(--gutter)); }
+  .sheet { left: calc(50% - 300px); right: calc(50% - 300px); }
 }
 
 /* ── Аватар и шапка ── */
@@ -356,7 +363,7 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
 /* ── Чекбокс ── */
 .cbox { width: 22px; height: 22px; border-radius: 7px; border: 1.5px solid var(--hint-2); display: grid; place-items: center; flex: none; transition: background var(--t-fast) var(--ease), border-color var(--t-fast), transform var(--t-fast) var(--ease-spring); color: #fff; }
 .cbox svg { width: 14px; height: 14px; opacity: 0; transform: scale(.6); transition: opacity var(--t-fast), transform var(--t) var(--ease-spring); }
-.cbox.on { background: var(--accent); border-color: var(--accent); box-shadow: 0 0 12px -2px rgba(67, 140, 255, .7); }
+.cbox.on { background: var(--accent); border-color: var(--accent); }
 .cbox.on svg { opacity: 1; transform: none; }
 
 /* ── Текст документов ── */
@@ -373,7 +380,7 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
 .msg .bubble { padding: 9px 13px 8px; border-radius: 18px; font-size: 15.5px; line-height: 1.38; white-space: pre-wrap; word-wrap: break-word; overflow-wrap: anywhere; }
 .msg time { font-size: 11px; color: var(--hint-2); margin: 3px 8px 6px; font-variant-numeric: tabular-nums; }
 .msg.mine { align-self: flex-end; align-items: flex-end; }
-.msg.mine .bubble { background: linear-gradient(180deg, var(--accent-hi), var(--accent-lo)); color: #fff; border-bottom-right-radius: 6px; }
+.msg.mine .bubble { background: var(--accent-fill); color: #fff; border-bottom-right-radius: 6px; }
 .msg.theirs { align-self: flex-start; }
 .msg.theirs .bubble { background: var(--cell); border-bottom-left-radius: 6px; box-shadow: inset 0 0 0 1px var(--line); }
 .msg.note { align-self: stretch; max-width: 100%; }
@@ -393,14 +400,14 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
   background: var(--surface-2); box-shadow: inset 0 0 0 1px var(--line); font-size: 16px; line-height: 1.3;
 }
 .composer textarea:focus { box-shadow: inset 0 0 0 1.5px var(--accent-ring); }
-.composer .send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: linear-gradient(180deg, var(--accent-hi), var(--accent-lo)); color: #fff; display: grid; place-items: center; flex: none; cursor: pointer; box-shadow: var(--glow-accent); transition: transform var(--t-fast) var(--ease), opacity var(--t-fast); }
+.composer .send { width: 40px; height: 40px; border-radius: 50%; border: 0; background: var(--accent-fill); color: #fff; display: grid; place-items: center; flex: none; cursor: pointer; box-shadow: var(--glow-accent); transition: transform var(--t-fast) var(--ease), opacity var(--t-fast); }
 .composer .send:active { transform: scale(.9); }
 .composer .send[disabled] { opacity: .35; box-shadow: none; }
 .composer .send svg { width: 20px; height: 20px; }
 .composer .mode { flex: none; border: 0; border-radius: 20px; padding: 0 12px; height: 40px; font-size: 13px; font-weight: 600; background: var(--surface-2); color: var(--hint); cursor: pointer; }
 .composer .mode.on { background: var(--warn-soft); color: var(--warn); }
 body.has-composer { padding-bottom: calc(84px + var(--sab)); }
-.unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; box-shadow: 0 0 10px rgba(67, 140, 255, .8); }
+.unread-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); flex: none; }
 .count { min-width: 20px; height: 20px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12px; font-weight: 700; display: inline-grid; place-items: center; padding: 0 6px; font-variant-numeric: tabular-nums; }
 
 /* ── Ползунок ── */
@@ -409,7 +416,7 @@ input[type=range].ios {
 }
 input[type=range].ios::-webkit-slider-runnable-track {
   height: 6px; border-radius: 3px;
-  background: linear-gradient(to right, var(--accent-lo), var(--accent-hi) var(--p), var(--surface-3) var(--p));
+  background: linear-gradient(to right, var(--accent) var(--p), var(--surface-3) var(--p)); /* заполненная часть дорожки, не декор */
 }
 input[type=range].ios::-moz-range-track { height: 6px; border-radius: 3px; background: var(--surface-3); }
 input[type=range].ios::-moz-range-progress { height: 6px; border-radius: 3px; background: var(--accent); }

@@ -20,8 +20,24 @@ from app.worker import start_workers
 from app.yookassa import YooKassa
 
 
+class _HideSecrets(logging.Filter):
+    """Журнал запросов uvicorn без секретов: путь вебхука ЮKassa, токен консоли VNC и параметры запроса."""
+    SECRET_PATHS = ("/yookassa/webhook/", "/_vnc/")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2].split("?", 1)[0] + ("?…" if "?" in args[2] else "")
+            for p in self.SECRET_PATHS:
+                if path.startswith(p):
+                    path = p + "…"
+            record.args = (*args[:2], path, *args[3:])
+        return True
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("uvicorn.access").addFilter(_HideSecrets())
     e = env()
     from app import backup as bk
     restored = None
@@ -69,6 +85,8 @@ async def main() -> None:
     await resume_reinstall_watch(ctx)
     web = asyncio.create_task(server.serve(), name="web")
     asyncio.create_task(_announce(ctx), name="announce")
+    if restored:  # копия без ключа приходит без паролей root — берём их у Astra
+        asyncio.create_task(svc_refill(ctx), name="refill_passwords")
     try:
         await dp.start_polling(bot, allowed_updates=["message", "callback_query"])  # подписку проверяем запросом, chat_member не нужен
     finally:
@@ -81,6 +99,14 @@ async def main() -> None:
         await ctx.nalog.close()
         await ctx.platega.close()
         await bot.session.close()
+
+
+async def svc_refill(ctx) -> None:
+    from app.services import refill_passwords
+    try:
+        await refill_passwords(ctx)
+    except Exception:  # noqa: BLE001
+        logging.getLogger(__name__).exception("refill passwords")
 
 
 async def _announce(ctx) -> None:

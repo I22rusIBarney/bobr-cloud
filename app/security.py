@@ -44,12 +44,19 @@ def hardened() -> dict | None:
 
 def _read_and_clear() -> list[dict]:
     path = events_file()
-    if not os.path.exists(path):
-        return []
-    with open(path, "r+", encoding="utf-8", errors="replace") as f:
-        data = f.read()
-        f.seek(0)
-        f.truncate()
+    taken = path + ".reading"
+    if not os.path.exists(taken):  # остаток после сбоя прошлой проверки — сначала его
+        try:  # забираем файл целиком переименованием: хост пишет его от root, а новые строки уйдут уже в новый файл
+            os.replace(path, taken)
+        except FileNotFoundError:
+            return []
+    try:
+        with open(taken, encoding="utf-8", errors="replace") as f:
+            data = f.read()
+    except PermissionError:  # хук записал файл с правами только для root — эти события не прочитать, но дальше работаем
+        log.warning("события хоста: нет доступа к %s — обновите хук командой bcloud harden", taken)
+        data = ""
+    os.remove(taken)
     out = []
     for line in data.splitlines():
         try:
