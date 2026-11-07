@@ -23,16 +23,7 @@
 
   .hero-card {
     position: relative; margin: 0 var(--gutter) 22px; padding: 20px 18px 18px; border-radius: var(--r-xl); overflow: hidden; isolation: isolate;
-    background:
-      radial-gradient(120% 95% at 100% 0%, rgba(67, 140, 255, .30), transparent 58%),
-      radial-gradient(80% 70% at 0% 110%, rgba(139, 140, 255, .14), transparent 60%),
-      linear-gradient(160deg, #272C36, #1E2128);
-    box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(120, 165, 255, .16);
-  }
-  .hero-card::before { /* тонкая сетка — технологичный акцент */
-    content: ""; position: absolute; inset: 0; z-index: -1; opacity: .5;
-    background: linear-gradient(rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px, linear-gradient(90deg, rgba(255,255,255,.035) 1px, transparent 1px) 0 0 / 22px 22px;
-    -webkit-mask: radial-gradient(90% 90% at 100% 0%, #000, transparent 70%); mask: radial-gradient(90% 90% at 100% 0%, #000, transparent 70%);
+    background: var(--cell); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
   }
   .hero-card .lbl { font-size: 13px; font-weight: 600; color: #AEB9CC; display: flex; align-items: center; gap: 8px; }
   .hero-card .lbl svg { width: 16px; height: 16px; color: var(--accent-text); }
@@ -45,11 +36,7 @@
   /* ── Пригласить друга ── */
   .ref-card {
     position: relative; margin: 0 var(--gutter) 22px; padding: 16px 16px 16px; border-radius: var(--r-xl); overflow: hidden; isolation: isolate;
-    background:
-      radial-gradient(110% 90% at 100% 0%, rgba(52, 211, 153, .20), transparent 55%),
-      radial-gradient(80% 80% at 0% 110%, rgba(67, 140, 255, .10), transparent 60%),
-      linear-gradient(160deg, #222A2B, #1D2126);
-    box-shadow: var(--shadow-card), inset 0 0 0 1px rgba(52, 211, 153, .16);
+    background: var(--cell); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
   }
   .ref-card .head { display: flex; gap: 12px; align-items: center; min-width: 0; }
   .ref-card .head > div { flex: 1; min-width: 0; }
@@ -60,7 +47,7 @@
   .ref-card .earned b { font: 700 32px/1.1 var(--font-display); letter-spacing: -1px; color: var(--ok); font-variant-numeric: tabular-nums; }
   .ref-card .earned span { font-size: 13px; color: #A1B0AC; }
   .ref-card .bar { margin-top: 12px; height: 6px; border-radius: 3px; background: rgba(255, 255, 255, .07); }
-  .ref-card .bar i { background: linear-gradient(90deg, #1FAF7A, var(--ok)); box-shadow: 0 0 12px rgba(52, 211, 153, .55); }
+  .ref-card .bar i { background: var(--ok); }
   .ref-card .cnt { font-size: 12px; color: #A1B0AC; margin-top: 7px; }
   .ref-card .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; }
   .ref-card .two .btn { min-height: 44px; font-size: 15px; background: rgba(255, 255, 255, .06); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1); color: var(--text); }
@@ -117,9 +104,10 @@
   .spec-chip svg { width: 13px; height: 13px; color: var(--hint); }
   .term { margin-top: 12px; }
   .bar { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-  .bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--accent-lo), var(--accent-hi)); transition: width .5s var(--ease-out); }
+  .bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width .5s var(--ease-out); }
   .bar.warn i { background: var(--warn); } .bar.bad i { background: var(--danger); }
   .term-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--hint); margin-top: 7px; }
+  .term-row .warn { color: var(--warn); } .term-row .bad { color: var(--danger); font-weight: 600; }
 
   .hero { margin: 4px var(--gutter) 20px; display: flex; align-items: center; gap: 14px; min-width: 0; }
   .hero .flag-tile { width: 58px; height: 58px; font-size: 32px; border-radius: 18px; background: var(--cell); box-shadow: inset 0 0 0 1px var(--line); }
@@ -153,8 +141,7 @@
   .loc.closed .from svg { width: 13px; height: 13px; color: var(--accent-text); }
   .loc.closed.watching .from { color: var(--accent-text); }
   .loc[aria-pressed="true"] {
-    background: linear-gradient(160deg, rgba(67, 140, 255, .18), rgba(67, 140, 255, .04) 70%), var(--cell);
-    box-shadow: 0 12px 30px -14px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent);
+    background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent);
   }
   .tick { position: absolute; top: 12px; right: 12px; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: #fff; display: grid; place-items: center; transform: scale(.3); opacity: 0; transition: transform var(--t) var(--ease-spring), opacity var(--t-fast); }
   .tick svg { width: 13px; height: 13px; }
@@ -192,7 +179,7 @@
   .preset .pspeed { font-size: 12px; color: var(--hint); margin-top: 2px; }
   .preset .pprice { font: 700 18px/1.2 var(--font-display); letter-spacing: -0.3px; margin-top: auto; padding-top: 10px; font-variant-numeric: tabular-nums; }
   .preset .pprice small { font-size: 12px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
-  .preset[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .16), rgba(67, 140, 255, .03) 70%), var(--cell); box-shadow: 0 12px 30px -16px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
+  .preset[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
 
   .period-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
   .period-grid button {
@@ -204,7 +191,7 @@
   .period-grid b { font-size: 15px; font-weight: 600; white-space: nowrap; }
   .period-grid span { font-size: 12px; color: var(--hint); white-space: nowrap; }
   .period-grid span.save { color: var(--ok); font-weight: 600; }
-  .period-grid button[aria-pressed="true"] { background: linear-gradient(160deg, rgba(67, 140, 255, .18), rgba(67, 140, 255, .04) 70%), var(--cell); box-shadow: 0 10px 26px -14px rgba(67, 140, 255, .8), inset 0 0 0 1.5px var(--accent); }
+  .period-grid button[aria-pressed="true"] { background: var(--accent-soft); box-shadow: inset 0 0 0 1.5px var(--accent); }
 
   details.all-plans { margin-top: 10px; }
   details.all-plans summary { list-style: none; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 14px; font-weight: 600; color: var(--accent-text); padding: 8px; }
@@ -428,10 +415,10 @@ function serversView() {
           : (s.members || []).some(m => m.status === 'active') ? specChip('users', 'Доступ: ' + (s.members || []).filter(m => m.status === 'active').length) : null,
         s.auto_renew && s.role !== 'member' ? specChip('renew', 'Автопродление') : null),
       days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
-        h('div', { class: 'term-row' }, h('span', {}, leftText(left)), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
+        h('div', { class: 'term-row' }, h('span', { class: bar }, leftText(left)), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
   });
   const due = D.servers.filter(s => s.role !== 'member' && s.days_left != null && s.days_left < 3 && !s.auto_renew);
-  if (due.length) wrap.append(h('div', { class: 'group-f', style: 'margin:2px var(--gutter) 22px' }, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.'));
+  if (due.length) wrap.append(h('div', { class: 'announce warn', role: 'status' }, icon('info'), h('p', {}, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.')));
   wrap.append(h('div', { style: 'margin:12px var(--gutter) 24px' }, h('button', { class: 'btn secondary', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Новый сервер')));
   return wrap;
 }
@@ -1217,7 +1204,7 @@ function subscribeView() {
   });
   return h('div', {},
     h('div', { style: 'text-align:center;padding:44px var(--gutter) 10px' },
-      h('div', { style: 'display:inline-grid;place-items:center;width:72px;height:72px;border-radius:22px;background:linear-gradient(180deg,var(--accent-hi),var(--accent-lo));color:#fff;margin-bottom:18px;box-shadow:var(--glow-accent)' }, icon('megaphone')),
+      h('div', { style: 'display:inline-grid;place-items:center;width:72px;height:72px;border-radius:22px;background:var(--accent);color:#fff;margin-bottom:18px;box-shadow:var(--glow-accent)' }, icon('megaphone')),
       h('h1', { style: 'font:700 26px/1.2 var(--font-display);letter-spacing:-.5px;margin:0 0 10px' }, 'Подпишитесь на ' + sb.title),
       h('p', { style: 'margin:0 auto;color:var(--hint);font-size:15px;max-width:320px' }, 'Там новости сервиса, акции и статус работ. После подписки вернитесь сюда — кабинет откроется.')),
     h('div', { style: 'display:grid;gap:10px;margin:22px var(--gutter) 12px' }, go, check),
@@ -1490,7 +1477,7 @@ function profileView() {
         if (await UI.run(() => api('/methods/' + m.id, 'DELETE'), 'Карта удалена') !== undefined) await refresh();
       } }, 'Удалить'),
     })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет привязанных способов', sub: D.autopay.available ? 'Отметьте привязку для автоплатежей при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
-    rows.push(row({ icon: 'trash', tile: '#FF6B6B', title: 'Удалить все способы оплаты', cls: 'destructive', onClick: async () => {
+    if (ms.length > 1) rows.push(row({ icon: 'trash', tile: '#FF6B6B', title: 'Удалить все способы оплаты', cls: 'destructive', onClick: async () => {
       const ok = await UI.ask({ title: 'Удалить все способы оплаты?', message: ms.length ? 'Все сохранённые карты будут отвязаны, автоплатежи выключатся.' : 'Сохранённых способов оплаты сейчас нет. Отвязать всё равно?', buttons: [{ id: 'y', text: 'Удалить все', type: 'destructive' }] });
       if (!ok) return;
       const r = await UI.run(() => api('/methods', 'DELETE'));
@@ -1551,7 +1538,7 @@ function referralCard(r) {
     if (navigator.share) navigator.share({ text: shareText, url: link }).catch(() => {}); else UI.copy(link, 'Ссылка');
   };
   const pct = r.invited ? Math.max(4, Math.round(r.active / r.invited * 100)) : 0;
-  const earned = h('b');
+  const earned = h('b', r.earned_rub ? {} : { style: 'color:var(--hint)' });  // ноль — не достижение
   UI.tween(earned, 0, Math.round(r.earned_rub), v => '+' + rub(v), 500);
   return h('div', { class: 'ref-card rise' },
     h('div', { class: 'head' }, h('span', { class: 'icon-tile', style: '--tile:#34D399' }, icon('users')),
