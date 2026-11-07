@@ -41,7 +41,7 @@
   .ref-card .head { display: flex; gap: 12px; align-items: center; min-width: 0; }
   .ref-card .head > div { flex: 1; min-width: 0; }
   .ref-card .head b { display: block; font-size: 16px; font-weight: 700; letter-spacing: -0.2px; }
-  .ref-card .head span { display: block; font-size: 13px; line-height: 1.35; color: #A1B0AC; margin-top: 1px; }
+  .ref-card .head > div > span { display: block; font-size: 13px; line-height: 1.35; color: #A1B0AC; margin-top: 1px; }
   .ref-card .head .icon-btn { color: #A1B0AC; margin: -8px -8px -8px 0; }
   .ref-card .earned { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 0; }
   .ref-card .earned b { font: 700 32px/1.1 var(--font-display); letter-spacing: -1px; color: var(--ok); font-variant-numeric: tabular-nums; }
@@ -109,7 +109,7 @@
   .term-row { display: flex; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--hint); margin-top: 7px; }
   .term-row .warn { color: var(--warn); } .term-row .bad { color: var(--danger); font-weight: 600; }
 
-  .hero { margin: 4px var(--gutter) 20px; display: flex; align-items: center; gap: 14px; min-width: 0; }
+  .hero { margin: 14px var(--gutter) 20px; display: flex; align-items: center; gap: 14px; min-width: 0; }
   .hero .flag-tile { width: 58px; height: 58px; font-size: 32px; border-radius: 18px; background: var(--cell); box-shadow: inset 0 0 0 1px var(--line); }
   .hero h1 { font: 700 24px/1.2 var(--font-display); letter-spacing: -0.5px; margin: 0 0 6px; word-break: break-all; }
   .power { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 0 var(--gutter) 22px; }
@@ -148,6 +148,7 @@
   [aria-pressed="true"] > .tick { transform: none; opacity: 1; }
 
   .preset-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  @media (min-width: 640px) { .preset-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
   .preset {
     position: relative; display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 14px; border: 0; text-align: left; cursor: pointer; color: inherit; min-width: 0;
     background: var(--cell); border-radius: var(--r-lg); box-shadow: var(--shadow-card), inset 0 0 0 1px var(--line);
@@ -232,6 +233,7 @@
     background: color-mix(in srgb, #1B1E24 86%, transparent); backdrop-filter: saturate(160%) blur(22px); -webkit-backdrop-filter: saturate(160%) blur(22px);
     border-top: 1px solid var(--line);
   }
+  @media (min-width: 640px) { .buybar { padding-left: calc(50% - 300px + var(--gutter)); padding-right: calc(50% - 300px + var(--gutter)); } }
   .buybar .price { flex: 0 1 auto; min-width: 0; line-height: 1.15; }
   .buybar .price b { display: block; font: 700 24px/1.15 var(--font-display); letter-spacing: -0.6px; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .buybar .price b small { font-size: 13px; font-weight: 500; color: var(--hint); letter-spacing: 0; }
@@ -1620,7 +1622,9 @@ setInterval(() => { if (D && !document.hidden && !D.consent.needed && D.servers.
   UI.nav.mount(document.getElementById('root'), root);
   try { await load(); }
   catch (e) {
-    document.getElementById('root').replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть кабинет'), e.message));
+    document.body.classList.add('hidden-tabbar');  // разделы без данных не откроются — навигация только мешает
+    document.getElementById('root').replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть кабинет'), e.message,
+      UI.initData() ? h('button', { class: 'btn', type: 'button', onclick: () => location.reload() }, 'Повторить') : null));
     return;
   }
   UI.nav.refresh();

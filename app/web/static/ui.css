@@ -343,6 +343,10 @@ textarea { width: 100%; border: 0; background: none; outline: none; resize: vert
 }
 @media (min-width: 640px) {
   body > #root { max-width: 600px; margin: 0 auto; }
+  /* широкий экран: фон и размытие панелей — во всю ширину, кнопки и поля — в колонке контента */
+  .tabbar { padding-left: calc(50% - 300px); padding-right: calc(50% - 300px); }
+  .bottom-bar, .composer { padding-left: calc(50% - 300px + var(--gutter)); padding-right: calc(50% - 300px + var(--gutter)); }
+  .sheet { left: calc(50% - 300px); right: calc(50% - 300px); }
 }
 
 /* ── Аватар и шапка ── */
