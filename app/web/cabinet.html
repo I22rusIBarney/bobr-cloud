@@ -413,7 +413,7 @@ function serversView() {
     return wrap;
   }
   D.servers.forEach(s => {
-    const st = s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
+    const st = s.reinstalling ? { t: 'Переустановка', c: 'warn' } : s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
     // остаток считаем от точной даты окончания: полные дни, а в последние сутки — часы
     const left = s.expires_at ? (new Date(s.expires_at) - Date.now()) / 864e5 : null;
     const days = left == null ? null : Math.max(0, Math.floor(left));
@@ -448,8 +448,10 @@ function serverView(id) {
   const L = LIVE[id];
   if (s.status === 'active' && (!L || Date.now() - L.at > 15000)) setTimeout(() => fetchLive(id), 0);
   const power = s.status === 'active' && L ? L.power_status : null;
-  const st = power === 'running' ? { t: 'Включён', c: 'ok' } : power === 'stopped' ? { t: 'Выключен', c: '' } : (ST[s.status] || { t: s.status, c: '' });
-  const live = s.status === 'active' || s.status === 'suspended';
+  const st = s.reinstalling ? { t: 'Переустанавливается', c: 'warn' } : power === 'running' ? { t: 'Включён', c: 'ok' } : power === 'stopped' ? { t: 'Выключен', c: '' } : (ST[s.status] || { t: s.status, c: '' });
+  const live = (s.status === 'active' || s.status === 'suspended') && !s.reinstalling;
+  // пока идёт переустановка — обновляем карточку, чтобы увидеть окончание и новый пароль
+  if (s.reinstalling) setTimeout(async () => { if (curServer === id && UI.nav.stack.length) { await load().catch(() => {}); UI.nav.refresh(); } }, 15000);
   const act = (action, opts = {}) => async () => {
     if (opts.ask) { const ok = await UI.ask(opts.ask); if (!ok) return; }
     const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action, os: opts.os }));
@@ -463,6 +465,9 @@ function serverView(id) {
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
       h('div', {}, h('h1', {}, s.name), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
+
+  if (s.reinstalling) v.append(group(null, [row({ icon: 'disc', tile: '#FF9500', title: 'Идёт переустановка' + (s.reinstall_os_label ? ' на ' + s.reinstall_os_label : ''), cls: 'wrap',
+    sub: 'Обычно 3–10 минут. Управление вернётся, когда сервер будет готов, а в чат придёт сообщение. Новый пароль появится здесь.' })]));
 
   if (s.status === 'provisioning') {
     v.append(group(null, [row({ title: 'Сервер создаётся', sub: 'Обычно это 1–3 минуты. Адрес и пароль появятся здесь и придут в чат.' })]));
@@ -513,10 +518,10 @@ function serverView(id) {
       if (!ok) return;
       await withCode(s, 'password', 'сброс пароля', code => api(`/servers/${s.id}/action`, 'POST', { action: 'password', code }), 'Пароль сбрасывается');
     } }),
-    row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Переустановка', async os => {
+    row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Выберите систему', async os => {
       const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(os)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
       if (!ok) return;
-      const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os }), 'Переустановка запущена');
+      const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action: 'reinstall', os }), 'Переустановка началась — пришлём сообщение, когда закончится');
       if (r !== undefined) await refresh();
     }, { cpu: s.cpu, ram: s.ram, disk: s.disk }, true) }),
   ].map(r => { if (!live) r.classList.add('is-disabled'); return r; })));
@@ -822,11 +827,15 @@ function osReqText(code) { const r = osReq(code); return r ? `Для ${osName(co
 async function pickOS(current, title, onPick, spec, strict) {
   await UI.run(loadCatalog);
   if (!CAT) return;
-  UI.sheet(title || 'Система', close => group(null, CAT.os.map(code => {
+  // strict — переустановка: нажатие на систему сразу ведёт к подтверждению, текущую отмечаем словом «сейчас», а не галочкой
+  // (галочка выглядела как уже сделанный выбор, и клиенты жали «Готово», ничего не запуская)
+  UI.sheet(title || 'Система', close => h('div', {}, strict ? h('div', { class: 'group-f', style: 'margin:0 var(--gutter) 10px' }, 'Нажмите на систему, которую нужно установить. Можно выбрать и текущую — она установится заново.') : null,
+    group(null, CAT.os.map(code => {
     const r = osReq(code), fits = osFits(code, spec);
     const el = row({
       title: osName(code), sub: r ? `от ${r.cpu} vCPU · ${r.ram} ГБ · ${r.disk} ГБ` : undefined,
-      right: code === current ? icon('check', 'check') : null, chevron: false,
+      detail: strict && code === current ? 'сейчас' : undefined,
+      right: !strict && code === current ? icon('check', 'check') : null, chevron: !!strict,
       onClick: () => {
         if (!fits && strict) return UI.toast(osReqText(code) + ' Сначала увеличьте мощность сервера.');
         close(); onPick(code);
@@ -834,7 +843,7 @@ async function pickOS(current, title, onPick, spec, strict) {
     });
     if (!fits) el.classList.add('is-dim');
     return el;
-  }), strict && CAT.os.some(c => !osFits(c, spec)) ? 'Системам, которым не хватает мощности сервера, нужна конфигурация побольше.' : null));
+  }), strict && CAT.os.some(c => !osFits(c, spec)) ? 'Системам, которым не хватает мощности сервера, нужна конфигурация побольше.' : null)));
 }
 
 // ───────── Конструктор ─────────

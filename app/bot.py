@@ -702,6 +702,7 @@ def card_text(srv: Server, speed: str = "") -> str:
     return (
         f"🖥 <b>{e(srv.name)}</b>\n"
         f"{STATUS.get(srv.status, e(srv.status))} · {svc.flag(srv.location)} {e(srv.location.upper())}\n"
+        + (f"⏳ <b>Идёт переустановка</b> на {e(svc.os_label(srv.reinstall_os or srv.os))} — пришлём сообщение, когда закончится\n" if svc.reinstalling(srv) else "")
         + (f"🔴 <b>Не отвечает</b> с {srv.mon_down_at.astimezone(timezone.utc):%d.%m %H:%M} UTC\n" if srv.mon_down_at else "") +
         f"{srv.cpu} vCPU · {srv.ram} ГБ RAM · {srv.disk} ГБ · {e(svc.os_label(srv.os))}\n"
         + (f"🌐 Канал: до {e(speed)}\n" if speed else "") + "\n"
@@ -1194,12 +1195,18 @@ async def reinstall_confirm(c: CallbackQuery):
 async def reinstall_do(c: CallbackQuery):
     _, _, sid, os_ = c.data.split(":")
     await c.answer("🔄 Запускаем…")
+    # сразу убираем кнопку: Astra отвечает на переустановку до двух минут, повторное нажатие ловит operation_in_progress
+    try:
+        await c.message.edit_text(f"⏳ <b>Запускаем переустановку на {e(svc.os_label(os_))}…</b>\n\nЭто может занять до пары минут, ничего не нажимайте.", parse_mode="HTML")
+    except TelegramBadRequest:
+        pass
     try:
         await svc.server_action(ctx(), c.from_user.id, int(sid), "reinstall", {"os": os_})
     except UserError as ex:
-        await c.message.answer(f"❌ {e(ex)}", parse_mode="HTML")
+        await show(c, f"❌ {e(ex)}", kb_rows([], back=f"s:v:{sid}", back_text="← К серверу"))
         return
-    await show(c, "✅ <b>Переустановка запущена</b>\n\nНовый пароль появится в карточке сервера через 1–3 минуты.", kb_rows([[("🖥 Мои серверы", "s:list")]], back="m:home", back_text="← Меню"))
+    await show(c, f"⚙️ <b>Идёт переустановка на {e(svc.os_label(os_))}</b>\n\nОбычно это 3–10 минут. Пришлём сообщение, когда сервер будет готов, — "
+                  "новый пароль root появится в карточке сервера.", kb_rows([[("🖥 К серверу", f"s:v:{sid}")]], back="m:home", back_text="← Меню"))
 
 
 @router.callback_query(F.data.startswith("s:d:"))
