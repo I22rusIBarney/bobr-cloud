@@ -50,8 +50,12 @@ def _read_and_clear() -> list[dict]:
             os.replace(path, taken)
         except FileNotFoundError:
             return []
-    with open(taken, encoding="utf-8", errors="replace") as f:
-        data = f.read()
+    try:
+        with open(taken, encoding="utf-8", errors="replace") as f:
+            data = f.read()
+    except PermissionError:  # хук записал файл с правами только для root — эти события не прочитать, но дальше работаем
+        log.warning("события хоста: нет доступа к %s — обновите хук командой bcloud harden", taken)
+        data = ""
     os.remove(taken)
     out = []
     for line in data.splitlines():

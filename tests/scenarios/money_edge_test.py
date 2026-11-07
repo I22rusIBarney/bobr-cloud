@@ -8,6 +8,8 @@ os.environ.update(BOT_TOKEN="123:TEST", ASTRA_API_KEY="k", ADMIN_IDS="1", PUBLIC
 sys.path.insert(0, os.environ.get("REPO_ROOT", os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))))
 from sqlalchemy import select, func
 from app import db as D, services as svc, security
+from sqlalchemy import update as _upd
+D.update = _upd
 from app.settings import save_settings
 from app.web.server import build_app
 from httpx import AsyncClient, ASGITransport
@@ -71,7 +73,7 @@ async def main():
     app = build_app(ctx)
     async with D.session() as s:
         await save_settings(s, {"round_to_rub": 1, "markup_pct": 0, "refund_pct": 100})
-        for uid in range(2, 9):
+        for uid in range(2, 11):
             u = await D.get_or_create_user(s, uid, f"u{uid}")
             u.consent_version, u.balance_kop = 1, 100000
         await s.commit()
@@ -109,6 +111,33 @@ async def main():
         ok(a.status == "succeeded" and a.yk_id == "ykLost" and (await user(4)).balance_kop == 130000, "опрос нашёл потерянный платёж и зачислил")
         ok(b.status == "canceled" and b.cancel_reason == "not_created", "платёж, которого нет у ЮKassa, закрыт через сутки")
 
+        # 1б. возврат пришёл раньше, чем мы зачислили платёж: ЮKassa должна повторить уведомление (не 200)
+        p = await pay_row(8, 40000, yk_id="ykEarly")
+        ctx.yk.add("ykEarly", p.id, 40000)
+        ctx.yk.refunds["rfE"] = {"id": "rfE", "payment_id": "ykEarly", "status": "succeeded", "amount": {"value": "400.00", "currency": "RUB"}}
+        r = await c.post("/yookassa/webhook/sec", json={"event": "refund.succeeded", "object": {"id": "rfE", "payment_id": "ykEarly"}})
+        ok(r.status_code >= 500, "возврат по ещё не зачисленному платежу — ЮKassa повторит уведомление")
+        await svc.credit_payment(ctx, "ykEarly")
+        r = await c.post("/yookassa/webhook/sec", json={"event": "refund.succeeded", "object": {"id": "rfE", "payment_id": "ykEarly"}})
+        ok(r.status_code == 200 and (await user(8)).balance_kop == 100000, "после зачисления повтор уведомления отзывает деньги")
+
+        # 2б. чарджбэк в гонке с зачислением: зачисление успело первым — отзыв всё равно происходит
+        p = await pay_row(4, 50000, provider="platega", yk_id="pl2")
+        ctx.platega.st["pl2"] = "CHARGEBACK"
+        real = ctx.platega.get_payment
+        async def racing(tid):
+            d = await real(tid)
+            async with D.session() as s:  # параллельное успешное зачисление успело раньше
+                await s.execute(D.update(D.Payment).where(D.Payment.yk_id == "pl2").values(status="succeeded"))
+                await s.commit()
+            return d
+        ctx.platega.get_payment = racing
+        await c.post("/platega/webhook", json={"id": "pl2"})
+        ctx.platega.get_payment = real
+        async with D.session() as s:
+            n = (await s.execute(select(func.count()).select_from(D.Tx).where(D.Tx.ref == f"chargeback:{p.id}"))).scalar_one()
+        ok(n == 1, "чарджбэк в гонке с зачислением не теряется")
+
     # 4. бесплатное продление просроченного сервера — возврата за неоплаченный месяц нет
     srv = await svc.buy_server(ctx, 5, 0, "nl", "ubuntu2404")
     async with D.session() as s:
@@ -123,14 +152,33 @@ async def main():
     async with D.session() as s:
         row = await s.get(D.Server, srv.id); row.status = "active"
         s.add(D.ServerShare(server_id=srv.id, owner_tg=6, member_tg=7, status="active")); await s.commit()
+    class Fail(FakeAstra):
+        async def action(s, *a, **k): raise svc.AstraError(500, {"error": "x"})
+    orig = ctx.astra
+    ctx.astra = Fail()
+    try:
+        await svc.renew_server(ctx, srv.id, payer=7)  # не вышло — деньги участнику уже вернули
+    except svc.UserError:
+        pass
+    ctx.astra = orig
     await svc.renew_server(ctx, srv.id, payer=7)
     o0, m0 = (await user(6)).balance_kop, (await user(7)).balance_kop
     refund = await svc.cancel_server(ctx, 6, srv.id)
     got_o, got_m = (await user(6)).balance_kop - o0, (await user(7)).balance_kop - m0
     ok(got_m > 25000 and got_o > 25000 and refund == got_o, f"возврат поделён: владельцу {got_o}, участнику {got_m}")
 
+    # 5б. сервер, купленный со скидкой 100%, — возврата при удалении нет
+    async with D.session() as s:
+        u = await s.get(D.User, 5); u.promo_discount_pct = 100; await s.commit()
+    b0 = (await user(5)).balance_kop
+    srv = await svc.buy_server(ctx, 5, 0, "nl", "ubuntu2404")
+    async with D.session() as s:
+        row = await s.get(D.Server, srv.id); row.status = "active"; await s.commit()
+    await svc.cancel_server(ctx, 5, srv.id)
+    ok((await user(5)).balance_kop == b0, "сервер за 0 ₽ (скидка 100%) не возвращает деньги")
+
     # 6. после восстановления копии без ключа пароли root подтягиваются из Astra
-    srv = await svc.buy_server(ctx, 8, 0, "nl", "ubuntu2404")
+    srv = await svc.buy_server(ctx, 10, 0, "nl", "ubuntu2404")
     async with D.session() as s:
         row = await s.get(D.Server, srv.id); row.status, row.root_password = "active", None; await s.commit()
     n = await svc.refill_passwords(ctx)
@@ -146,6 +194,14 @@ async def main():
     os.chmod(path, 0o444)
     ev = security._read_and_clear()
     ok(len(ev) == 1 and not os.path.exists(path), "события хоста прочитаны и убраны без права записи в файл")
+    with open(path, "w") as f:
+        f.write("{}\n")
+    os.chmod(path, 0)  # хук записал файл с umask 077 — бот не может его прочитать
+    security._read_and_clear()
+    with open(path, "w") as f:
+        f.write(json.dumps({"type": "ban", "ip": "5.6.7.8", "jail": "sshd", "ts": 2}) + "\n")
+    ev = security._read_and_clear()
+    ok(len(ev) == 1 and ev[0]["ip"] == "5.6.7.8", "нечитаемый файл событий не останавливает следующие проверки")
 
     print(f"FAILS: {ok.fails}")
     sys.exit(1 if ok.fails else 0)

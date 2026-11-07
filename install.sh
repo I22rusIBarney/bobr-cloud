@@ -325,6 +325,7 @@ case "\$1" in
          printf '{"type":"login","user":"%s","ip":"%s","ts":%s}\n' "\$(clean "\$PAM_USER")" "\$(clean "\$PAM_RHOST")" "\$(date +%s)" >> "\$F" ;;
   ban)   printf '{"type":"ban","ip":"%s","jail":"%s","ts":%s}\n' "\$(clean "\$2")" "\$(clean "\$3")" "\$(date +%s)" >> "\$F" ;;
 esac
+chmod 644 "\$F" 2>/dev/null  # бот работает не от root — файл должен читаться всеми
 exit 0
 EOF
   chmod 755 /usr/local/sbin/bcloud-event

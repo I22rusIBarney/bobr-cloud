@@ -457,7 +457,7 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
         disk=spec.get("disk", preset["disk"]),
         os=spec.get("os", os_),
         price_kop=price,
-        period_paid_kop=charge,
+        period_paid_kop=max(1, charge),  # 0 значит «старая запись»; покупка за 0 ₽ (скидка 100%) — 1 коп.
         period_months=float(months),
         # себестоимость месяца для маржи и продления — цена продления у Astra
         cost_kop=cost_kop(max(renew_rub, charged / months)) if charged is not None else cost_kop(renew_rub),
@@ -1201,8 +1201,19 @@ async def refund_parts(srv: Server, total: int) -> dict[int, int]:
     from .db import ServerShare
     async with session() as s:
         members = set((await s.execute(select(ServerShare.member_tg).where(ServerShare.server_id == srv.id))).scalars())
-        txs = (await s.execute(select(Tx).where(Tx.ref == str(srv.astra_id), Tx.kind == "renew", Tx.amount_kop < 0)
+        txs = (await s.execute(select(Tx).where(Tx.ref == str(srv.astra_id), Tx.kind.in_(("renew", "refund_renew")))
                                .order_by(Tx.id.desc()))).scalars().all() if members else []
+    # продление, которое Astra не выполнила, вернули (refund_renew) — его дни никто не оплатил
+    paid = []
+    for tx in reversed(txs):  # от старых к новым: возврат гасит ближайшее предыдущее продление того же плательщика
+        if tx.kind == "renew" and tx.amount_kop < 0:
+            paid.append(tx)
+        elif tx.kind == "refund_renew":
+            for i in range(len(paid) - 1, -1, -1):
+                if paid[i].tg_id == tx.tg_id:
+                    paid.pop(i)
+                    break
+    txs = list(reversed(paid))
     if not members or left <= 0:
         return {srv.tg_id: total}
     days: dict[int, float] = {}
@@ -1537,6 +1548,12 @@ async def credit_payment(ctx: Ctx, yk_id: str, local_id: Any = None) -> bool:
             reason = (data.get("cancellation_details") or {}).get("reason")
             res = await s.execute(update(Payment).where(Payment.id == pay.id, Payment.status == "pending").values(status="canceled", cancel_reason=reason))
             await s.commit()
+            if res.rowcount == 0 and str(data.get("raw_status") or "").upper() in CHARGEBACK_STATUSES:
+                fresh = await s.get(Payment, pay.id)
+                await s.refresh(fresh)
+                if fresh.status == "succeeded":  # параллельное зачисление успело раньше — отзываем
+                    await reverse_payment(ctx, fresh, fresh.amount_kop, f"chargeback:{fresh.id}", "чарджбэк в Platega")
+                    return False
             if res.rowcount == 1 and pay.save_method and not pay.autopay:
                 await ctx.notify(pay.tg_id, f"⚠️ <b>Пополнение не прошло</b>\n\nБанк не провёл платёж {fmt_rub(pay.amount_kop)} с привязкой счёта"
                                  + (f" ({CANCEL_TEXT.get(reason, reason)})" if reason else "") + ". Если счёт этого банка уже привязан, "
@@ -1717,6 +1734,10 @@ async def reconcile_lost(ctx: Ctx) -> int:
 # ───────────────────────── возвраты платежей и чарджбэки ─────────────────────────
 
 CHARGEBACK_STATUSES = {"CHARGEBACK", "CHARGEBACKED"}
+
+
+class RefundNotReady(Exception):
+    """Возврат по платежу, который мы ещё не зачислили: уведомление нужно принять позже."""
 _reverse_lock = asyncio.Lock()
 
 
@@ -1730,9 +1751,10 @@ async def reverse_payment(ctx: Ctx, pay: Payment, kop: int, ref: str, why: str) 
             await change_balance(s, pay.tg_id, -kop, "chargeback", ref, allow_negative=True)
         async with session() as s:
             u = await s.get(User, pay.tg_id)
-            u.banned, u.autopay_enabled = True, False
-            await s.commit()
-            bal = u.balance_kop
+            if u is not None:
+                u.banned, u.autopay_enabled = True, False
+                await s.commit()
+            bal = u.balance_kop if u is not None else -kop
     await ctx.alert_admin(f"↩️ <b>Возврат платежа #{pay.id}</b> ({why}): с баланса клиента {pay.tg_id} списано {fmt_rub(kop)}, "
                           f"баланс теперь {fmt_rub(bal)}. Клиент заблокирован, автоплатёж выключен, серверы работают — решите, что с ними делать. "
                           "Чек «Мой налог» за это пополнение аннулируйте вручную; реферальный бонус, если был, не отозван.")
@@ -1746,7 +1768,11 @@ async def handle_refund(ctx: Ctx, refund_id: str) -> bool:
         return False
     async with session() as s:
         pay = (await s.execute(select(Payment).where(Payment.yk_id == r["payment_id"]))).scalar_one_or_none()
-    if pay is None or pay.status != "succeeded":
+    if pay is None or pay.status == "pending":
+        # платёж ещё не зачислен (или id ЮKassa у нас пока не записан): ответим ошибкой — ЮKassa повторит уведомление,
+        # а сверка к тому времени его зачислит. Иначе возврат потеряется, а деньги потом зачислятся полностью
+        raise RefundNotReady(r["payment_id"])
+    if pay.status != "succeeded":
         return False
     kop = min(int(round(float(r["amount"]["value"]) * 100)), pay.amount_kop)
     return await reverse_payment(ctx, pay, kop, f"refund:{refund_id}"[:64], "возврат в ЮKassa")

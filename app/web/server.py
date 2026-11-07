@@ -192,6 +192,8 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
         if body.get("event") == "refund.succeeded" and obj.get("id"):
             try:
                 await svc.handle_refund(ctx, str(obj["id"]))  # перепроверяет возврат через API ЮKassa
+            except svc.RefundNotReady:
+                raise HTTPException(503)  # платёж ещё не зачислен — ЮKassa повторит
             except Exception:
                 log.exception("webhook refund failed")
                 raise HTTPException(500)
