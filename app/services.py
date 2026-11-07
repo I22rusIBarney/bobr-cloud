@@ -746,7 +746,7 @@ def _reinstall_done(r: dict, old_pw: str | None, elapsed: float) -> bool:
     и выдан новый пароль (или прошло достаточно времени, если пароль тот же)."""
     if str(r.get("operation_status") or "").lower() in _BUSY_OPS:
         return False
-    if r.get("power_status") != "running" or elapsed < 60:
+    if r.get("power_status") != "running" or elapsed < 180:  # отсчёт идёт с нажатия, сама установка — минуты
         return False
     pw = r.get("root_password")
     return bool(pw and pw != old_pw) or elapsed >= 300
@@ -862,11 +862,23 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
             charge = change_ip_price_kop(cfg, payer)
             if not await change_balance(s, tg_id, -charge, "change_ip", str(srv.astra_id)):
                 raise UserError(f"Для смены IP нужно {fmt_rub(charge)} на балансе.")
+        prev_reinstall = (srv.reinstall_at, srv.reinstall_os)
+        # новая отметка, только если переустановка ещё не идёт — иначе за ней уже следят
+        fresh_reinstall = action == "reinstall" and not reinstalling(srv)
+        if fresh_reinstall:
+            # отметку ставим до запроса: Astra отвечает на переустановку до двух минут, статус нужен сразу
+            srv.reinstall_at, srv.reinstall_os = utcnow(), (body or {}).get("os") or srv.os
+            await s.commit()
     try:
         resp = await ctx.astra.action(srv.astra_id, action, body)
     except AstraError as ex:
         if charge:
             await _refund(tg_id, charge, "refund_change_ip", str(srv.astra_id))
+        if action == "reinstall":  # Astra отказала — возвращаем прежнее состояние (могла идти предыдущая переустановка)
+            async with session() as s:
+                row = await s.get(Server, server_id)
+                row.reinstall_at, row.reinstall_os = prev_reinstall
+                await s.commit()
         if ex.code == "operation_in_progress":
             raise UserError("На сервере ещё идёт предыдущая операция. Подождите пару минут и попробуйте снова.") from ex
         raise UserError(f"Не удалось выполнить действие ({ex.code or ex.status}).") from ex
@@ -894,10 +906,8 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         async with session() as s:
             row = await s.get(Server, server_id)
             row.mon_quiet_until, row.mon_fail = utcnow() + timedelta(minutes=quiet), 0
-            if action == "reinstall":
-                row.reinstall_at, row.reinstall_os = utcnow(), (body or {}).get("os") or row.os
             await s.commit()
-    if action == "reinstall":
+    if fresh_reinstall:
         asyncio.get_running_loop().create_task(watch_reinstall(ctx, server_id, srv.tg_id, srv.root_password))
     await serverlog.add(server_id, actor or tg_id, action, os_label(body["os"]) if action == "reinstall" and body and body.get("os") else "")
     if action in ("reinstall", "password", "change-ip"):
