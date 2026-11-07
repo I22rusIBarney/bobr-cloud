@@ -1116,7 +1116,7 @@ function builderView() {
     priceUnit.textContent = opt.months > 1 ? ' за ' + PERIOD_LABEL[opt.code] : ' / мес';
     const plain = full * opt.months;
     if (price < plain) priceS.replaceChildren(h('span', {}, h('s', {}, rub(plain)), opt.months > 1 ? ` ≈ ${rub(Math.round(price / opt.months))} / мес` : ` −${D.discount.pct}% · дальше ${rub(full)}`));
-    else priceS.replaceChildren(`${loc.flag} ${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
+    else priceS.replaceChildren(h('span', { style: 'margin-right:4px' }, loc.flag), `${m.cpu} vCPU · ${m.ram} ГБ · ${m.disk} ГБ`);
     if (!osFits(B.os, m)) {  // Windows и подобные не встанут на слабую конфигурацию
       note.className = 'match-note bad'; note.textContent = osReqText(B.os) + ' Добавьте мощности или выберите другую систему.';
       pay.textContent = 'Мало для этой ОС'; pay.disabled = true; return;
@@ -1367,7 +1367,8 @@ function profileView() {
     [...chips.children].forEach((c, i) => c.setAttribute('aria-pressed', String(presets[i] === amount)));
     const ok = amount >= D.cfg.min_topup_rub && amount <= D.cfg.max_topup_rub;
     go.disabled = !ok;
-    if (ok) { go.textContent = ''; const n = h('span'); go.append('Пополнить на ', n); UI.tween(n, shown, amount, v => rub(v), 200); shown = amount; }
+    // текст и сумма — одним элементом: у кнопки flex с gap, иначе двойной пробел
+    if (ok) { go.textContent = ''; const n = h('span'); go.append(h('span', {}, 'Пополнить на ', n)); UI.tween(n, shown, amount, v => rub(v), 200); shown = amount; }
     else go.textContent = amount > D.cfg.max_topup_rub ? 'Не больше ' + rub(D.cfg.max_topup_rub) : 'От ' + rub(D.cfg.min_topup_rub);
   }
   input.addEventListener('input', () => { amount = Math.round(+input.value || 0); sync(); });
