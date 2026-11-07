@@ -83,6 +83,9 @@ def _make(src_path: str, out_dir: str, key: str = "") -> str:
         src.backup(dst)
         if not key:  # без шифрования секретов в копии нет
             dst.execute("DELETE FROM settings WHERE key LIKE 'secret:%'")
+            # root-пароли серверов клиентов — тоже секрет: копия без ключа уходит в чат Telegram
+            if "root_password" in {r[1] for r in dst.execute("PRAGMA table_info(servers)")}:
+                dst.execute("UPDATE servers SET root_password = NULL")
         dst.commit()
         dst.execute("VACUUM")
     finally:

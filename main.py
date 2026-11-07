@@ -20,8 +20,24 @@ from app.worker import start_workers
 from app.yookassa import YooKassa
 
 
+class _HideSecrets(logging.Filter):
+    """Журнал запросов uvicorn без секретов: путь вебхука ЮKassa, токен консоли VNC и параметры запроса."""
+    SECRET_PATHS = ("/yookassa/webhook/", "/_vnc/")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            path = args[2].split("?", 1)[0] + ("?…" if "?" in args[2] else "")
+            for p in self.SECRET_PATHS:
+                if path.startswith(p):
+                    path = p + "…"
+            record.args = (*args[:2], path, *args[3:])
+        return True
+
+
 async def main() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.getLogger("uvicorn.access").addFilter(_HideSecrets())
     e = env()
     from app import backup as bk
     restored = None

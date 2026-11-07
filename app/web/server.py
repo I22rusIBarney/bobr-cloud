@@ -1,6 +1,7 @@
 """FastAPI: вебхук ЮKassa + API и страница админки (Telegram Mini App)."""
 from __future__ import annotations
 
+import hmac
 import logging
 from pathlib import Path
 from typing import Any
@@ -144,6 +145,15 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
     from ..audit import AuditMiddleware
     app.add_middleware(AuditMiddleware)  # журнал действий админов — сам, по успешным изменяющим запросам
 
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next):
+        resp = await call_next(request)
+        resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+        resp.headers.setdefault("Referrer-Policy", "same-origin")  # токены VNC и секреты в путях не уходят на чужие сайты
+        if env().public_url.startswith("https://"):
+            resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+        return resp
+
     # ───── публичное ─────
 
     from .vnc_page import router as vnc_router
@@ -170,13 +180,19 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     @app.post("/yookassa/webhook/{secret}")
     async def yk_webhook(secret: str, request: Request):
-        if secret != env().webhook_secret:
+        if not hmac.compare_digest(secret.encode(), env().webhook_secret.encode()):
             raise HTTPException(403)
-        body = await request.json()
+        try:
+            body = await request.json()
+        except ValueError:
+            raise HTTPException(400)
+        if not isinstance(body, dict):
+            raise HTTPException(400)
         obj = body.get("object") or {}
         if body.get("event") in ("payment.succeeded", "payment.canceled") and obj.get("id"):
             try:
-                await svc.credit_payment(ctx, obj["id"])  # перепроверяет платёж через API ЮKassa
+                # перепроверяет платёж через API ЮKassa; номер из metadata — если id ЮKassa у нас не записан (таймаут при создании)
+                await svc.credit_payment(ctx, obj["id"], (obj.get("metadata") or {}).get("payment_id"))
             except Exception:
                 log.exception("webhook credit failed")
                 raise HTTPException(500)  # ЮKassa повторит

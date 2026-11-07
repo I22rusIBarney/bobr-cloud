@@ -132,10 +132,7 @@ write_caddyfile() {  # $1 — домен бота, $2 — домен консо�
 
 # консоль VNC под своим доменом: прозрачный прокси на Astra (страница и WebSocket)
 $2 {
-	log {
-		output stdout
-		format console
-	}
+	# без журнала запросов: путь /<токен> — это пропуск в консоль сервера
 	# страница консоли — через бота: в ней адрес подключения Astra заменяется на наш домен
 	@page path_regexp ^/[A-Za-z0-9_-]{16,128}$
 	handle @page {
@@ -479,6 +476,8 @@ case "${1:-install}" in
   backup)
     mkdir -p /root/bcloud-backups
     f="/root/bcloud-backups/bcloud-$(date +%Y%m%d-%H%M%S).tar.gz"
+    # база в режиме WAL: сначала сливаем журнал в bot.db, чтобы в архиве был цельный файл
+    compose exec -T bot python -c "import sqlite3; sqlite3.connect('/srv/data/bot.db').execute('PRAGMA wal_checkpoint(TRUNCATE)')" >/dev/null 2>&1 || true
     tar -czf "$f" data .env $( [ -f Caddyfile ] && echo Caddyfile ) 2>/dev/null || die "Не удалось создать копию"
     chmod 600 "$f"
     ls -1t /root/bcloud-backups/bcloud-*.tar.gz | tail -n +11 | xargs -r rm -f  # храним 10 последних

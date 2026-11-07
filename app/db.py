@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, inspect, text, update
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, Integer, String, Text, UniqueConstraint, event, inspect, text, update
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -341,10 +341,22 @@ async def init_db() -> None:
         if os.path.dirname(path):
             os.makedirs(os.path.dirname(path), exist_ok=True)
     _engine = create_async_engine(url, future=True)
+    if url.startswith("sqlite"):
+        event.listen(_engine.sync_engine, "connect", _sqlite_pragmas)
     _sessionmaker = async_sessionmaker(_engine, expire_on_commit=False)
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_add_missing_columns)
+
+
+def _sqlite_pragmas(dbapi_conn, _record) -> None:
+    """WAL: чтение не блокирует запись (воркеры, вебхуки и бот работают параллельно);
+    busy_timeout: при занятой базе ждём, а не падаем с «database is locked»."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=15000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.close()
 
 
 def _add_missing_columns(conn) -> None:
