@@ -1138,9 +1138,23 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
     async with session() as s:
         srv = await get_user_server(s, tg_id, server_id)
         cfg = await load_settings(s)
+        prev_status, prev_auto = srv.status, srv.auto_renew  # до update: он синхронизирует и объект srv
+        # занимаем сервер до запроса к Astra: второе нажатие и синхронизация его уже не тронут, возврат — один
+        res = await s.execute(update(Server).where(Server.id == server_id, Server.status == prev_status)
+                              .values(status="deleted", auto_renew=False, deleted_at=utcnow()))
+        await s.commit()
+        if res.rowcount != 1:
+            raise UserError("Сервер уже удаляется.")
+
+    async def release() -> None:  # Astra не удалила (или итог неизвестен) — сервер снова как был
+        async with session() as s2:
+            await s2.execute(update(Server).where(Server.id == server_id)
+                             .values(status=prev_status, auto_renew=prev_auto, deleted_at=None))
+            await s2.commit()
     try:
         await ctx.astra.delete(srv.astra_id)
     except AstraError as ex:
+        await release()
         if ex.code == "refund_requires_reconciliation":
             # Astra не может сама подтвердить оплаченные периоды для возврата: ни удаления, ни возврата не было.
             # Решается через поддержку Astra (нужны данные оплаты), повторный DELETE после этого безопасен.
@@ -1159,19 +1173,13 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
             ) from ex
         raise UserError(f"Не удалось удалить сервер ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
+        await release()  # если Astra всё же удалила, синхронизация увидит пропажу и сообщит админу
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")
         raise UserError("Ответ от провайдера не получен. Проверьте список серверов через минуту.") from ex
     do_refund = refund
     refund = refund_amount(paid_base(srv), srv.expires_at, cfg["refund_pct"], paid_months(srv)) if do_refund else 0
-    async with session() as s:
-        # условное обновление: при двойном нажатии (или если синхронизация уже закрыла сервер) возврат не повторится
-        res = await s.execute(update(Server).where(Server.id == server_id, Server.status != "deleted")
-                              .values(status="deleted", auto_renew=False, deleted_at=utcnow()))
-        await s.commit()
-        if res.rowcount != 1:
-            return 0
-        if refund > 0:
-            await change_balance(s, tg_id, refund, "refund_cancel", str(srv.astra_id))
+    if refund > 0:
+        await _refund(tg_id, refund, "refund_cancel", str(srv.astra_id))
     from .shares import revoke_all
     from . import serverlog
     await serverlog.add(server_id, actor or tg_id, "delete", "" if do_refund else "без возврата")
@@ -1409,6 +1417,8 @@ async def topup_saved(ctx: Ctx, tg_id: int, amount_rub: int, method_id: int) -> 
     except Exception as ex:
         if _charge_uncertain(ex):  # списание могло пройти — платёж ждёт уведомления ЮKassa, не отменяем
             log.warning("оплата привязанным способом #%s: ответ не получен: %s", pay.id, ex)
+            await ctx.alert_admin(f"⚠️ Оплата привязанным способом #{pay.id} клиента {tg_id}: ЮKassa не ответила ({ex}). "
+                                  "Если списание прошло, баланс пополнится по уведомлению ЮKassa — проверьте платёж, если зачисления не будет.")
             raise UserError("Банк отвечает с задержкой. Если деньги списались, баланс пополнится автоматически в течение нескольких минут.") from ex
         async with session() as s:
             row = await s.get(Payment, pay.id)

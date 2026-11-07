@@ -174,13 +174,18 @@ def apply_pending(db_file: str) -> str | None:
     if not os.path.exists(pend):
         return None
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    keep = f"{db_file}.before-restore-{stamp}"
     if os.path.exists(db_file):
-        os.replace(db_file, f"{db_file}.before-restore-{stamp}")
-    for ext in ("-wal", "-shm"):
-        try:
-            os.remove(db_file + ext)
-        except OSError:
+        try:  # база в режиме WAL: последние изменения могут быть только в журнале — сливаем их в файл базы
+            con = sqlite3.connect(db_file)
+            con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            con.close()
+        except sqlite3.Error:
             pass
+        os.replace(db_file, keep)
+    for ext in ("-wal", "-shm"):  # журнал не удаляем: если слить не вышло, он нужен прежней базе
+        if os.path.exists(db_file + ext):
+            os.replace(db_file + ext, keep + ext)
     os.replace(pend, db_file)
     note = f"База восстановлена из копии. Прежняя сохранена: {os.path.basename(db_file)}.before-restore-{stamp}"
     with open(os.path.join(data, "restored.txt"), "w", encoding="utf-8") as f:

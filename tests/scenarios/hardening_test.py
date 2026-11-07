@@ -93,7 +93,20 @@ async def main():
         res = await asyncio.gather(*(svc.cancel_server(ctx, 4, srv.id) for _ in range(2)), return_exceptions=True)
         async with D.session() as s:
             n = (await s.execute(select(func.count()).select_from(D.Tx).where(D.Tx.tg_id == 4, D.Tx.kind == "refund_cancel"))).scalar_one()
-        ok(n == 1, f"двойное удаление: возврат один раз ({res})")
+        ok(n == 1 and sum(isinstance(x, svc.UserError) for x in res) == 1, f"двойное удаление: возврат один раз ({res})")
+        # Astra отказала — сервер остаётся у клиента как был
+        class Boom(FakeAstra):
+            async def delete(s, sid): raise svc.AstraError(500, {"error": "x"})
+        srv2 = await svc.buy_server(ctx, 4, 0, "nl", "ubuntu2404")
+        ctx.astra = Boom()
+        try:
+            await svc.cancel_server(ctx, 4, srv2.id)
+        except svc.UserError:
+            pass
+        ctx.astra = FakeAstra()
+        async with D.session() as s:
+            row = await s.get(D.Server, srv2.id)
+        ok(row.status == "provisioning" and row.deleted_at is None and row.auto_renew, f"отказ Astra при удалении — сервер не тронут ({row.status}, {row.deleted_at}, {row.auto_renew})")
 
         # 4. служебное списание: два одинаковых запроса одновременно — одно списание
         H = {"Authorization": "Bearer svc-token"}
@@ -116,6 +129,16 @@ async def main():
     pw = sqlite3.connect(raw).execute("SELECT count(*) FROM servers WHERE root_password IS NOT NULL").fetchone()[0]
     ok(pw == 0, "в копии без ключа нет root-паролей")
     ok(sqlite3.connect(backup.db_path()).execute("PRAGMA journal_mode").fetchone()[0] == "wal", "база работает в режиме WAL")
+
+    data = os.path.join(TMP, "rs"); os.makedirs(data, exist_ok=True)
+    live = os.path.join(data, "bot.db")
+    con = sqlite3.connect(live); con.execute("PRAGMA journal_mode=WAL"); con.execute("PRAGMA wal_autocheckpoint=0")
+    con.execute("CREATE TABLE t(x)"); con.execute("INSERT INTO t VALUES (42)"); con.commit()  # только в журнале
+    open(os.path.join(data, "restore.db"), "wb").write(open(raw, "rb").read())
+    note = backup.apply_pending(live)
+    con.close()
+    old = [f for f in os.listdir(data) if ".before-restore-" in f and not f.endswith(("-wal", "-shm"))][0]
+    ok(note and sqlite3.connect(os.path.join(data, old)).execute("SELECT x FROM t").fetchone() == (42,), "прежняя база при восстановлении не теряет свежие изменения")
 
     print(f"FAILS: {ok.fails}")
     sys.exit(1 if ok.fails else 0)

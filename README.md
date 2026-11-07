@@ -174,7 +174,7 @@ install.sh        — установщик
 ## Тесты
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements.txt -c constraints.txt   # те же версии, что в Docker и CI
 pytest
 ```
 Каждый push проверяется в GitHub Actions (`.github/workflows/tests.yml`). Сценарии в `tests/scenarios` поднимают приложение на чистой базе с поддельными Astra и ЮKassa и проходят по шагам: покупка, продление, общий доступ, передача, мониторинг, локации, платежи, рендер всех экранов бота и действия админа. Один сценарий можно запустить отдельно: `python tests/scenarios/share_test.py /tmp/x`.
