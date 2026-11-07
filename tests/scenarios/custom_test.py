@@ -156,7 +156,7 @@ async def main():
         svc.watch_reinstall = orig_v; astra.action_exc = None
         # окончание переустановки: VM включена, выдан новый пароль — снимаем отметку и пишем клиенту
         async with D.session() as s:
-            rs = await s.get(D.Server, srv.id); rs.reinstall_at = D.utcnow() - timedelta(minutes=2); await s.commit()
+            rs = await s.get(D.Server, srv.id); rs.reinstall_at = D.utcnow() - timedelta(minutes=4); await s.commit()
         ok(svc.reinstalling(rs), "переустановка видна в карточке")
         orig_srv = astra.server
         async def busy(sid): return {"id": sid, "status": "active", "power_status": "running", "operation_status": "running", "root_password": "NewPw123"}
