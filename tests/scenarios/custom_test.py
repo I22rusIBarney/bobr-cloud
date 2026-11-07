@@ -145,14 +145,31 @@ async def main():
         svc.verify_change_ip = orig; astra.action_exc = None
         # ── переустановка без кода; таймаут Astra — не ошибка, а проверка статуса позже
         vcalled = []
-        orig_v = svc.verify_action
+        orig_v = svc.watch_reinstall
         async def vrec(*a, **k): vcalled.append(a)
-        svc.verify_action = vrec
+        svc.watch_reinstall = vrec
         astra.action_exc = AstraUncertain("timeout")
         r = await c.post(f"/api/me/servers/{srv.id}/action", headers=A, json={"action": "reinstall", "os": srv.os})
         await asyncio.sleep(0.05)
-        ok(r.status_code == 200 and vcalled and vcalled[0][2] == "reinstall", "таймаут переустановки: ответ «запущена», статус проверим позже")
-        svc.verify_action = orig_v; astra.action_exc = None
+        async with D.session() as s: rs = await s.get(D.Server, srv.id)
+        ok(r.status_code == 200 and vcalled and vcalled[0][1] == srv.id and rs.reinstall_at is not None, "таймаут переустановки: ответ «запущена», следим за окончанием")
+        svc.watch_reinstall = orig_v; astra.action_exc = None
+        # окончание переустановки: VM включена, выдан новый пароль — снимаем отметку и пишем клиенту
+        async with D.session() as s:
+            rs = await s.get(D.Server, srv.id); rs.reinstall_at = D.utcnow() - timedelta(minutes=2); await s.commit()
+        ok(svc.reinstalling(rs), "переустановка видна в карточке")
+        orig_srv = astra.server
+        async def busy(sid): return {"id": sid, "status": "active", "power_status": "running", "operation_status": "running", "root_password": "NewPw123"}
+        astra.server = busy
+        t = asyncio.create_task(svc.watch_reinstall(ctx, srv.id, 51, "OldPw", every=0.01))
+        await asyncio.sleep(0.05)
+        ok(not t.done(), "пока операция идёт — ждём")
+        async def ready(sid): return {"id": sid, "status": "active", "power_status": "running", "root_password": "NewPw123"}
+        astra.server = ready
+        res = await asyncio.wait_for(t, 2)
+        async with D.session() as s: rs = await s.get(D.Server, srv.id)
+        ok(res == "done" and rs.reinstall_at is None and rs.root_password == "NewPw123" and any(u == 51 and "Переустановка завершена" in t_ for u, t_ in msgs), "переустановка закончилась — клиент уведомлён")
+        astra.server = orig_srv
         r = await c.post(f"/api/me/servers/{srv.id}/code", headers=A, json={"action": "reinstall"})
         ok(r.status_code == 400, "код для переустановки больше не запрашивается")
         started = D.utcnow()

@@ -732,6 +732,81 @@ async def verify_change_ip(ctx: Ctx, server_id: int, astra_id: int, old_ip: str 
 
 
 ACTION_FAILED = ("error", "failed")
+REINSTALL_MAX = timedelta(minutes=20)   # дольше переустановка не идёт — дальше считаем, что закончилась
+_BUSY_OPS = ("running", "pending", "queued", "in_progress", "processing")
+
+
+def reinstalling(srv: Server) -> bool:
+    """Идёт ли сейчас переустановка, запущенная из бота (отметка сама истекает через REINSTALL_MAX)."""
+    return bool(srv.reinstall_at) and utcnow() - srv.reinstall_at < REINSTALL_MAX
+
+
+def _reinstall_done(r: dict, old_pw: str | None, elapsed: float) -> bool:
+    """Astra не отдаёт отдельный статус переустановки: готово, когда операция не идёт, VM включена
+    и выдан новый пароль (или прошло достаточно времени, если пароль тот же)."""
+    if str(r.get("operation_status") or "").lower() in _BUSY_OPS:
+        return False
+    if r.get("power_status") != "running" or elapsed < 60:
+        return False
+    pw = r.get("root_password")
+    return bool(pw and pw != old_pw) or elapsed >= 300
+
+
+async def watch_reinstall(ctx: Ctx, server_id: int, tg_id: int, old_pw: str | None, every: float = 20.0) -> str:
+    """Следит за переустановкой и пишет клиенту, когда сервер готов. done | failed | timeout | gone."""
+    async with session() as s:
+        srv = await s.get(Server, server_id)
+        started = srv.reinstall_at if srv else None
+    if not started:
+        return "gone"
+    while True:
+        await asyncio.sleep(every)
+        elapsed = (utcnow() - started).total_seconds()
+        try:
+            r = await ctx.astra.server(srv.astra_id)
+        except Exception:
+            r = None
+        async with session() as s:
+            row = await s.get(Server, server_id)
+            if row is None or row.status == "deleted" or row.reinstall_at != started:
+                return "gone"  # сервер удалили или запустили новую переустановку — следит другой наблюдатель
+            if r:
+                _apply_remote(row, r)
+            failed = row.status in ACTION_FAILED
+            done = bool(r) and not failed and _reinstall_done(r, old_pw, elapsed)
+            timeout = elapsed >= REINSTALL_MAX.total_seconds()
+            if not (failed or done or timeout):
+                await s.commit()
+                continue
+            os_name = os_label(row.reinstall_os or row.os)
+            row.reinstall_at, row.reinstall_os = None, None
+            row.mon_quiet_until, row.mon_fail = utcnow() + timedelta(minutes=3), 0
+            name, ip = row.name, row.ip
+            await s.commit()
+        if failed:
+            await ctx.notify(tg_id, f"❌ <b>Переустановка сервера {html.escape(name)} не удалась</b>\n\nПопробуйте ещё раз или напишите в поддержку.")
+            await ctx.alert_admin(f"⚠️ Переустановка #{srv.astra_id} (клиент {tg_id}) завершилась ошибкой.")
+            return "failed"
+        if done:
+            await ctx.notify(tg_id, f"✅ <b>Переустановка завершена</b>\n\n🖥 {html.escape(name)} · {html.escape(os_name)}\n"
+                                    f"IP: <code>{html.escape(ip or '—')}</code>\nНовый пароль root — в карточке сервера.")
+            return "done"
+        await ctx.notify(tg_id, f"ℹ️ <b>Переустановка {html.escape(name)} идёт дольше обычного</b>\n\n"
+                                "Попробуйте подключиться через несколько минут. Если не получится — напишите в поддержку.")
+        await ctx.alert_admin(f"⚠️ Переустановка #{srv.astra_id} (клиент {tg_id}) не завершилась за {int(REINSTALL_MAX.total_seconds() // 60)} минут.")
+        return "timeout"
+
+
+async def resume_reinstall_watch(ctx: Ctx) -> int:
+    """После перезапуска бота продолжаем следить за незаконченными переустановками."""
+    async with session() as s:
+        rows = (await s.execute(select(Server).where(Server.reinstall_at.is_not(None), Server.status != "deleted"))).scalars().all()
+    n = 0
+    for srv in rows:
+        if reinstalling(srv):
+            asyncio.get_running_loop().create_task(watch_reinstall(ctx, srv.id, srv.tg_id, None))
+            n += 1
+    return n
 
 
 async def verify_action(ctx: Ctx, astra_id: int, action: str, tg_id: int, delay: float = 150.0) -> str:
@@ -792,6 +867,8 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
     except AstraError as ex:
         if charge:
             await _refund(tg_id, charge, "refund_change_ip", str(srv.astra_id))
+        if ex.code == "operation_in_progress":
+            raise UserError("На сервере ещё идёт предыдущая операция. Подождите пару минут и попробуйте снова.") from ex
         raise UserError(f"Не удалось выполнить действие ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
         if action == "change-ip":  # таймаут ≠ отказ: проверим результат по статусу операции, деньги пока удержаны
@@ -802,7 +879,8 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         # таймаут ≠ отказ: Astra обычно уже выполняет операцию (переустановка отвечает долго).
         # Считаем запущенной, а через пару минут сверяем статус и пишем, только если что-то пошло не так.
         log.warning("action %s #%s: ответ не получен, проверим статус позже", action, srv.astra_id)
-        asyncio.get_running_loop().create_task(verify_action(ctx, srv.astra_id, action, tg_id))
+        if action != "reinstall":  # за переустановкой следит watch_reinstall
+            asyncio.get_running_loop().create_task(verify_action(ctx, srv.astra_id, action, tg_id))
         resp = {}
     if action == "vnc":
         link = vnc_link(resp)
@@ -816,7 +894,11 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         async with session() as s:
             row = await s.get(Server, server_id)
             row.mon_quiet_until, row.mon_fail = utcnow() + timedelta(minutes=quiet), 0
+            if action == "reinstall":
+                row.reinstall_at, row.reinstall_os = utcnow(), (body or {}).get("os") or row.os
             await s.commit()
+    if action == "reinstall":
+        asyncio.get_running_loop().create_task(watch_reinstall(ctx, server_id, srv.tg_id, srv.root_password))
     await serverlog.add(server_id, actor or tg_id, action, os_label(body["os"]) if action == "reinstall" and body and body.get("os") else "")
     if action in ("reinstall", "password", "change-ip"):
         await refresh_server(ctx, srv.astra_id)
@@ -1040,6 +1122,22 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
     try:
         await ctx.astra.delete(srv.astra_id)
     except AstraError as ex:
+        if ex.code == "refund_requires_reconciliation":
+            # Astra не может сама подтвердить оплаченные периоды для возврата: ни удаления, ни возврата не было.
+            # Решается через поддержку Astra (нужны данные оплаты), повторный DELETE после этого безопасен.
+            await ctx.alert_once(
+                f"astra_reconcile:{srv.astra_id}",
+                f"⚠️ Astra не даёт удалить сервер «{srv.name}» (#{srv.astra_id}) клиента {tg_id}: "
+                f"возврат за неиспользованные дни требует сверки оплат (refund_requires_reconciliation).\n\n"
+                f"Сервер не удалён, деньги не списаны и не возвращены. Напишите в поддержку Astra (@astravpsbot) "
+                f"с номером сервера #{srv.astra_id} и данными оплаты — после сверки клиент сможет удалить сервер сам.",
+                every_s=86400,
+            )
+            raise UserError(
+                "Сейчас сервер удалить не получилось: провайдеру нужно сверить оплату для возврата. "
+                "Сервер продолжает работать, деньги не списаны. Мы уже разбираемся — попробуйте удалить позже "
+                "или напишите в поддержку."
+            ) from ex
         raise UserError(f"Не удалось удалить сервер ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")

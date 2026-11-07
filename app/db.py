@@ -160,6 +160,9 @@ class Server(Base):
     mon_fail: Mapped[int] = mapped_column(Integer, default=0)
     mon_down_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     mon_quiet_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # идёт переустановка системы: когда запустили и на какую ОС (сбрасывается, когда сервер снова готов)
+    reinstall_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    reinstall_os: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # себестоимость, о которой уже предупредили (сторож маржи не повторяет алерт)
     margin_alert_cost: Mapped[int] = mapped_column(Integer, default=0)
 

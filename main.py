@@ -65,6 +65,8 @@ async def main() -> None:
 
     server = uvicorn.Server(uvicorn.Config(build_app(ctx), host=e.web_host, port=e.web_port, log_level="info"))
     workers = start_workers(ctx)
+    from app.services import resume_reinstall_watch
+    await resume_reinstall_watch(ctx)
     web = asyncio.create_task(server.serve(), name="web")
     asyncio.create_task(_announce(ctx), name="announce")
     try:
