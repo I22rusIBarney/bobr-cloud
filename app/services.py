@@ -854,8 +854,6 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         cfg = await load_settings(s)
         if srv.status not in ("active", "suspended"):
             raise UserError("Сервер сейчас недоступен для этого действия.")
-        if reinstalling(srv) and action != "vnc":
-            raise UserError("Идёт переустановка системы. Дождитесь окончания — пришлём сообщение, когда сервер будет готов.")
         if action == "reinstall" and body and not os_fits(cfg, body.get("os", ""), srv.cpu, srv.ram, srv.disk):
             raise UserError(os_req_text(body["os"], os_requirement(cfg, body["os"])) + " Сначала увеличьте мощность сервера.")
         charge = 0
