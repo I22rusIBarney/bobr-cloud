@@ -1040,6 +1040,22 @@ async def cancel_server(ctx: Ctx, tg_id: int, server_id: int, refund: bool = Tru
     try:
         await ctx.astra.delete(srv.astra_id)
     except AstraError as ex:
+        if ex.code == "refund_requires_reconciliation":
+            # Astra не может сама подтвердить оплаченные периоды для возврата: ни удаления, ни возврата не было.
+            # Решается через поддержку Astra (нужны данные оплаты), повторный DELETE после этого безопасен.
+            await ctx.alert_once(
+                f"astra_reconcile:{srv.astra_id}",
+                f"⚠️ Astra не даёт удалить сервер «{srv.name}» (#{srv.astra_id}) клиента {tg_id}: "
+                f"возврат за неиспользованные дни требует сверки оплат (refund_requires_reconciliation).\n\n"
+                f"Сервер не удалён, деньги не списаны и не возвращены. Напишите в поддержку Astra (@astravpsbot) "
+                f"с номером сервера #{srv.astra_id} и данными оплаты — после сверки клиент сможет удалить сервер сам.",
+                every_s=86400,
+            )
+            raise UserError(
+                "Сейчас сервер удалить не получилось: провайдеру нужно сверить оплату для возврата. "
+                "Сервер продолжает работать, деньги не списаны. Мы уже разбираемся — попробуйте удалить позже "
+                "или напишите в поддержку."
+            ) from ex
         raise UserError(f"Не удалось удалить сервер ({ex.code or ex.status}).") from ex
     except AstraUncertain as ex:
         await ctx.alert_admin(f"⚠️ Неизвестный итог удаления #{srv.astra_id} (таймаут).")
