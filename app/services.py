@@ -872,12 +872,13 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
             charge = change_ip_price_kop(cfg, payer)
             if not await change_balance(s, tg_id, -charge, "change_ip", str(srv.astra_id)):
                 raise UserError(f"Для смены IP нужно {fmt_rub(charge)} на балансе.")
-        prev_reinstall = (srv.reinstall_at, srv.reinstall_os)
+        prev_reinstall = (srv.reinstall_at, srv.reinstall_os, srv.reinstalled_at)
         # новая отметка, только если переустановка ещё не идёт — иначе за ней уже следят
         fresh_reinstall = action == "reinstall" and not reinstalling(srv)
         if fresh_reinstall:
             # отметку ставим до запроса: Astra отвечает на переустановку до двух минут, статус нужен сразу
             srv.reinstall_at, srv.reinstall_os = utcnow(), (body or {}).get("os") or srv.os
+            srv.reinstalled_at = srv.reinstall_at
             await s.commit()
     try:
         resp = await ctx.astra.action(srv.astra_id, action, body)
@@ -887,7 +888,7 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
         if action == "reinstall":  # Astra отказала — возвращаем прежнее состояние (могла идти предыдущая переустановка)
             async with session() as s:
                 row = await s.get(Server, server_id)
-                row.reinstall_at, row.reinstall_os = prev_reinstall
+                row.reinstall_at, row.reinstall_os, row.reinstalled_at = prev_reinstall
                 await s.commit()
         if ex.code == "operation_in_progress":
             raise UserError("На сервере ещё идёт предыдущая операция. Подождите пару минут и попробуйте снова.") from ex

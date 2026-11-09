@@ -168,6 +168,10 @@ class Server(Base):
     # отметка Bobr Nodes: сервер — часть моста (entry — вход моста, exit — выход) и с чем он связан
     bridge_role: Mapped[str] = mapped_column(String(8), default="")
     bridge_peer: Mapped[str] = mapped_column(String(120), default="")
+    # id связанных по мосту серверов этого же аккаунта через запятую — чтобы в кабинете вход стоял рядом с выходом
+    bridge_link: Mapped[str] = mapped_column(String(200), default="")
+    # когда систему последний раз переустанавливали (не сбрасывается) — Bobr Nodes по нему понимает, что нод на сервере больше нет
+    reinstalled_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
 
 class LocationWatch(Base):
