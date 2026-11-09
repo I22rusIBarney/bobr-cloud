@@ -169,6 +169,7 @@ async def main():
         res = await asyncio.wait_for(t, 2)
         async with D.session() as s: rs = await s.get(D.Server, srv.id)
         ok(res == "done" and rs.reinstall_at is None and rs.root_password == "NewPw123" and any(u == 51 and "Переустановка завершена" in t_ for u, t_ in msgs), "переустановка закончилась — клиент уведомлён")
+        ok(rs.reinstalled_at is not None, "время переустановки остаётся и после её окончания (для Bobr Nodes)")
         astra.server = orig_srv
         r = await c.post(f"/api/me/servers/{srv.id}/code", headers=A, json={"action": "reinstall"})
         ok(r.status_code == 400, "код для переустановки больше не запрашивается")

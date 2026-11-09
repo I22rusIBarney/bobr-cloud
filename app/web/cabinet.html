@@ -380,6 +380,23 @@ function leftText(left) {
 }
 // мост из Bobr Nodes: вход (клиенты подключаются к нему) или выход (через него трафик идёт в интернет)
 const BRIDGE_T = { entry: ['↳ вход моста →', 'Вход моста'], exit: ['выход моста ←', 'Выход моста'] };
+// связанные мостом серверы — подряд: сначала выход, за ним его входы; место группы — где встретился её первый сервер
+function bridgeOrder(list) {
+  const by = new Map(list.map(s => [s.id, s])), done = new Set(), out = [];
+  list.forEach(s => {
+    if (done.has(s.id)) return;
+    const group = [], q = [s];
+    while (q.length) {
+      const x = q.shift();
+      if (done.has(x.id)) continue;
+      done.add(x.id); group.push(x);
+      ((x.bridge && x.bridge.link) || []).forEach(id => { if (by.has(id) && !done.has(id)) q.push(by.get(id)); });
+    }
+    const rank = x => (x.bridge && x.bridge.role === 'exit' ? 0 : 1);
+    out.push(...group.map((x, i) => [x, i]).sort((a, b) => rank(a[0]) - rank(b[0]) || list.indexOf(a[0]) - list.indexOf(b[0])).map(a => a[0]));
+  });
+  return out;
+}
 const bridgeLine = s => { const b = s.bridge, t = b && BRIDGE_T[b.role]; return t ? h('div', { class: 'bridge-line' }, t[0] + (b.peer ? ' ' + b.peer : '')) : null; };
 const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text);
 
@@ -406,7 +423,7 @@ function serversView() {
       h('button', { class: 'btn', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Собрать сервер')));
     return wrap;
   }
-  D.servers.forEach(s => {
+  bridgeOrder(D.servers).forEach(s => {
     const st = s.reinstalling ? { t: 'Переустановка', c: 'warn' } : s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
     // остаток считаем от точной даты окончания: полные дни, а в последние сутки — часы
     const left = s.expires_at ? (new Date(s.expires_at) - Date.now()) / 864e5 : null;

@@ -48,6 +48,7 @@ class SvcBridgeIn(BaseModel):
     tg_id: int
     role: str = ""      # entry | exit | "" — снять отметку
     peer: str = ""      # с чем связан: для входа — нода-выход, для выхода — входы
+    link: list[int] = []  # id связанных серверов этого же аккаунта: в кабинете они стоят рядом
 
 
 class SvcOwnerIn(BaseModel):
@@ -302,11 +303,12 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
             raise HTTPException(400, "role: entry, exit или пусто")
         await owned(server_id, p.tg_id)
         role, peer = p.role, (p.peer.strip()[:120] if p.role else "")
+        link = ",".join(str(int(x)) for x in p.link[:20] if int(x) != server_id)[:200] if p.role else ""
         async with session() as s:
             srv = await s.get(Server, server_id)
-            srv.bridge_role, srv.bridge_peer = role, peer
+            srv.bridge_role, srv.bridge_peer, srv.bridge_link = role, peer, link
             await s.commit()
-        return {"id": server_id, "bridge_role": role, "bridge_peer": peer}
+        return {"id": server_id, "bridge_role": role, "bridge_peer": peer, "bridge_link": _ids(link)}
 
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
@@ -322,4 +324,9 @@ def _view(srv: Server) -> dict:
     return {"id": srv.id, "name": srv.name, "status": srv.status, "ip": srv.ip, "root_password": srv.root_password,
             "location": srv.location, "cpu": srv.cpu, "ram": srv.ram, "disk": srv.disk, "os": srv.os,
             "price_kop": srv.price_kop, "expires_at": srv.expires_at.isoformat() if srv.expires_at else None,
-            "auto_renew": bool(srv.auto_renew), "bridge_role": srv.bridge_role or "", "bridge_peer": srv.bridge_peer or ""}
+            "auto_renew": bool(srv.auto_renew), "bridge_role": srv.bridge_role or "", "bridge_peer": srv.bridge_peer or "",
+            "bridge_link": _ids(srv.bridge_link), "reinstalled_at": srv.reinstalled_at.isoformat() if srv.reinstalled_at else None}
+
+
+def _ids(s: str | None) -> list[int]:
+    return [int(x) for x in (s or "").split(",") if x.strip().isdigit()]
