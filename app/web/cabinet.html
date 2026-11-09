@@ -99,6 +99,8 @@
   .server-card .flag-tile { width: 40px; height: 40px; font-size: 24px; border-radius: 13px; }
   .server-card .name { font-weight: 600; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .server-card .ip { font: 13px/1.4 var(--mono); color: var(--hint); }
+  .server-card .bridge-line { font: 13px/1.4 var(--mono); color: var(--hint); opacity: .85; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bridge-mark { color: var(--hint); font-weight: 400; }
   .specs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 12px; }
   .spec-chip { font-size: 12px; font-weight: 600; color: #B7BDC8; background: var(--surface-2); padding: 5px 9px; border-radius: 8px; display: inline-flex; gap: 5px; align-items: center; }
   .spec-chip svg { width: 13px; height: 13px; color: var(--hint); }
@@ -376,6 +378,9 @@ function leftText(left) {
   const hrs = Math.floor(left * 24);
   return hrs >= 1 ? `Осталось ${hrs} ${UI.plural(hrs, 'час', 'часа', 'часов')}` : 'Меньше часа';
 }
+// мост из Bobr Nodes: вход (клиенты подключаются к нему) или выход (через него трафик идёт в интернет)
+const BRIDGE_T = { entry: ['↳ вход моста →', 'Вход моста'], exit: ['выход моста ←', 'Выход моста'] };
+const bridgeLine = s => { const b = s.bridge, t = b && BRIDGE_T[b.role]; return t ? h('div', { class: 'bridge-line' }, t[0] + (b.peer ? ' ' + b.peer : '')) : null; };
 const specChip = (ic, text) => h('span', { class: 'spec-chip' }, icon(ic), text);
 
 function root() {
@@ -410,7 +415,8 @@ function serversView() {
     const bar = left == null ? '' : left < 3 ? 'bad' : left < 7 ? 'warn' : '';
     wrap.append(h('button', { class: 'server-card', type: 'button', 'aria-label': s.name, onclick: () => UI.nav.push(() => serverView(s.id)) },
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
-        h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name), h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—'))),
+        h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name, s.bridge ? h('span', { class: 'bridge-mark', title: 'Мост Bobr Nodes' }, ' ⇄') : null),
+          h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—')), bridgeLine(s)),
         h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
       h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.speed ? specChip('globe', s.speed) : null,
         s.role === 'member' ? specChip('users', 'Общий доступ')
@@ -453,7 +459,9 @@ function serverView(id) {
   const v = h('div', {},
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
-      h('div', {}, h('h1', {}, s.name), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
+      h('div', {}, h('h1', {}, s.name, s.bridge ? h('span', { class: 'bridge-mark' }, ' ⇄') : null), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
+  if (s.bridge && BRIDGE_T[s.bridge.role]) v.append(group(null, [row({ icon: 'globe', tile: '#5E5CE6', title: BRIDGE_T[s.bridge.role][1] + (s.bridge.peer ? ': ' + s.bridge.peer : ''), cls: 'wrap',
+    sub: s.bridge.role === 'entry' ? 'Отмечен в Bobr Nodes: клиенты подключаются сюда, а в интернет выходят через ноду-выход.' : 'Отмечен в Bobr Nodes: через эту ноду мост выводит трафик в интернет.' })]));
 
   if (s.reinstalling) v.append(group(null, [row({ icon: 'disc', tile: '#FF9500', title: 'Идёт переустановка' + (s.reinstall_os_label ? ' на ' + s.reinstall_os_label : ''), cls: 'wrap',
     sub: 'Обычно 3–10 минут. Когда сервер будет готов, в чат придёт сообщение, а новый пароль появится здесь.' })]));

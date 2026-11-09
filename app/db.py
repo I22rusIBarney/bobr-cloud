@@ -165,6 +165,9 @@ class Server(Base):
     reinstall_os: Mapped[str | None] = mapped_column(String(32), nullable=True)
     # себестоимость, о которой уже предупредили (сторож маржи не повторяет алерт)
     margin_alert_cost: Mapped[int] = mapped_column(Integer, default=0)
+    # отметка Bobr Nodes: сервер — часть моста (entry — вход моста, exit — выход) и с чем он связан
+    bridge_role: Mapped[str] = mapped_column(String(8), default="")
+    bridge_peer: Mapped[str] = mapped_column(String(120), default="")
 
 
 class LocationWatch(Base):
