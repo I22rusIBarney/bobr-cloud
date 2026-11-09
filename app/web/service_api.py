@@ -44,6 +44,12 @@ class SvcRenameIn(BaseModel):
     name: str
 
 
+class SvcBridgeIn(BaseModel):
+    tg_id: int
+    role: str = ""      # entry | exit | "" — снять отметку
+    peer: str = ""      # с чем связан: для входа — нода-выход, для выхода — входы
+
+
 class SvcOwnerIn(BaseModel):
     tg_id: int
 
@@ -289,6 +295,19 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
         await serverlog.add(server_id, p.tg_id, "autorenew_on" if p.value else "autorenew_off")
         return {"id": server_id, "auto_renew": p.value}
 
+    @r.post("/servers/{server_id}/bridge")
+    async def bridge(server_id: int, p: SvcBridgeIn, _: None = Depends(auth)):
+        """Отметка от Bobr Nodes: сервер — вход или выход моста. В кабинете он помечен, как в Bobr Nodes."""
+        if p.role not in ("", "entry", "exit"):
+            raise HTTPException(400, "role: entry, exit или пусто")
+        await owned(server_id, p.tg_id)
+        role, peer = p.role, (p.peer.strip()[:120] if p.role else "")
+        async with session() as s:
+            srv = await s.get(Server, server_id)
+            srv.bridge_role, srv.bridge_peer = role, peer
+            await s.commit()
+        return {"id": server_id, "bridge_role": role, "bridge_peer": peer}
+
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
         try:
@@ -303,4 +322,4 @@ def _view(srv: Server) -> dict:
     return {"id": srv.id, "name": srv.name, "status": srv.status, "ip": srv.ip, "root_password": srv.root_password,
             "location": srv.location, "cpu": srv.cpu, "ram": srv.ram, "disk": srv.disk, "os": srv.os,
             "price_kop": srv.price_kop, "expires_at": srv.expires_at.isoformat() if srv.expires_at else None,
-            "auto_renew": bool(srv.auto_renew)}
+            "auto_renew": bool(srv.auto_renew), "bridge_role": srv.bridge_role or "", "bridge_peer": srv.bridge_peer or ""}

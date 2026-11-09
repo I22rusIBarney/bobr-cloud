@@ -55,6 +55,7 @@ def server_dict(srv: Server, refund_pct: float, speed: str = "") -> dict:
         "days_left": None if left is None else round(left, 1),
         "price_rub": srv.price_kop / 100,
         "auto_renew": srv.auto_renew,
+        "bridge": {"role": srv.bridge_role, "peer": srv.bridge_peer} if srv.bridge_role else None,
         "refund_rub": svc.refund_amount(svc.paid_base(srv), srv.expires_at, refund_pct, svc.paid_months(srv)) / 100,
     }
 
