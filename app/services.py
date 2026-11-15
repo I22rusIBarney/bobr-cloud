@@ -980,7 +980,7 @@ async def rename_server(ctx: Ctx, tg_id: int, server_id: int, name: str) -> str:
 
 
 async def server_live(ctx: Ctx, tg_id: int, server_id: int) -> dict:
-    """Актуальное состояние из Astra: питание (running/stopped) и готовый текст подключения."""
+    """Актуальное состояние из Astra: питание (running/stopped), идущая операция и готовый текст подключения."""
     async with session() as s:
         srv, _ = await get_server_access(s, tg_id, server_id)
     try:
@@ -991,7 +991,8 @@ async def server_live(ctx: Ctx, tg_id: int, server_id: int) -> dict:
         row = await s.get(Server, server_id)
         _apply_remote(row, r)
         await s.commit()
-    return {"power_status": r.get("power_status"), "conn_info": r.get("conn_info")}
+    # operation_status — идёт ли у Astra операция (перезагрузка, смена IP…): кабинет показывает «Выполняется операция»
+    return {"power_status": r.get("power_status"), "operation_status": r.get("operation_status"), "conn_info": r.get("conn_info")}
 
 
 # ───────────────────────── апгрейд CPU/RAM ─────────────────────────
