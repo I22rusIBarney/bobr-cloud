@@ -38,6 +38,19 @@
       } catch (e) {}
     },
     initData() { return tg ? tg.initData : ''; },
+    // две колонки на широком экране: шапка страницы остаётся сверху, блоки до rightStart — слева, с него — справа.
+    // На телефоне колонки идут друг за другом — порядок блоков тот же. pad — справа сверху заголовок, а слева нет
+    twoCols(v, rightStart, pad) {
+      const head = ['nav', 'hero', 'title-row', 'large-title', 'user-card', 'topbar', 'subtitle'];
+      const kids = [...v.children];
+      const i = kids.findIndex(e => !head.some(c => e.classList.contains(c)));
+      const j = kids.indexOf(rightStart);
+      if (i < 0 || j <= i) return v;
+      v.append(UI.h('div', { class: 'pcols' + (pad ? ' pad' : '') }, UI.h('div', { class: 'pcol' }, kids.slice(i, j)), UI.h('div', { class: 'pcol' }, kids.slice(j))));
+      return v;
+    },
+    // блок страницы по заголовку раздела («Управление», «Настройки»)
+    byTitle(v, title) { return [...v.children].find(e => { const g = e.querySelector(':scope > .group-h'); return g && g.textContent === title; }); },
 
     api(base) {
       return async function (path, method = 'GET', body) {

@@ -635,7 +635,7 @@ function serverView(id) {
     await refresh();
   };
   const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
-  const v = h('div', { class: 'wide-cols' },
+  const v = h('div', {},
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
       h('div', {}, h('h1', {}, s.name, s.bridge ? h('span', { class: 'bridge-mark' }, ' ⇄') : null), statusBadge(st))));
@@ -757,7 +757,7 @@ function serverView(id) {
     UI.toast('Сервер удалён, вернули ' + rub(r.refund_rub));
     await load(); UI.nav.back();
   } })], `Вернём ${rub(s.refund_rub)} за неиспользованные дни.`));
-  return v;
+  return UI.twoCols(v, UI.byTitle(v, 'Управление'));
 }
 
 /* Опасное действие с кодом из бота (если включено в админке): fn(code) → Promise. */
@@ -1510,7 +1510,7 @@ function ticketView(id) {
 let lastBal = null;
 function profileView() {
   const u = D.user;
-  const wrap = h('div', { class: 'wide-cols' },
+  const wrap = h('div', {},
     h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Профиль'), h('div', { style: 'margin-bottom:16px' }, adminBtn())),
     h('div', { class: 'user-card' }, UI.avatar(u, 56, myAvatarSrc),
       h('div', { class: 'who' }, h('b', {}, displayName(u)),
@@ -1667,7 +1667,7 @@ function profileView() {
         if (!ok) return;
         if (await UI.run(() => api('/methods/' + m.id, 'DELETE'), 'Карта удалена') !== undefined) await refresh();
       } }, 'Удалить'),
-    })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет привязанных способов', sub: D.autopay.available ? 'Отметьте привязку для автоплатежей при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
+    })) : [row({ icon: 'card', tile: '#A3A8B4', title: 'Нет привязанных способов', cls: 'wrap', sub: D.autopay.available ? 'Отметьте привязку для автоплатежей при пополнении.' : 'Сохранение карт появится вместе с автоплатежами.' })];
     if (ms.length > 1) rows.push(row({ icon: 'trash', tile: '#FF6B6B', title: 'Удалить все способы оплаты', cls: 'destructive', onClick: async () => {
       const ok = await UI.ask({ title: 'Удалить все способы оплаты?', message: ms.length ? 'Все сохранённые карты будут отвязаны, автоплатежи выключатся.' : 'Сохранённых способов оплаты сейчас нет. Отвязать всё равно?', buttons: [{ id: 'y', text: 'Удалить все', type: 'destructive' }] });
       if (!ok) return;
@@ -1679,7 +1679,7 @@ function profileView() {
     const status = h('span', { class: 'badge ' + (D.autopay.enabled ? 'ok' : '') });
     const paintStatus = () => { status.className = 'badge ' + (D.autopay.enabled ? (ms.length ? 'ok' : 'warn') : ''); status.textContent = D.autopay.enabled ? (ms.length ? 'Включён' : 'Нет способа') : 'Выключен'; };
     paintStatus();
-    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', sub: ms.length ? methodName(ms[0]) : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
+    const auto = row({ icon: 'bolt', tile: '#34D399', title: 'Автоплатёж', cls: 'wrap', sub: ms.length ? methodName(ms[0]) : 'Когда не хватает на продление', right: h('span', { style: 'display:flex;align-items:center;gap:10px' }, status, UI.toggle(D.autopay.enabled, async (val, inp) => {
       const r = await UI.run(() => api('/autopay', 'POST', { value: val }), val ? 'Автоплатёж включён' : 'Автоплатёж выключен');
       if (r === undefined) { inp.checked = !val; return; }
       D.autopay.enabled = r.enabled; paintStatus();
@@ -1710,7 +1710,7 @@ function profileView() {
     }, 'Новости и акции') }),
     row({ icon: 'doc', tile: '#A3A8B4', title: 'Документы', sub: 'Оферта, правила, конфиденциальность', onClick: () => UI.nav.push(documentsView) }),
   ], `Клиент с ${UI.date(u.since).split(',')[0]}.`));
-  return wrap;
+  return UI.twoCols(wrap, methodsBox, true);
 }
 
 /* Карточка реферальной программы в профиле. */

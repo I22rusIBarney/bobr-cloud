@@ -480,11 +480,12 @@ html.has-bg body::before { display: none; }
 .btn[disabled] { box-shadow: none; }
 .btn:active { transform: scale(.98); }
 
-/* ── Широкий экран (Telegram Desktop во весь экран, браузер): шире колонка, страницы-списки — в две колонки ── */
+/* ── Широкий экран (Telegram Desktop во весь экран, браузер): шире колонка, длинные страницы — в две колонки ──
+   Что слева, что справа, задаёт сама страница (UI.twoCols): CSS-колонки раскладывали блоки как попало и с анимацией рисовались с артефактами */
 @media (min-width: 900px) {
   body > #root { max-width: 760px; }
-  body > #root:has(.wide-cols, .server-grid) { max-width: 1160px; }
-  .wide-cols { column-count: 2; column-gap: 8px; }
-  .wide-cols > * { break-inside: avoid; }
-  .wide-cols > :is(.nav, .topbar, .title-row, .large-title, .subtitle, .announce, .down-alert, .hero, .user-card) { column-span: all; }
+  body > #root:has(.pcols, .server-grid) { max-width: 1160px; }
+  .pcols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; }
+  .pcols.pad > .pcol:first-child { padding-top: 25px; } /* справа сверху заголовок раздела — верх карточек на одной линии */
+  .pcols .amount-chips { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); overflow: visible; }
 }
