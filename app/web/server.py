@@ -144,6 +144,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
     app = FastAPI(title="vpsbot", docs_url=None, redoc_url=None, openapi_url=None)
     from ..audit import AuditMiddleware
     app.add_middleware(AuditMiddleware)  # журнал действий админов — сам, по успешным изменяющим запросам
+    from starlette.middleware.gzip import GZipMiddleware
+    # бот стоит далеко от клиентов (США ↔ Россия): страницы и JSON сжимаем — кабинет 156 КБ → ~41 КБ
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -228,14 +231,39 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
     # ───── общие стили и скрипты Mini App ─────
 
     STATIC = {"ui.css": "text/css; charset=utf-8", "ui.js": "application/javascript; charset=utf-8", "fx.js": "application/javascript; charset=utf-8",
+              # шрифт Golos со своего сервера (OFL): без Google Fonts — на два сервера и одну задержку отрисовки меньше
+              "golos-cyr.woff2": "font/woff2", "golos-lat.woff2": "font/woff2", "golos-latext.woff2": "font/woff2",
               # флаги-эмодзи для Windows и Linux, где их нет в системе (Twemoji, CC-BY 4.0)
               "TwemojiCountryFlags.woff2": "font/woff2"}
 
     @app.get("/static/{name}")
-    async def static_file(name: str):
+    async def static_file(name: str, v: str | None = None):
         if name not in STATIC:
             raise HTTPException(404)
-        return FileResponse(HERE / "static" / name, media_type=STATIC[name], headers={"Cache-Control": "no-cache"})
+        # с меткой версии (?v=) и шрифты — навсегда: новый файл получает новый адрес. shortcut: шрифты без метки —
+        # заменяя шрифт, давать файлу новое имя
+        forever = v or name.endswith(".woff2")
+        return FileResponse(HERE / "static" / name, media_type=STATIC[name],
+                            headers={"Cache-Control": "public, max-age=31536000, immutable" if forever else "no-cache"})
+
+    _pages: dict[str, tuple] = {}
+
+    def page(name: str) -> str:
+        """HTML кабинета/админки с метками версий у статики (/static/ui.css?v=…): браузер держит файлы, пока они не изменятся."""
+        import hashlib
+        files = [HERE / name] + [HERE / "static" / n for n in STATIC]
+        key = tuple(f.stat().st_mtime_ns for f in files)
+        hit = _pages.get(name)
+        if hit and hit[0] == key:
+            return hit[1]
+        html_ = (HERE / name).read_text(encoding="utf-8")
+        for n in STATIC:
+            if n.endswith(".woff2"):  # шрифты и так навсегда; ui.css зовёт их без метки — адрес должен совпасть с предзагрузкой
+                continue
+            ver = hashlib.md5((HERE / "static" / n).read_bytes()).hexdigest()[:10]
+            html_ = html_.replace(f'"/static/{n}"', f'"/static/{n}?v={ver}"')
+        _pages[name] = (key, html_)
+        return html_
 
     # ───── кабинет клиента ─────
 
@@ -249,9 +277,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     app.include_router(build_service_router(ctx))
 
-    @app.get("/app", response_class=FileResponse)
+    @app.get("/app", response_class=HTMLResponse)
     async def cabinet_page():
-        return FileResponse(HERE / "cabinet.html", headers={"Cache-Control": "no-store"})
+        return HTMLResponse(page("cabinet.html"), headers={"Cache-Control": "no-store"})
 
     # ───── проверка прав админа (должна быть объявлена до эндпоинтов, которые её используют) ─────
 
@@ -510,9 +538,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     # ───── админка ─────
 
-    @app.get("/admin", response_class=FileResponse)
+    @app.get("/admin", response_class=HTMLResponse)
     async def admin_page():
-        return FileResponse(HERE / "admin.html", headers={"Cache-Control": "no-store"})
+        return HTMLResponse(page("admin.html"), headers={"Cache-Control": "no-store"})
 
     @app.get("/api/admin/analytics")
     async def analytics_view(_: dict = Depends(admin)):

@@ -6,8 +6,7 @@
 <title>Cloud</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
+<link rel="preload" href="/static/golos-cyr.woff2" as="font" type="font/woff2" crossorigin>
 <style>
   :root { --tabbar-h: 60px; }
   .tabbar { height: calc(var(--tabbar-h) + var(--sab)); }
@@ -307,6 +306,8 @@
 
   .down-alert.fup { background: var(--warn-soft); }
   .down-alert.fup b { color: var(--warn); }
+  /* данные из кэша, свежие ещё грузятся: суммы чуть приглушены */
+  html.stale .bal-hero .amt, html.stale .hero-card .big { opacity: .55; transition: opacity .4s var(--ease-soft); }
   /* идёт действие: колечко вместо точки */
   .badge .spin { width: 10px; height: 10px; flex: none; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -399,9 +400,29 @@ function appearanceView() {
 }
 
 // ───────── загрузка ─────────
+// кэш на устройстве: при открытии сразу показываем прошлые данные (свой аккаунт, не старше суток), свежие — следом.
+// Пароли серверов в кэш не пишем
+const CACHE_KEY = 'bc_cache';
+const myId = () => { try { return UI.tg.initDataUnsafe.user.id; } catch (e) { return null; } };
+function readCache() {
+  try {
+    const c = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
+    return c && c.uid && c.uid === myId() && Date.now() - c.at < 864e5 ? c.d : null;
+  } catch (e) { return null; }
+}
+function saveCache(d) {
+  try {
+    const copy = JSON.parse(JSON.stringify(d));
+    (copy.servers || []).forEach(s => { delete s.password; });
+    if (myId()) localStorage.setItem(CACHE_KEY, JSON.stringify({ uid: myId(), at: Date.now(), d: copy }));
+  } catch (e) {}
+}
+
 async function load() {
   const first = !D;
   D = await api('');
+  saveCache(D);
+  document.documentElement.classList.remove('stale');
   if (D.is_admin === undefined) D.is_admin = false;
   if (D.service_name) document.title = D.service_name;
   renderTabbar();
@@ -1901,10 +1922,13 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && D)
 setInterval(() => { if (D && !document.hidden && !D.consent.needed && D.servers.some(s => s.status === 'provisioning') && tab === 'servers') refresh(); }, 10000);
 
 (async () => {
+  const cached = readCache();
+  if (cached) { D = cached; document.documentElement.classList.add('stale'); applyTheme(); }
   renderTabbar();
   UI.nav.mount(document.getElementById('root'), root);
   try { await load(); }
   catch (e) {
+    if (cached) { UI.toast('Нет связи — показаны данные из прошлого открытия', true); return; }
     document.body.classList.add('hidden-tabbar');  // разделы без данных не откроются — навигация только мешает
     document.getElementById('root').replaceChildren(h('div', { class: 'empty' }, icon('alert'), h('b', {}, 'Не удалось открыть кабинет'), e.message,
       UI.initData() ? h('button', { class: 'btn', type: 'button', onclick: () => location.reload() }, 'Повторить') : null));

@@ -57,12 +57,29 @@ class Ctx:
     # рассылка одного сообщения: (tg_id, text, buttons) → ok | blocked | error
     send_broadcast: Callable[[int, str, list], Awaitable[str]] | None = None
     _catalog: tuple[float, dict] | None = None
+    _catalog_task: Any = None
     _alert_ts: dict[str, float] = field(default_factory=dict)
 
     async def catalog(self, fresh: bool = False) -> dict:
-        if not fresh and self._catalog and time.time() - self._catalog[0] < 60:
+        """Каталог Astra: моложе минуты — из памяти; до 10 минут — тоже сразу, а свежий подтягивается в фоне
+        (кабинет не ждёт ответа Astra); покупка берёт fresh=True — цены и наличие только свежие."""
+        age = time.time() - self._catalog[0] if self._catalog else None
+        if not fresh and age is not None and age < 60:
             return self._catalog[1]
-        data = _normalize_catalog(await self.astra.catalog())
+        if not fresh and age is not None and age < 600:
+            if not self._catalog_task or self._catalog_task.done():
+                self._catalog_task = asyncio.get_running_loop().create_task(self._refresh_catalog(quiet=True))
+            return self._catalog[1]
+        return await self._refresh_catalog()
+
+    async def _refresh_catalog(self, quiet: bool = False) -> dict | None:
+        try:
+            data = _normalize_catalog(await self.astra.catalog())
+        except Exception:
+            if not quiet:
+                raise
+            log.warning("фоновое обновление каталога не удалось", exc_info=True)  # останется прежний — попробуем позже
+            return None
         self._catalog = (time.time(), data)
         return data
 
