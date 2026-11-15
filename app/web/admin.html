@@ -182,7 +182,8 @@ function astraHookView() {
   const box = h('div', {}, group(null, [h('div', { class: 'skeleton' })]));
   const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Уведомления от Astra'), box);
   const when = e => e.occurred_at || e.created_at || e.delivered_at || e.at;
-  const paint = st => box.replaceChildren(
+  // replaceChildren пишет null как текст «null» — пустые блоки отбрасываем
+  const paint = st => box.replaceChildren(...[
     group(null, [
       row({ title: 'Состояние', chevron: false, right: h('span', { class: 'badge ' + (st.connected ? 'ok' : '') }, st.connected ? 'Включены' : 'Выключены') }),
       row({ title: 'Адрес для Astra', cls: 'wrap', chevron: false, sub: st.url }),
@@ -193,7 +194,7 @@ function astraHookView() {
       st.connected ? 'Повторное включение выдаст новый ключ подписи — старый перестанет действовать.' : null),
     st.events && st.events.length ? group('Последние события', st.events.slice(0, 10).map(e => row({ chevron: false, cls: 'wrap',
       title: e.type || e.event || 'событие', sub: [e.service_id ? 'сервер #' + e.service_id : '', e.status || e.delivery_status || '', when(e) ? UI.date(when(e)) : ''].filter(Boolean).join(' · ') }))) : null,
-    st.error ? h('div', { class: 'group-f', style: 'margin:0 var(--gutter) 22px' }, 'Astra не ответила: ' + st.error) : null);
+    st.error ? h('div', { class: 'group-f', style: 'margin:0 var(--gutter) 22px' }, 'Astra не ответила: ' + st.error) : null].filter(Boolean));
   api('astra-webhook').then(paint).catch(e => box.replaceChildren(group(null, [row({ title: 'Не удалось получить состояние', sub: e.message, chevron: false })])));
   return v;
 }
