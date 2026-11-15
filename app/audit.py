@@ -23,6 +23,8 @@ ROUTES: list[tuple[str, str, str, str]] = [
     ("PUT", r"theme/background", "theme", "Загрузил фон кабинета"),
     ("DELETE", r"theme/background", "theme", "Убрал фон кабинета"),
     ("POST", r"integrations/(?P<name>yookassa|platega|nalog)", "integration", "Подключил {name}"),
+    ("POST", r"astra-webhook", "integration", "Включил уведомления Astra"),
+    ("DELETE", r"astra-webhook", "integration", "Выключил уведомления Astra"),
     ("DELETE", r"integrations/(?P<name>yookassa|platega|nalog)", "integration", "Отключил {name}"),
     ("POST", r"users/(?P<tg>\d+)/balance", "user.balance", "Изменил баланс клиента"),
     ("POST", r"users/(?P<tg>\d+)/ban", "user.ban", "Заблокировал или разблокировал клиента"),

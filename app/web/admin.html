@@ -171,9 +171,31 @@ function rootView() {
   v.append(group('Система', [
     row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
+    row({ icon: 'bolt', tile: '#FF9500', title: 'Уведомления от Astra', sub: 'IP, срок, статус, ограничения — сразу', onClick: () => UI.nav.push(astraHookView) }),
     row({ icon: 'receipt', tile: '#8E8E93', title: 'Журнал действий', sub: 'кто и что менял в админке', onClick: () => UI.nav.push(auditView) }),
     row({ icon: 'sparkle', tile: '#0A84FF', title: 'Версия и обновления', detail: ver.number ? 'v' + ver.number : '', onClick: () => UI.nav.push(updateView) })]));
   return UI.twoCols(v, UI.byTitle(v, 'Настройки'));
+}
+
+// ───────── уведомления от Astra ─────────
+function astraHookView() {
+  const box = h('div', {}, group(null, [h('div', { class: 'skeleton' })]));
+  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Уведомления от Astra'), box);
+  const when = e => e.occurred_at || e.created_at || e.delivered_at || e.at;
+  const paint = st => box.replaceChildren(
+    group(null, [
+      row({ title: 'Состояние', chevron: false, right: h('span', { class: 'badge ' + (st.connected ? 'ok' : '') }, st.connected ? 'Включены' : 'Выключены') }),
+      row({ title: 'Адрес для Astra', cls: 'wrap', chevron: false, sub: st.url }),
+    ], 'Astra сразу сообщает боту о смене IP, срока и статуса сервера, об ограничении скорости (Fair Use) и об ограничении за чужой домен в SNI — клиент получает сообщение в ту же минуту. Без уведомлений бот узнаёт об этом при плановой сверке, с задержкой.'),
+    group(null, [st.connected
+      ? row({ title: 'Выключить уведомления', cls: 'destructive', onClick: async () => { const r = await UI.run(() => api('astra-webhook', 'DELETE'), 'Уведомления выключены'); if (r) paint(r); } })
+      : row({ title: 'Включить уведомления', cls: 'accent', onClick: async () => { const r = await UI.run(() => api('astra-webhook', 'POST'), 'Уведомления включены'); if (r) paint(r); } })],
+      st.connected ? 'Повторное включение выдаст новый ключ подписи — старый перестанет действовать.' : null),
+    st.events && st.events.length ? group('Последние события', st.events.slice(0, 10).map(e => row({ chevron: false, cls: 'wrap',
+      title: e.type || e.event || 'событие', sub: [e.service_id ? 'сервер #' + e.service_id : '', e.status || e.delivery_status || '', when(e) ? UI.date(when(e)) : ''].filter(Boolean).join(' · ') }))) : null,
+    st.error ? h('div', { class: 'group-f', style: 'margin:0 var(--gutter) 22px' }, 'Astra не ответила: ' + st.error) : null);
+  api('astra-webhook').then(paint).catch(e => box.replaceChildren(group(null, [row({ title: 'Не удалось получить состояние', sub: e.message, chevron: false })])));
+  return v;
 }
 
 // ───────── настройки: экраны разделов ─────────

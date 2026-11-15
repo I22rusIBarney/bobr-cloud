@@ -174,6 +174,11 @@ class Server(Base):
     bridge_link: Mapped[str] = mapped_column(String(200), default="")
     # когда систему последний раз переустанавливали (не сбрасывается) — Bobr Nodes по нему понимает, что нод на сервере больше нет
     reinstalled_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # Fair Use у Astra: скорость урезана до fup_mbit до fup_until (None — ограничения нет)
+    fup_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    fup_mbit: Mapped[int] = mapped_column(Integer, default=0)
+    extra_ips: Mapped[str] = mapped_column(String(600), default="")  # JSON-список дополнительных IPv4
+    ipv6: Mapped[str] = mapped_column(String(300), default="")       # подсеть /64 или адреса, как отдаёт Astra
 
 
 class LocationWatch(Base):

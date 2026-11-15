@@ -305,6 +305,8 @@
   .bar.bad i { background: var(--danger); box-shadow: 0 0 12px rgba(255, 107, 107, .75); }
   @keyframes grow { from { transform: scaleX(0); } }
 
+  .down-alert.fup { background: var(--warn-soft); }
+  .down-alert.fup b { color: var(--warn); }
   /* идёт действие: колечко вместо точки */
   .badge .spin { width: 10px; height: 10px; flex: none; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .9s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
@@ -595,6 +597,7 @@ function serversView() {
         ok && owner ? h('div', { class: 'price' }, h('b', {}, rub(s.price_rub)), h('span', {}, 'в месяц'))
           : ok ? null : statusBadge(st)),
       h('div', { class: 'spec-line' }, spec),
+      s.fup ? h('div', { class: 'spec-line', style: 'color:var(--warn);margin-top:4px' }, `Скорость ограничена до ${s.fup.mbit || '—'} Мбит/с до ${shortDate(s.fup.until)}`) : null,
       showTerm ? h('div', { class: 'term' },
         h('div', { class: 'term-row' }, h('span', { class: 'left ' + bar }, leftText(left)),
           h('span', {}, s.auto_renew && owner ? icon('renew') : null, 'до ' + shortDate(s.expires_at))),
@@ -650,9 +653,13 @@ function serverView(id) {
     v.append(group(null, [row({ title: 'Сервер создаётся', sub: 'Обычно это 1–3 минуты. Адрес и пароль появятся здесь и придут в чат.' })]));
     return v;
   }
+  if (s.fup) v.append(h('div', { class: 'down-alert fup', role: 'status' }, h('b', {}, 'Скорость ограничена провайдером'),
+    ` до ${UI.date(s.fup.until)}: канал ${s.fup.mbit || '—'} Мбит/с. Средняя загрузка за несколько часов была выше нормы (Fair Use) — ограничение снимется само.`));
   if (s.down_since) v.append(h('div', { class: 'down-alert', role: 'alert' }, h('b', {}, 'Сервер не отвечает'), ` с ${UI.date(s.down_since)}. Попробуйте перезагрузить его — если не поможет, откройте «Как подключиться» или напишите в поддержку.`));
   v.append(group('Подключение', [
     row({ title: 'IP-адрес', detail: h('span', { class: 'mono' }, s.ip || '—'), right: s.ip ? h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать IP', onclick: () => UI.copy(s.ip, 'IP') }, icon('copy')) : null }),
+    (s.extra_ips || []).length ? row({ title: 'Доп. IPv4', cls: 'wrap', detail: h('span', { class: 'mono' }, s.extra_ips.join(', ')) }) : null,
+    s.ipv6 ? row({ title: 'IPv6', cls: 'wrap', detail: h('span', { class: 'mono', style: 'font-size:13px' }, s.ipv6) }) : null,
     row({ title: 'Пользователь', detail: h('span', { class: 'mono' }, acc.login) }),
     row({ title: 'Пароль', detail: h('span', { class: 'mono' }, pw), right: s.password ? h('span', { style: 'display:flex;gap:10px' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': revealed.has(s.id) ? 'Скрыть пароль' : 'Показать пароль', onclick: () => { revealed.has(s.id) ? revealed.delete(s.id) : revealed.add(s.id); UI.nav.refresh(); } }, icon(revealed.has(s.id) ? 'eyeOff' : 'eye')),

@@ -145,5 +145,19 @@ class Astra:
         kw = {"timeout": httpx.Timeout(120.0, connect=10.0)} if slow else {}
         return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True, **kw, **_idem(key))
 
+    # --- уведомления (вебхуки) ---
+    async def webhook_get(self) -> dict:
+        return await self._req("GET", "/webhook")
+
+    async def webhook_put(self, url: str) -> dict:
+        """Включить уведомления на url. Каждый вызов выдаёт новый секрет подписи — его надо сохранить."""
+        return await self._req("PUT", "/webhook", json={"url": url}, mutating=True)
+
+    async def webhook_delete(self) -> dict:
+        return await self._req("DELETE", "/webhook", mutating=True)
+
+    async def webhook_events(self) -> dict:
+        return await self._req("GET", "/webhook/events")
+
     async def delete(self, sid: int) -> dict:
         return await self._req("DELETE", f"/servers/{sid}", mutating=True)

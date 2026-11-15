@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import json
 import re
 import math
 import logging
@@ -590,7 +591,48 @@ async def refresh_server(ctx: Ctx, astra_id: int) -> None:
         await ctx.notify(failed.tg_id, "❌ <b>Не удалось создать сервер</b>\n\nДеньги уже вернули на баланс. Попробуйте ещё раз или напишите в поддержку.")
 
 
+def ip_list(v) -> list[str]:
+    """Дополнительные IPv4: Astra отдаёт список или строку с JSON-списком."""
+    if isinstance(v, str):
+        try:
+            v = json.loads(v) if v.strip().startswith("[") else [x.strip() for x in v.split(",")]
+        except ValueError:
+            return []
+    if not isinstance(v, list):
+        return []
+    return [str(x.get("ip") if isinstance(x, dict) else x) for x in v if x]
+
+
+def _ipv6_text(v) -> str:
+    """IPv6 сервера одной строкой: подсеть /64 или адреса (формат у Astra бывает разный)."""
+    if not v:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, list):
+        return ", ".join(str(x) for x in v if x)
+    if isinstance(v, dict):
+        if v.get("enabled") is False or v.get("assigned") is False:
+            return ""
+        for k in ("subnet", "prefix", "network", "address"):
+            if v.get(k):
+                return str(v[k])
+        return ", ".join(str(x) for x in (v.get("addresses") or []))
+    return ""
+
+
 def _apply_remote(srv: Server, r: dict) -> None:
+    if "extra_ips" in r:
+        srv.extra_ips = json.dumps(ip_list(r["extra_ips"]))[:600]
+    if "ipv6" in r:
+        srv.ipv6 = _ipv6_text(r["ipv6"])[:300]
+    fup = r.get("fup")
+    if isinstance(fup, dict):  # fup: null — Astra не смогла прочитать состояние, прежнее не трогаем
+        if fup.get("limited"):
+            srv.fup_until = parse_dt(fup.get("until")) or (utcnow() + timedelta(hours=24))
+            srv.fup_mbit = int(fup.get("limit_mbit") or 0)
+        else:
+            srv.fup_until, srv.fup_mbit = None, 0
     if r.get("status"):
         srv.status = r["status"]
     if r.get("ip"):
@@ -612,6 +654,95 @@ def _apply_remote(srv: Server, r: dict) -> None:
         if isinstance(v, (int, float)) and v > 0:
             srv.cost_kop = cost_kop(v)
             break
+
+
+# ───────────────────────── уведомления Astra (вебхуки) ─────────────────────────
+
+MSK = timezone(timedelta(hours=3))  # даты в сообщениях клиентам — по Москве
+WEBHOOK_SKEW = 300  # секунд: событие старше или «из будущего» дальше этого — отклоняем (защита от повтора)
+
+
+def astra_signature_ok(secret: str, ts: str, raw: bytes, sig: str, now: float) -> bool:
+    """X-Astra-Signature: sha256=HMAC-SHA256(secret, timestamp + "." + тело); timestamp — UNIX-секунды попытки."""
+    import hashlib
+    import hmac as _hmac
+    try:
+        t = int(ts)
+    except (TypeError, ValueError):
+        return False
+    if not secret or abs(now - t) > WEBHOOK_SKEW:
+        return False
+    want = "sha256=" + _hmac.new(secret.encode(), f"{t}.".encode() + raw, hashlib.sha256).hexdigest()
+    return _hmac.compare_digest(want, sig or "")
+
+
+def find_secret(resp) -> str:
+    """Секрет подписи из ответа PUT /webhook: имя поля Astra не документирует — ищем ключ со словом secret."""
+    if isinstance(resp, dict):
+        for k, v in resp.items():
+            if "secret" in str(k).lower() and isinstance(v, str) and v:
+                return v
+        for v in resp.values():
+            got = find_secret(v)
+            if got:
+                return got
+    return ""
+
+
+def _hm(dt: datetime | None) -> str:
+    return dt.astimezone(MSK).strftime("%d.%m %H:%M") if dt else ""
+
+
+SNI_TEXT = {
+    "sni.detected": "⚠️ <b>{name}: провайдер нашёл нарушение</b>\n\nVPN на сервере выдаёт себя за чужой сайт (подставляет чужой домен в SNI). Так делать нельзя — сервер могут ограничить. Откройте сервер в кабинете → «Ограничение провайдера».",
+    "sni.suspended": "⛔ <b>{name} ограничен провайдером</b>\n\nVPN на сервере подставлял чужой домен в SNI. В кабинете (сервер → «Ограничение провайдера») можно получить 24 часа на исправление или оспорить.",
+    "sni.grace_started": "⏳ <b>{name}: доступ открыт на исправление</b>\n\nДо {grace} поменяйте в настройках VPN чужой домен на свой и сообщите об этом в кабинете.",
+    "sni.grace_expired": "⛔ <b>{name}: время на исправление вышло</b>\n\nСервер снова ограничен. Напишите в поддержку, если нужна помощь.",
+    "sni.resolved": "✅ <b>{name}: ограничение снято</b>\n\nПровайдер подтвердил исправление.",
+}
+
+
+async def astra_event(ctx: Ctx, ev: dict) -> str:
+    """Событие от Astra. Сервер перечитываем целиком (повторная доставка и порядок событий ничего не ломают),
+    клиенту пишем только о реальных изменениях: новый IP, ограничение скорости, ограничение за SNI."""
+    t, eid, sid = str(ev.get("type") or ""), str(ev.get("id") or ""), ev.get("service_id")
+    if t == "webhook.test":
+        return "test"
+    seen = await _setting_json("astra_wh_seen", [])
+    if eid and eid in seen:
+        return "dup"
+    if eid:
+        await _setting_put("astra_wh_seen", (seen + [eid])[-300:])
+    if not sid:
+        return "skip"
+    async with session() as s:
+        srv = (await s.execute(select(Server).where(Server.astra_id == int(sid)))).scalar_one_or_none()
+        if srv is None or srv.status == "deleted":
+            return "unknown"
+        before = (srv.ip, srv.fup_until)
+    if t.startswith("server."):
+        await refresh_server(ctx, int(sid))
+        async with session() as s:
+            srv = await s.get(Server, srv.id)
+        name = html.escape(srv.name)
+        if before[0] and srv.ip and srv.ip != before[0]:
+            await ctx.notify(srv.tg_id, f"🌐 <b>{name}: новый IP-адрес</b>\n\n<code>{html.escape(srv.ip)}</code> (был {html.escape(before[0])}).")
+        if srv.fup_until and not before[1]:
+            await ctx.notify(srv.tg_id, f"🐢 <b>{name}: скорость временно ограничена</b>\n\nДо {_hm(srv.fup_until)} канал — "
+                                        f"{srv.fup_mbit or '—'} Мбит/с: средняя загрузка за несколько часов была выше нормы провайдера (Fair Use).")
+        elif before[1] and not srv.fup_until:
+            await ctx.notify(srv.tg_id, f"🚀 <b>{name}: скорость снова полная</b>\n\nОграничение провайдера снято.")
+        return "ok"
+    if t.startswith("sni."):
+        inc = ev.get("incident") or {}
+        grace = _hm(parse_dt(inc.get("grace_until")))
+        text = SNI_TEXT.get(t)
+        if text:
+            await ctx.notify(srv.tg_id, text.format(name=html.escape(srv.name), grace=grace or "конца срока"))
+        await ctx.alert_admin(f"🛡 Astra {html.escape(t)}: сервер #{sid} ({html.escape(srv.name)}), клиент {srv.tg_id}"
+                              + (f", действие: {html.escape(str(inc.get('action_required')))}" if inc.get("action_required") else ""))
+        return "ok"
+    return "skip"
 
 
 # ───────────────────────── действия над сервером ─────────────────────────
@@ -1885,7 +2016,7 @@ async def sync_servers(ctx: Ctx) -> None:
         if kind == "ready":
             await ctx.notify(
                 srv.tg_id,
-                f"✅ <b>Сервер готов</b>\n\n🖥 <b>{html.escape(srv.name)}</b>\nIP: <code>{html.escape(str(srv.ip))}</code>\nЛогин: <code>root</code>\nПароль: <code>{html.escape(str(srv.root_password))}</code>\n\nУправление — в разделе «🖥 Мои серверы» или в личном кабинете.",
+                f"✅ <b>Сервер готов</b>\n\n🖥 <b>{html.escape(srv.name)}</b>\nIP: <code>{html.escape(str(srv.ip))}</code>\nЛогин: <code>{access_of(srv.os)['login']}</code>\nПароль: <code>{html.escape(str(srv.root_password))}</code>\n\nУправление — в разделе «🖥 Мои серверы» или в личном кабинете.",
             )
         elif kind == "failed":
             if not await _refund_failed(srv):
