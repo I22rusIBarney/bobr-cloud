@@ -6,6 +6,8 @@
 <title>Cloud</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
 <style>
   :root { --tabbar-h: 60px; }
   .tabbar { height: calc(var(--tabbar-h) + var(--sab)); }
@@ -242,6 +244,128 @@
   .buybar .price > span { display: block; font-size: 12px; color: var(--hint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 44vw; }
   .buybar .btn { flex: 1; min-width: 0; }
   body.has-buybar { padding-bottom: calc(160px + var(--sab)); }
+
+  /* ═══ Оформление «Янтарь» (только кабинет): тёплый графит, янтарный акцент, карточки в двойной рамке ═══ */
+  :root {
+    --bg: #100E0B; --cell: #1A1611; --surface-2: #241E17; --surface-3: #2F271E;
+    --line: rgba(255, 236, 210, .07); --line-strong: rgba(255, 236, 210, .11); --sep: rgba(255, 236, 210, .07);
+    --fill: rgba(255, 236, 210, .06); --fill-2: rgba(255, 236, 210, .1);
+    --text: #F3EDE4; --hint: #A89F92; --hint-2: #7D756A;
+    --accent: #F0A23B; --accent-hi: #F5B25C; --accent-lo: #D98B24; --accent-text: #F5B25C;
+    --accent-soft: rgba(240, 162, 59, .14); --accent-ring: rgba(240, 162, 59, .55);
+    --on-accent: #1A1206; --accent-fill: #F0A23B; --accent-fill-hi: #F5B25C;
+    --ok: #7BD88F; --ok-soft: rgba(123, 216, 143, .14);
+    --warn: #FF8A5B; --warn-soft: rgba(255, 138, 91, .14);
+    --f-thumb-shadow: 0 2px 8px rgba(0, 0, 0, .45), 0 0 0 4px rgba(240, 162, 59, .2);
+    --font: "Golos Text", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+    --font-display: "Golos Text", -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+    --ease-soft: cubic-bezier(.32, .72, 0, 1);
+    /* двойная рамка: внешний «лоток» и тонкий блик сверху у самой карточки */
+    --bezel: 0 0 0 5px rgba(255, 236, 210, .025), 0 0 0 6px rgba(255, 236, 210, .06), inset 0 1px 0 rgba(255, 240, 220, .06);
+    --tabbar-h: 80px;
+  }
+  /* Windows и Linux не рисуют флаги-эмодзи (показывают «NL»): для них — шрифт только с флагами */
+  @font-face { font-family: "Twemoji Country Flags"; src: url("/static/TwemojiCountryFlags.woff2") format("woff2"); font-display: swap;
+    unicode-range: U+1F1E6-1F1FF, U+1F3F4, U+E0062-E0063, U+E0065, U+E0067, U+E006C, U+E006E, U+E0073-E0074, U+E0077, U+E007F; }
+  html.flag-font {
+    --font: "Twemoji Country Flags", "Golos Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "Twemoji Country Flags", "Golos Text", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  ::selection { background: rgba(240, 162, 59, .35); }
+  body::before { content: ""; position: fixed; top: -200px; left: -120px; width: 560px; height: 460px; z-index: -1; pointer-events: none;
+    background: radial-gradient(closest-side, rgba(240, 162, 59, .13), rgba(240, 162, 59, 0)); }
+  html.has-bg body::before { display: none; }
+
+  .list, .card, .hero-card, .ref-card, .doc { outline: 0; border-radius: 22px; box-shadow: var(--bezel); }
+  .group-h { margin-bottom: 14px; }
+  .card + .card { margin-top: 18px; }
+  .group-f { margin-top: 14px; }
+  .sheet { background: #1C1712; }
+  .sheet .list { box-shadow: inset 0 0 0 1px var(--line); }
+  .input:focus-within { background: var(--surface-3); }
+  .empty > svg { box-shadow: inset 0 0 0 1px rgba(240, 162, 59, .22); }
+  .msg.mine .bubble, .composer .send, .tick, .cbox { color: var(--on-accent); }
+  input[type=range].ios:active::-webkit-slider-thumb { box-shadow: 0 2px 10px rgba(0, 0, 0, .5), 0 0 0 7px rgba(240, 162, 59, .22); }
+  .readout .over { background: rgba(240, 162, 59, .08); }
+  .hero-card .lbl, .hero-card .meta { color: var(--hint); }
+  .power button:active, .server-card:active { background: var(--surface-2); }
+
+  /* кнопки — «пилюли», главная с мягким янтарным свечением */
+  .btn { border-radius: var(--r-pill); min-height: 54px; font-weight: 700; transition: transform .5s var(--ease-soft), background-color .4s var(--ease-soft), box-shadow .4s var(--ease-soft); }
+  .btn:not(.tinted, .secondary, .danger, .plain) { box-shadow: 0 12px 30px -14px rgba(240, 162, 59, .75); }
+  .btn[disabled] { box-shadow: none; }
+  .btn:active { transform: scale(.98); }
+  .pill.topup { gap: 10px; padding: 6px 6px 6px 16px; font-size: 14px; background: var(--fill); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  .nub { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--accent); color: var(--on-accent); transition: transform .5s var(--ease-soft); }
+  .nub svg { width: 15px; height: 15px; }
+  .pill.topup:active .nub { transform: scale(.92); }
+
+  /* баланс на экране серверов */
+  .bal-hero { margin: 28px var(--gutter) 0; padding: 0 4px; }
+  .eyebrow { display: inline-block; padding: 5px 11px; border-radius: var(--r-pill); background: rgba(255, 236, 210, .05); box-shadow: inset 0 0 0 1px rgba(255, 236, 210, .08);
+    color: var(--hint); font-size: 11px; font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+  .bal-hero .amt { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; font: 800 56px/1 var(--font-display); letter-spacing: -0.045em; white-space: nowrap; }
+  .bal-hero .amt span { font-size: 28px; font-weight: 600; color: var(--hint); letter-spacing: 0; }
+  .bal-hero p { margin: 12px 0 0; color: var(--hint); font-size: 16px; }
+  .bal-hero p b { color: var(--text); font-weight: 600; }
+  .bal-hero p.sub { margin-top: 4px; font-size: 14px; }
+  .sec-h { display: flex; align-items: center; justify-content: space-between; margin: 34px var(--gutter) 16px; padding-left: 4px; }
+  .sec-h h2 { margin: 0; display: flex; align-items: center; gap: 10px; font: 700 22px/1.2 var(--font-display); letter-spacing: -0.02em; }
+  .sec-h h2 span { min-width: 24px; height: 24px; padding: 0 7px; border-radius: var(--r-pill); background: var(--fill); color: var(--hint); font-size: 13px; font-weight: 600; display: inline-grid; place-items: center; }
+  .sec-h button { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 4px 0 12px; border: 0; background: none; color: var(--accent-text); font-size: 15px; font-weight: 600; cursor: pointer; }
+  .sec-h button svg { width: 16px; height: 16px; }
+
+  /* карточка сервера: флаг, адрес, цена и полоса оплаченного периода */
+  .server-card { margin: 0 var(--gutter) 18px; width: calc(100% - 2 * var(--gutter)); padding: 18px; border-radius: 23px; box-shadow: var(--bezel);
+    transition: transform .5s var(--ease-soft), background-color .4s var(--ease-soft); }
+  .server-card:active { transform: scale(.98); }
+  .server-card.due { background: #1F1611; box-shadow: 0 0 0 5px rgba(255, 138, 91, .05), 0 0 0 6px rgba(255, 138, 91, .22), inset 0 1px 0 rgba(255, 220, 190, .07); }
+  .server-card .flag-tile, .hero .flag-tile { background: rgba(255, 236, 210, .05); box-shadow: inset 0 0 0 1px rgba(255, 236, 210, .08); }
+  .server-card .flag-tile { width: 44px; height: 44px; font-size: 25px; border-radius: 14px; }
+  .server-card .name { font-size: 17px; }
+  .server-card .ip { display: flex; align-items: center; gap: 7px; min-width: 0; }
+  .server-card .ip .dot { width: 6px; height: 6px; box-shadow: none; }
+  .server-card .price { flex: none; text-align: right; line-height: 1.25; }
+  .server-card .price b { display: block; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .server-card .price span { font-size: 12px; color: var(--hint); }
+  .spec-line { margin-top: 12px; font-size: 13px; color: var(--hint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .term { margin-top: 16px; }
+  .term-row { margin: 0 0 10px; align-items: baseline; font-size: 13px; }
+  .term-row .left { font-size: 15px; font-weight: 700; color: var(--text); }
+  .term-row .left.warn { color: var(--warn); } .term-row .left.bad { color: var(--danger); }
+  .term-row > span:last-child { display: inline-flex; align-items: center; gap: 6px; }
+  .term-row svg { width: 13px; height: 13px; }
+  .bar { height: 6px; border-radius: var(--r-pill); background: rgba(255, 236, 210, .07); overflow: visible; }
+  .bar i { background: linear-gradient(90deg, rgba(240, 162, 59, .3), var(--accent)); box-shadow: 0 0 12px rgba(240, 162, 59, .4);
+    transform-origin: left center; animation: grow 1.4s var(--ease-soft) .2s both; }
+  .bar.warn i { background: var(--warn); box-shadow: 0 0 12px rgba(255, 138, 91, .7); }
+  .bar.bad i { background: var(--danger); box-shadow: 0 0 12px rgba(255, 107, 107, .75); }
+  @keyframes grow { from { transform: scaleX(0); } }
+
+  /* срок на экране сервера */
+  .term-big { padding: 18px 16px 18px; }
+  .term-big .tb { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .term-big .n { font: 800 48px/1 var(--font-display); letter-spacing: -0.045em; font-variant-numeric: tabular-nums; }
+  .term-big .u { margin-left: 8px; font-size: 16px; font-weight: 600; color: var(--hint); }
+  .term-big .d { font-size: 14px; color: var(--hint); white-space: nowrap; }
+  .term-big .bar { height: 8px; margin-top: 16px; }
+  .term-big + .row::before { content: ""; position: absolute; top: 0; right: 0; left: 16px; height: 1px; background: var(--sep); }
+
+  /* нижнее меню — плавающий «остров» */
+  .tabbar { left: 50%; right: auto; bottom: calc(14px + var(--sab)); height: auto; transform: translateX(-50%); gap: 4px; padding: 6px; border: 0; border-radius: var(--r-pill);
+    background: color-mix(in srgb, #1E1913 78%, transparent); box-shadow: inset 0 0 0 1px var(--line-strong), 0 24px 48px -16px rgba(0, 0, 0, .7); }
+  .tabbar button { flex: none; flex-direction: row; justify-content: center; gap: 8px; height: 52px; min-width: 52px; padding: 0 15px; border-radius: var(--r-pill);
+    font-size: 0; transition: background-color .4s var(--ease-soft), color .4s var(--ease-soft); }
+  .tabbar button svg { width: 22px; height: 22px; }
+  .tabbar button[aria-selected="true"] { background: var(--accent-soft); color: var(--accent-text); font-size: 14px; padding: 0 20px 0 16px; }
+  .tabbar button[aria-selected="true"] svg { color: currentColor; }
+  .tabbar .count { top: 6px; left: auto; right: 4px; }
+  /* панель «Оплатить» — плавающая карточка над меню */
+  .buybar { left: 10px; right: 10px; bottom: calc(var(--tabbar-h) + 8px + var(--sab)); padding: 10px 10px 10px 18px; border: 0; border-radius: 28px;
+    background: color-mix(in srgb, #1E1913 86%, transparent); box-shadow: inset 0 0 0 1px var(--line-strong), 0 24px 48px -16px rgba(0, 0, 0, .7); }
+  .buybar .btn { min-height: 52px; }
+  @media (min-width: 640px) { .buybar { left: calc(50% - 290px); right: calc(50% - 290px); padding-left: 18px; padding-right: 10px; } }
+  body.has-buybar { padding-bottom: calc(190px + var(--sab)); }
 </style>
 </head>
 <body>
@@ -250,7 +374,11 @@
 <script src="/static/ui.js"></script>
 <script src="/static/fx.js"></script>
 <script>
+// у Apple и Android флаги свои; остальным (Windows, Linux) — шрифт с флагами
+if (!/Mac|iPhone|iPad|Android/.test(navigator.userAgent)) document.documentElement.classList.add('flag-font');
 UI.init();
+// синие плашки иконок из старой палитры — в янтарный акцент
+UI.TILE['#0A84FF'] = UI.TILE['#007AFF'] = UI.TILE['#438CFF'] = 'var(--accent)';
 const { h, row, group, icon, rub } = UI;
 const api = UI.api('/api/me');
 
@@ -355,9 +483,10 @@ function header(title, opts = {}) {
     h('button', { class: 'account', type: 'button', 'aria-label': 'Профиль', onclick: () => goTab('profile') },
       UI.avatar(u, 36, myAvatarSrc), h('div', { class: 'who' }, h('b', {}, displayName(u)), h('span', {}, 'ID ' + u.id))),
     h('div', { class: 'right' },
-      h('button', { class: 'pill bal num', type: 'button', 'aria-label': 'Баланс', onclick: () => goTab('profile') }, icon('wallet'), rub(D.balance_rub)),
+      opts.hero ? h('button', { class: 'pill topup', type: 'button', onclick: () => goTab('profile') }, 'Пополнить', h('span', { class: 'nub', 'aria-hidden': 'true' }, icon('plus')))
+        : h('button', { class: 'pill bal num', type: 'button', 'aria-label': 'Баланс', onclick: () => goTab('profile') }, icon('wallet'), rub(D.balance_rub)),
       adminBtn()));
-  return h('div', {}, top, announceBanner(), h('h1', { class: 'large-title' }, title), opts.sub ? h('div', { class: 'subtitle' }, opts.sub) : null);
+  return h('div', {}, top, announceBanner(), opts.hero || null, title ? h('h1', { class: 'large-title' }, title) : null, opts.sub ? h('div', { class: 'subtitle' }, opts.sub) : null);
 }
 function announceBanner() {
   const a = D.announce;
@@ -377,6 +506,18 @@ function leftText(left) {
   if (left >= 1) { const d = Math.floor(left); return `Осталось ${d} ${UI.plural(d, 'день', 'дня', 'дней')}`; }
   const hrs = Math.floor(left * 24);
   return hrs >= 1 ? `Осталось ${hrs} ${UI.plural(hrs, 'час', 'часа', 'часов')}` : 'Меньше часа';
+}
+// крупный остаток срока с полосой — в блоке «Оплата» на экране сервера
+function termBig(s) {
+  const left = s.expires_at ? (new Date(s.expires_at) - Date.now()) / 864e5 : null;
+  if (left == null) return row({ title: 'Оплачен до', detail: '—' });
+  const tone = left < 3 ? 'bad' : left < 7 ? 'warn' : '', d = Math.floor(left);
+  return h('div', { class: 'term-big' },
+    h('div', { class: 'tb' }, left >= 1
+      ? h('span', {}, h('span', { class: 'n' }, String(d)), h('span', { class: 'u' }, UI.plural(d, 'день остался', 'дня осталось', 'дней осталось')))
+      : h('span', { class: 'u', style: 'margin:0;font-size:18px;color:var(--danger)' }, leftText(left)),
+      h('span', { class: 'd' }, 'до ' + UI.date(s.expires_at))),
+    h('div', { class: 'bar ' + tone }, h('i', { style: `width:${Math.max(3, Math.min(100, left / 30 * 100))}%` })));
 }
 // мост из Bobr Nodes: вход (клиенты подключаются к нему) или выход (через него трафик идёт в интернет)
 const BRIDGE_T = { entry: ['↳ вход моста →', 'Вход моста'], exit: ['выход моста ←', 'Выход моста'] };
@@ -413,7 +554,15 @@ function root() {
 function serversView() {
   const act = D.servers.filter(s => s.status === 'active' && s.role !== 'member');
   const monthly = act.reduce((a, s) => a + (+s.price_rub || 0), 0);
-  const wrap = h('div', {}, header('Серверы', { sub: D.servers.length ? `${D.servers.length} ${UI.plural(D.servers.length, 'сервер', 'сервера', 'серверов')}` + (monthly ? ` · ${rub(monthly)} в месяц` : '') : null }));
+  // прогноз: на сколько хватит баланса при нынешних ежемесячных платежах (грубо, по 30 дней)
+  const runway = monthly > 0 && D.balance_rub > 0 ? D.balance_rub / monthly * 30 : null;
+  const hero = h('section', { class: 'bal-hero', 'aria-label': 'Баланс' }, h('span', { class: 'eyebrow' }, 'Баланс'),
+    h('div', { class: 'amt num' }, rub(D.balance_rub).replace(/\s₽$/, ''), h('span', {}, '₽')),
+    runway != null && runway >= 1 && runway < 1100 ? h('p', {}, 'Хватит примерно до ', h('b', {}, new Date(Date.now() + runway * 864e5).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }))) : null,
+    D.servers.length ? h('p', { class: 'sub' }, `${D.servers.length} ${UI.plural(D.servers.length, 'сервер', 'сервера', 'серверов')}` + (monthly ? ` · ${rub(monthly)} в месяц` : '')) : null);
+  const wrap = h('div', {}, header(null, { hero }));
+  if (D.servers.length) wrap.append(h('div', { class: 'sec-h' }, h('h2', {}, 'Серверы', h('span', {}, String(D.servers.length))),
+    h('button', { type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Новый')));
   // входящие передачи: друг отправил сервер — принять или отклонить
   ((D.transfers && D.transfers.incoming) || []).forEach(t => wrap.append(transferOfferCard(t)));
   (D.share_invites || []).forEach(t => wrap.append(shareOfferCard(t)));
@@ -430,21 +579,26 @@ function serversView() {
     const days = left == null ? null : Math.max(0, Math.floor(left));
     const pct = left == null ? 0 : Math.max(3, Math.min(100, left / 30 * 100));
     const bar = left == null ? '' : left < 3 ? 'bad' : left < 7 ? 'warn' : '';
-    wrap.append(h('button', { class: 'server-card', type: 'button', 'aria-label': s.name, onclick: () => UI.nav.push(() => serverView(s.id)) },
+    const owner = s.role !== 'member', ok = st.c === 'ok';
+    const shared = (s.members || []).filter(m => m.status === 'active').length;
+    const spec = [s.cpu + ' vCPU', s.ram + ' ГБ', s.disk + ' ГБ', s.speed, !owner ? 'общий доступ' : shared ? 'доступ: ' + shared : ''].filter(Boolean).join(' · ');
+    const showTerm = days != null && s.status !== 'provisioning';
+    wrap.append(h('button', { class: 'server-card' + (owner && showTerm && left < 3 ? ' due' : ''), type: 'button',
+      'aria-label': [s.name, st.t, showTerm ? leftText(left) : ''].filter(Boolean).join(', '), onclick: () => UI.nav.push(() => serverView(s.id)) },
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
         h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name, s.bridge ? h('span', { class: 'bridge-mark', title: 'Мост Bobr Nodes' }, ' ⇄') : null),
-          h('div', { class: 'ip' }, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—')), bridgeLine(s)),
-        h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
-      h('div', { class: 'specs' }, specChip('cpu', s.cpu + ' vCPU'), specChip('ram', s.ram + ' ГБ'), specChip('drive', s.disk + ' ГБ'), s.speed ? specChip('globe', s.speed) : null,
-        s.role === 'member' ? specChip('users', 'Общий доступ')
-          : (s.members || []).some(m => m.status === 'active') ? specChip('users', 'Доступ: ' + (s.members || []).filter(m => m.status === 'active').length) : null,
-        s.auto_renew && s.role !== 'member' ? specChip('renew', 'Автопродление') : null),
-      days == null || s.status === 'provisioning' ? null : h('div', { class: 'term' }, h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` })),
-        h('div', { class: 'term-row' }, h('span', { class: bar }, leftText(left)), h('span', {}, 'до ' + shortDate(s.expires_at) + ' · ' + rub(s.price_rub))))));
+          h('div', { class: 'ip' }, ok ? h('i', { class: 'dot ok live' }) : null, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—')), bridgeLine(s)),
+        // «всё хорошо» видно по зелёной точке у адреса, справа — цена; иначе справа статус
+        ok && owner ? h('div', { class: 'price' }, h('b', {}, rub(s.price_rub)), h('span', {}, 'в месяц'))
+          : ok ? null : h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
+      h('div', { class: 'spec-line' }, spec),
+      showTerm ? h('div', { class: 'term' },
+        h('div', { class: 'term-row' }, h('span', { class: 'left ' + bar }, leftText(left)),
+          h('span', {}, s.auto_renew && owner ? icon('renew') : null, 'до ' + shortDate(s.expires_at))),
+        h('div', { class: 'bar ' + bar }, h('i', { style: `width:${pct}%` }))) : null));
   });
   const due = D.servers.filter(s => s.role !== 'member' && s.days_left != null && s.days_left < 3 && !s.auto_renew);
   if (due.length) wrap.append(h('div', { class: 'announce warn', role: 'status' }, icon('info'), h('p', {}, 'Скоро закончится оплата: ' + due.map(s => s.name).join(', ') + '. Включите автопродление или продлите вручную.')));
-  wrap.append(h('div', { style: 'margin:12px var(--gutter) 24px' }, h('button', { class: 'btn secondary', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Новый сервер')));
   return wrap;
 }
 
@@ -508,7 +662,7 @@ function serverView(id) {
   if (s.role === 'member') return memberTail(v, s, live, act);
 
   v.append(group('Оплата', [
-    row({ title: 'Оплачен до', detail: UI.date(s.expires_at) }),
+    termBig(s),
     row({ title: 'Стоимость', detail: rub(s.price_rub) + ' в месяц' }),
     row({ title: 'Автопродление', right: UI.toggle(s.auto_renew, async (val, input) => {
       const r = await UI.run(() => api(`/servers/${s.id}/autorenew`, 'POST', { value: val }), val ? 'Автопродление включено' : 'Автопродление выключено');
@@ -669,7 +823,7 @@ function logView(s) {
 function memberTail(v, s, live, act) {
   const o = s.owner || {};
   v.append(group('Оплата', [
-    row({ title: 'Оплачен до', detail: UI.date(s.expires_at) }),
+    termBig(s),
     row({ title: 'Стоимость', detail: rub(s.price_rub) + ' в месяц' }),
     row({ title: 'Продлить со своего баланса', cls: 'accent', onClick: async () => {
       const ok = await UI.ask({ title: 'Продлить сервер?', message: `Спишем ${rub(s.price_rub)} с вашего баланса — сервер владельца продлится на 30 дней. Сейчас на балансе ${rub(D.balance_rub)}.`, buttons: [{ id: 'y', text: 'Продлить' }] });
@@ -1581,7 +1735,7 @@ function referralCard(r) {
 }
 
 /* Операция истории: иконка по типу, сумма со знаком, ссылка на чек. */
-const TX_ICON = { topup: ['arrowDown', '#34D399'], autopay: ['bolt', '#34D399'], purchase: ['server', '#438CFF'], renew: ['renew', '#438CFF'],
+const TX_ICON = { topup: ['arrowDown', '#34D399'], autopay: ['bolt', '#34D399'], purchase: ['server', 'var(--accent)'], renew: ['renew', 'var(--accent)'],
   upgrade: ['stack', '#8B8CFF'], upgrade_settle: ['stack', '#8B8CFF'], change_ip: ['globe', '#5BB8F0'], promo: ['gift', '#FF7A9A'], ref_bonus: ['users', '#34D399'], ref_welcome: ['gift', '#34D399'], admin_adjust: ['wallet', '#A3A8B4'] };
 function txRow(x) {
   const [ic, col] = TX_ICON[x.kind] || (String(x.kind).startsWith('refund') ? ['renew', '#34D399'] : ['wallet', '#A3A8B4']);

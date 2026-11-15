@@ -227,7 +227,9 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
 
     # ───── общие стили и скрипты Mini App ─────
 
-    STATIC = {"ui.css": "text/css; charset=utf-8", "ui.js": "application/javascript; charset=utf-8", "fx.js": "application/javascript; charset=utf-8"}
+    STATIC = {"ui.css": "text/css; charset=utf-8", "ui.js": "application/javascript; charset=utf-8", "fx.js": "application/javascript; charset=utf-8",
+              # флаги-эмодзи для Windows и Linux, где их нет в системе (Twemoji, CC-BY 4.0)
+              "TwemojiCountryFlags.woff2": "font/woff2"}
 
     @app.get("/static/{name}")
     async def static_file(name: str):
