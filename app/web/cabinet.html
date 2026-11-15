@@ -272,6 +272,13 @@
   .sec-h button svg { width: 16px; height: 16px; }
 
   /* карточка сервера: флаг, адрес, цена и полоса оплаченного периода */
+  /* серверы — сеткой: на телефоне в один столбец, на широком экране в 2–3 */
+  .server-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(340px, 100%), 1fr)); gap: 18px; margin: 0 var(--gutter) 18px; }
+  .server-grid .server-card { margin: 0; width: auto; }
+  @media (min-width: 900px) {
+    .loc-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .preset-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  }
   .server-card { margin: 0 var(--gutter) 18px; width: calc(100% - 2 * var(--gutter)); padding: 18px; border-radius: 23px; box-shadow: var(--bezel);
     transition: transform .5s var(--ease-soft), background-color .4s var(--ease-soft); }
   .server-card:active { transform: scale(.98); }
@@ -321,6 +328,7 @@
     background: color-mix(in srgb, #1E1913 86%, transparent); box-shadow: inset 0 0 0 1px var(--line-strong), 0 24px 48px -16px rgba(0, 0, 0, .7); }
   .buybar .btn { min-height: 52px; }
   @media (min-width: 640px) { .buybar { left: calc(50% - 290px); right: calc(50% - 290px); padding-left: 18px; padding-right: 10px; } }
+  @media (min-width: 900px) { .buybar { left: calc(50% - 372px); right: calc(50% - 372px); } }
   body.has-buybar { padding-bottom: calc(190px + var(--sab)); }
 </style>
 </head>
@@ -524,6 +532,8 @@ function serversView() {
       h('button', { class: 'btn', type: 'button', onclick: () => goTab('new') }, icon('plus'), 'Собрать сервер')));
     return wrap;
   }
+  const grid = h('div', { class: 'server-grid' });
+  wrap.append(grid);
   bridgeOrder(D.servers).forEach(s => {
     const st = s.reinstalling ? { t: 'Переустановка', c: 'warn' } : s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
     // остаток считаем от точной даты окончания: полные дни, а в последние сутки — часы
@@ -535,7 +545,7 @@ function serversView() {
     const shared = (s.members || []).filter(m => m.status === 'active').length;
     const spec = [s.cpu + ' vCPU', s.ram + ' ГБ', s.disk + ' ГБ', s.speed, !owner ? 'общий доступ' : shared ? 'доступ: ' + shared : ''].filter(Boolean).join(' · ');
     const showTerm = days != null && s.status !== 'provisioning';
-    wrap.append(h('button', { class: 'server-card' + (owner && showTerm && left < 3 ? ' due' : ''), type: 'button',
+    grid.append(h('button', { class: 'server-card' + (owner && showTerm && left < 3 ? ' due' : ''), type: 'button',
       'aria-label': [s.name, st.t, showTerm ? leftText(left) : ''].filter(Boolean).join(', '), onclick: () => UI.nav.push(() => serverView(s.id)) },
       h('div', { class: 'top' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
         h('div', { style: 'flex:1;min-width:0' }, h('div', { class: 'name' }, s.name, s.bridge ? h('span', { class: 'bridge-mark', title: 'Мост Bobr Nodes' }, ' ⇄') : null),
@@ -579,7 +589,7 @@ function serverView(id) {
     await refresh();
   };
   const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
-  const v = h('div', {},
+  const v = h('div', { class: 'wide-cols' },
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
       h('div', {}, h('h1', {}, s.name, s.bridge ? h('span', { class: 'bridge-mark' }, ' ⇄') : null), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
@@ -1453,7 +1463,7 @@ function ticketView(id) {
 let lastBal = null;
 function profileView() {
   const u = D.user;
-  const wrap = h('div', {},
+  const wrap = h('div', { class: 'wide-cols' },
     h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Профиль'), h('div', { style: 'margin-bottom:16px' }, adminBtn())),
     h('div', { class: 'user-card' }, UI.avatar(u, 56, myAvatarSrc),
       h('div', { class: 'who' }, h('b', {}, displayName(u)),
