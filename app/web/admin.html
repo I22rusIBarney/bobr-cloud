@@ -6,6 +6,8 @@
 <title>Управление</title>
 <script src="https://telegram.org/js/telegram-web-app.js"></script>
 <link rel="stylesheet" href="/static/ui.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700;800&display=swap">
 <style>
   .stats { display: grid; grid-template-columns: 1fr 1fr; }
   .stats > div { padding: 12px 16px 13px; position: relative; }
@@ -100,10 +102,11 @@ function numField(label, key, unit, opts = {}) {
   return h('label', { class: 'field' }, h('span', {}, label), i, unit ? h('span', { class: 'unit' }, unit) : null);
 }
 function toggleRow(title, key, sub, invert) {
-  return row({ title, sub, right: UI.toggle(invert ? !S.settings[key] : S.settings[key], v => setVal(key, invert ? !v : v), title) });
+  return row({ title, sub, cls: 'wrap', right: UI.toggle(invert ? !S.settings[key] : S.settings[key], v => setVal(key, invert ? !v : v), title) });
 }
 
 // ───────── главная ─────────
+// на главной — сводка, самое частое и короткие разделы; подробные настройки — на своих экранах
 function rootView() {
   if (!S) return h('div', {}, h('h1', { class: 'large-title' }, 'Управление'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   const st = S.stats, ab = S.astra || {};
@@ -125,48 +128,59 @@ function rootView() {
       ? ` · ${ab.reseller.active_servers || 0}/${ab.reseller.next.at_servers} до ${ab.reseller.next.discount_pct}%` : ''),
     detail: ab.error ? '—' : h('span', { style: low ? 'color:var(--danger);font-weight:600' : '' }, rub(ab.balance_rub)),
     onClick: () => { try { UI.tg ? UI.tg.openTelegramLink('https://t.me/astravpsbot') : UI.openLink('https://t.me/astravpsbot'); } catch (e) { UI.openLink('https://t.me/astravpsbot'); } },
-  })], (low ? 'Баланс ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot. ' : 'Пополняется в @astravpsbot. ')
+  }), toggleRow('Принимать заказы', 'maintenance', null, true)],
+    (S.settings.maintenance ? 'Заказы закрыты: клиенты видят сообщение о паузе. Текущие серверы работают. ' : '')
+    + (low ? 'Баланс Astra ниже порога — новые серверы и автопродления не пройдут. Пополните в @astravpsbot. ' : 'Баланс Astra пополняется в @astravpsbot. ')
     + (ab.reseller && ab.reseller.next ? `Скидку считает Astra по активным серверам на вашем ключе: сейчас ${ab.reseller.active_servers || 0}, для ${ab.reseller.next.discount_pct}% нужно ${ab.reseller.next.at_servers}.` : '')
     + (ab.reseller && (ab.reseller.active_servers || 0) !== st.servers ? ` В боте активных серверов: ${st.servers} — остальные созданы на ключе не через бота.` : '')));
 
-  // клиенты и промокоды — самое частое
+  // каждый день
   const tunread = S.tickets ? S.tickets.unread : 0;
   const topen = S.tickets ? (S.tickets.counts.open || 0) + (S.tickets.counts.provider || 0) : 0;
   v.append(group(null, [
     row({ icon: 'chat', tile: '#34C759', title: 'Обращения', detail: tunread ? null : (topen ? String(topen) : ''), right: tunread ? h('span', { class: 'count' }, String(tunread)) : null, onClick: () => UI.nav.push(ticketsView) }),
     row({ icon: 'users', tile: '#30B0C7', title: 'Клиенты', detail: String(st.users), onClick: () => UI.nav.push(usersView) }),
-    row({ icon: 'megaphone', tile: '#5856D6', title: 'Рассылки', onClick: () => UI.nav.push(broadcastsView) }),
-    row({ icon: 'gift', tile: '#FF2D55', title: 'Промокоды', onClick: () => UI.nav.push(promosView) }),
     row({ icon: 'wallet', tile: '#AF52DE', title: 'Платежи и чеки', onClick: () => UI.nav.push(paymentsView) }),
     row({ icon: 'sparkle', tile: '#FF9500', title: 'Аналитика', onClick: () => UI.nav.push(analyticsView) }),
+  ]));
+
+  // продвижение
+  v.append(group('Продвижение', [
+    row({ icon: 'megaphone', tile: '#5856D6', title: 'Рассылки', onClick: () => UI.nav.push(broadcastsView) }),
+    row({ icon: 'gift', tile: '#FF2D55', title: 'Промокоды', onClick: () => UI.nav.push(promosView) }),
     row({ icon: 'alert', tile: '#FFCC00', title: 'Объявление', right: h('span', { class: 'badge ' + (S.settings.announce_text ? 'ok' : '') }, S.settings.announce_text ? 'Показывается' : 'Нет'), onClick: () => UI.nav.push(announceView) }),
+    row({ icon: 'users', tile: '#34C759', title: 'Скидки и бонусы', sub: 'рефералы, брошенная оплата, возврат ушедших', cls: 'wrap', onClick: () => UI.nav.push(bonusView) }),
   ]));
 
-  // документы
+  // настройки
   const legalOk = ['seller_name', 'seller_inn', 'seller_email'].every(k => String(S.settings[k] || '').trim()) && S.settings.docs_date;
-  v.append(group('Документы', [row({ icon: 'shield', tile: legalOk ? '#34C759' : '#FF3B30', title: 'Реквизиты и документы',
-    right: h('span', { class: 'badge ' + (legalOk ? 'ok' : 'bad') }, legalOk ? 'Ред. ' + S.settings.docs_date : 'Не заполнено'), onClick: () => UI.nav.push(legalView) })],
-    legalOk ? null : 'Укажите ФИО, ИНН и почту — без них документы для клиентов неполные.'));
-
-  // подключения
-  // красный — только когда без подключения что-то не работает; необязательное и неподключённое — нейтрально
-  const badge = (ok, need) => h('span', { class: 'badge ' + (ok ? 'ok' : need || '') }, ok ? 'Подключено' : 'Не настроено');
   const anyPay = INT && (INT.yookassa.configured || (INT.platega && INT.platega.configured));
-  v.append(group('Подключения', [
-    row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured, anyPay ? '' : 'bad') : null, onClick: () => UI.nav.push(ykView) }),
-    row({ icon: 'bolt', tile: '#30B0C7', title: 'Platega', right: INT ? badge(INT.platega && INT.platega.configured) : null, onClick: () => UI.nav.push(plategaView) }),
-    row({ icon: 'wallet', tile: '#AF52DE', title: 'Способы оплаты', detail: [S.settings.pay_yookassa_on && 'ЮKassa', S.settings.pay_platega_on && 'Platega'].filter(Boolean).join(' + ') || 'выключены', onClick: () => UI.nav.push(payMethodsView) }),
-    row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured, S.settings.receipts_enabled ? 'warn' : '') : null, onClick: () => UI.nav.push(nalogView) }),
-    row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
-    row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
-    row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
-  ]));
+  const shown = CAT ? CAT.presets.filter(p => !S.settings.hidden_presets.includes(p.idx)).length : null;
+  v.append(group('Настройки', [
+    row({ icon: 'tag', tile: '#34C759', title: 'Цены и тарифы', sub: `наценка ${S.settings.markup_pct}%` + (shown == null ? '' : ` · тарифов ${shown} из ${CAT.presets.length}`), onClick: () => UI.nav.push(pricesView) }),
+    row({ icon: 'store', tile: '#FF9500', title: 'Возможности для клиентов', sub: 'автопродление, своя конфигурация, общий доступ…', cls: 'wrap', onClick: () => UI.nav.push(featuresView) }),
+    row({ icon: 'card', tile: '#0A84FF', title: 'Оплата и чеки', sub: [S.settings.pay_yookassa_on && 'ЮKassa', S.settings.pay_platega_on && 'Platega'].filter(Boolean).join(' + ') || 'способы оплаты выключены',
+      right: INT && !anyPay ? h('span', { class: 'badge bad' }, 'Не настроено') : null, onClick: () => UI.nav.push(paySetupView) }),
+    row({ icon: 'gift', tile: '#AF52DE', title: 'Кабинет клиента', sub: 'тексты, оформление, подписка на канал', cls: 'wrap', onClick: () => UI.nav.push(cabinetSetupView) }),
+    row({ icon: 'shield', tile: legalOk ? '#34C759' : '#FF3B30', title: 'Реквизиты и документы',
+      right: h('span', { class: 'badge ' + (legalOk ? 'ok' : 'bad') }, legalOk ? 'Ред. ' + S.settings.docs_date : 'Заполнить'), onClick: () => UI.nav.push(legalView) }),
+  ], legalOk ? null : 'Укажите ФИО, ИНН и почту в реквизитах — без них документы для клиентов неполные.'));
+
+  // система
   const ver = S.version || {};
   v.append(group('Система', [
+    row({ icon: 'shield', tile: '#34C759', title: 'Состояние и безопасность', onClick: () => UI.nav.push(healthView) }),
+    row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'receipt', tile: '#8E8E93', title: 'Журнал действий', sub: 'кто и что менял в админке', onClick: () => UI.nav.push(auditView) }),
     row({ icon: 'sparkle', tile: '#0A84FF', title: 'Версия и обновления', detail: ver.number ? 'v' + ver.number : '', onClick: () => UI.nav.push(updateView) })]));
+  return v;
+}
 
-  // цены
+// ───────── настройки: экраны разделов ─────────
+const sectionPage = title => h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, title));
+
+function pricesView() {
+  const v = sectionPage('Цены и тарифы');
   const example = h('span');
   const paintExample = () => {
     const p = CAT && CAT.presets.find(x => x.cost_rub[tariffLoc || 'nl'] !== undefined) || (CAT && CAT.presets[0]);
@@ -186,9 +200,28 @@ function rootView() {
   v.append(group(null, [row({ icon: 'tag', tile: '#34C759', title: 'Тарифы и маржа', detail: shown == null ? '' : `${shown} из ${CAT.presets.length}`, onClick: () => UI.nav.push(tariffsView) }),
     row({ icon: 'alert', tile: '#FF3B30', title: 'Продление в минус', sub: 'серверы, которые Astra продлевает дороже, чем платит клиент', onClick: () => UI.nav.push(marginView) })]));
 
-  // продажи
-  v.append(group('Продажи', [
-    toggleRow('Принимать заказы', 'maintenance', null, true),
+  v.append(group('Покупка на срок', [
+    toggleRow('Срок 3 / 6 / 12 месяцев', 'periods_enabled'),
+    numField('Скидка за 3 месяца', 'period_3m_pct', '%'),
+    numField('Скидка за 6 месяцев', 'period_6m_pct', '%'),
+    numField('Скидка за год', 'period_1y_pct', '%'),
+  ], 'Клиент платит сразу за срок со скидкой, сервер у Astra заказывается на этот срок. Продление после срока — помесячно по обычной цене. Скидка за срок не должна быть больше наценки, иначе продажа уйдёт в минус.'));
+
+  v.append(group('Пополнение и услуги', [
+    numField('Минимум пополнения', 'min_topup_rub', '₽'),
+    numField('Максимум пополнения', 'max_topup_rub', '₽'),
+    numField('Смена IP для клиента', 'change_ip_price_rub', '₽'),
+    numField('Смена IP без наценки', 'change_ip_cost_rub', '₽'),
+    numField('Возврат при удалении', 'refund_pct', '%'),
+    numField('Порог баланса Astra', 'low_balance_rub', '₽'),
+  ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽ — клиенты без наценки платят «Смену IP без наценки». Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
+
+  return v;
+}
+
+function featuresView() {
+  const v = sectionPage('Возможности');
+  v.append(group(null, [
     toggleRow('Автопродление по умолчанию', 'auto_renew_default'),
     toggleRow('Чеки после пополнения', 'receipts_enabled', INT && !INT.nalog.configured ? 'Сначала подключите «Мой налог»' : null),
     toggleRow('Автоплатежи', 'autopay_available', 'Включайте, когда ЮKassa подключит рекуррентные платежи'),
@@ -198,7 +231,19 @@ function rootView() {
     toggleRow('Общий доступ к серверам', 'shares_enabled', 'Владелец может открыть доступ к серверу другим клиентам'),
     toggleRow('Мониторинг серверов клиентов', 'monitor_enabled', 'Сообщать клиенту, если сервер не отвечает 3 минуты'),
     toggleRow('Код для опасных действий', 'confirm_codes', 'Удаление и сброс пароля в кабинете — с кодом из бота'),
-  ], S.settings.maintenance ? 'Заказы закрыты: клиенты видят сообщение о паузе. Текущие серверы работают.' : 'Раздел «Способы оплаты» с удалением карт и переключателем автоплатежа клиенты видят всегда — это нужно для проверки ЮKassa.'));
+  ], 'Раздел «Способы оплаты» с удалением карт и переключателем автоплатежа клиенты видят всегда — это нужно для проверки ЮKassa.'));
+
+  return v;
+}
+
+function bonusView() {
+  const v = sectionPage('Скидки и бонусы');
+  v.append(group('Реферальная программа', [
+    toggleRow('Включена', 'ref_enabled'),
+    numField('Процент с оплат друга', 'ref_pct', '%'),
+    numField('Срок начисления', 'ref_months', 'мес.'),
+    numField('Бонус приглашённому', 'ref_welcome_rub', '₽'),
+  ], 'Пригласивший получает процент с каждого пополнения друга через ЮKassa, срок 0 — без ограничения. Приглашённый получает бонус после первой оплаты. Всё начисляется только на баланс. После изменения условий опубликуйте новую редакцию документов.'));
 
   v.append(group('Незавершённая оплата', [
     toggleRow('Напоминать через час', 'abandon_enabled'),
@@ -212,39 +257,36 @@ function rootView() {
     numField('Срок скидки', 'winback_promo_days', 'дн.'),
   ], 'Серверов больше нет, последний закончился N дней назад (но не больше 90): клиент с согласием на рекламу получает персональную скидку на новый сервер — не чаще раза в 90 дней. Скидка не должна быть больше наценки.'));
 
-  v.append(group('Покупка на срок', [
-    toggleRow('Срок 3 / 6 / 12 месяцев', 'periods_enabled'),
-    numField('Скидка за 3 месяца', 'period_3m_pct', '%'),
-    numField('Скидка за 6 месяцев', 'period_6m_pct', '%'),
-    numField('Скидка за год', 'period_1y_pct', '%'),
-  ], 'Клиент платит сразу за срок со скидкой, сервер у Astra заказывается на этот срок. Продление после срока — помесячно по обычной цене. Скидка за срок не должна быть больше наценки, иначе продажа уйдёт в минус.'));
+  return v;
+}
 
-  v.append(group('Реферальная программа', [
-    toggleRow('Включена', 'ref_enabled'),
-    numField('Бонус пригласившему', 'ref_pct', '% с оплат'),
-    numField('Срок начисления', 'ref_months', 'мес.'),
-    numField('Бонус приглашённому', 'ref_welcome_rub', '₽'),
-  ], 'Пригласивший получает процент с каждого пополнения друга через ЮKassa, срок 0 — без ограничения. Приглашённый получает бонус после первой оплаты. Всё начисляется только на баланс. После изменения условий опубликуйте новую редакцию документов.'));
+function paySetupView() {
+  const v = sectionPage('Оплата и чеки');
+  // красный — только когда без подключения что-то не работает; необязательное и неподключённое — нейтрально
+  const badge = (ok, need) => h('span', { class: 'badge ' + (ok ? 'ok' : need || '') }, ok ? 'Подключено' : 'Не настроено');
+  const anyPay = INT && (INT.yookassa.configured || (INT.platega && INT.platega.configured));
+  v.append(group(null, [
+    row({ icon: 'card', tile: '#0A84FF', title: 'ЮKassa', right: INT ? badge(INT.yookassa.configured, anyPay ? '' : 'bad') : null, onClick: () => UI.nav.push(ykView) }),
+    row({ icon: 'bolt', tile: '#30B0C7', title: 'Platega', right: INT ? badge(INT.platega && INT.platega.configured) : null, onClick: () => UI.nav.push(plategaView) }),
+    row({ icon: 'wallet', tile: '#AF52DE', title: 'Способы оплаты', detail: [S.settings.pay_yookassa_on && 'ЮKassa', S.settings.pay_platega_on && 'Platega'].filter(Boolean).join(' + ') || 'выключены', onClick: () => UI.nav.push(payMethodsView) }),
+    row({ icon: 'receipt', tile: '#FF9500', title: 'Чеки «Мой налог»', right: INT ? badge(INT.nalog.configured, S.settings.receipts_enabled ? 'warn' : '') : null, onClick: () => UI.nav.push(nalogView) }),
+  ]));
+  return v;
+}
 
-  v.append(group('Пополнение и услуги', [
-    numField('Минимум пополнения', 'min_topup_rub', '₽'),
-    numField('Максимум пополнения', 'max_topup_rub', '₽'),
-    numField('Смена IP для клиента', 'change_ip_price_rub', '₽'),
-    numField('Смена IP без наценки', 'change_ip_cost_rub', '₽'),
-    numField('Возврат при удалении', 'refund_pct', '%'),
-    numField('Порог баланса Astra', 'low_balance_rub', '₽'),
-  ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽ — клиенты без наценки платят «Смену IP без наценки». Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
-
+function cabinetSetupView() {
+  const v = sectionPage('Кабинет клиента');
   v.append(group(null, [
     row({ icon: 'text', tile: '#8E8E93', title: 'Тексты', onClick: () => UI.nav.push(textsView) }),
-    row({ icon: 'gift', tile: '#FF9500', title: 'Оформление кабинета', detail: (FX.EFFECT_NAMES[S.settings.theme_effect] || ''), onClick: () => UI.nav.push(themeView) }),
+    row({ icon: 'gift', tile: '#FF9500', title: 'Оформление', detail: (FX.EFFECT_NAMES[S.settings.theme_effect] || ''), onClick: () => UI.nav.push(themeView) }),
+    row({ icon: 'megaphone', tile: '#34C759', title: 'Подписка на канал', right: h('span', { class: 'badge ' + (S.settings.sub_required ? 'ok' : '') }, S.settings.sub_required ? 'Обязательна' : 'Выключена'), onClick: () => UI.nav.push(subView) }),
   ]));
   return v;
 }
 
 // ───────── тарифы ─────────
 function tariffsView() {
-  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Тарифы'));
+  const v = h('div', {}, UI.nav.backLink('Цены и тарифы'), h('h1', { class: 'large-title' }, 'Тарифы'));
   if (!CAT) { v.append(group(null, [row({ title: 'Каталог Astra недоступен', sub: 'Попробуйте открыть позже.' })])); return v; }
   if (!tariffLoc) tariffLoc = (CAT.locations[0] || {}).code;
   v.append(UI.chips(CAT.locations.map(l => ({ value: l.code, flag: l.flag || UI.flag(l.code), label: l.name })), tariffLoc, c => { tariffLoc = c; UI.nav.refresh(); }));
@@ -407,7 +449,7 @@ function analyticsView() {
 // ───────── тексты ─────────
 function textsView() {
   const ta = (key, label, rows) => { const t = h('textarea', { rows: rows || 3, 'aria-label': label }); t.value = S.settings[key]; t.addEventListener('input', () => setVal(key, t.value)); return h('label', { class: 'field stack' }, h('label', {}, label), t); };
-  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Тексты'),
+  return h('div', {}, UI.nav.backLink('Кабинет клиента'), h('h1', { class: 'large-title' }, 'Тексты'),
     group(null, [ta('welcome_text', 'Приветствие в боте', 4)], 'Показывается над главным меню бота.'),
     group(null, [ta('receipt_name', 'Название услуги в чеке', 2)], 'Так услуга будет названа в чеке «Мой налог».'),
     group(null, [ta('provider_support', 'Поддержка провайдера (username без @)', 1)], 'Сюда кнопка «Передать в Astra» отправляет технические вопросы из обращений.'));
@@ -435,7 +477,7 @@ function subView() {
       showStatus(st, { ok: r.ok, message: r.ok ? `✓ «${r.title}»: бот — администратор, подписку проверить можно.` + (r.note ? ' ' + r.note : '') : r.error });
     } catch (e) { showStatus(st, { ok: false, message: e.message }); }
   });
-  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Подписка на канал'),
+  return h('div', {}, UI.nav.backLink('Кабинет клиента'), h('h1', { class: 'large-title' }, 'Подписка на канал'),
     group(null, [toggleRow('Обязательная подписка', 'sub_required', 'Без подписки бот и кабинет не пускают дальше')],
       'Клиент видит сообщение «Подпишитесь на канал» с кнопками «Подписаться» и «Я подписался». Администраторов это не касается.'),
     group('Канал', [chat.el, link.el], h('span', {}, st)),
@@ -736,7 +778,7 @@ function plategaView() {
   });
   const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить');
   testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/platega/test', 'POST')); if (r) showStatus(status, r); });
-  const out = [UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Platega'),
+  const out = [UI.nav.backLink('Оплата и чеки'), h('h1', { class: 'large-title' }, 'Platega'),
     h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Ключи API'),
       h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'MerchantId'), mid), h('label', { class: 'field' }, h('span', {}, 'Секретный ключ'), sec)),
       h('div', { class: 'group-f' }, 'Личный кабинет Platega → настройки API. После сохранения ключи сразу проверяются.'), status),
@@ -757,7 +799,7 @@ function plategaView() {
 function payMethodsView() {
   const yk = INT && INT.yookassa && INT.yookassa.configured, pg = INT && INT.platega && INT.platega.configured;
   const label = (key, ph) => { const i = h('input', { type: 'text', maxlength: 40, placeholder: ph, style: 'text-align:left', 'aria-label': 'Подпись' }); i.value = S.settings[key] || ''; i.addEventListener('input', () => setVal(key, i.value)); return h('label', { class: 'field stack' }, h('label', {}, 'Как видит клиент'), i); };
-  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Способы оплаты'),
+  return h('div', {}, UI.nav.backLink('Оплата и чеки'), h('h1', { class: 'large-title' }, 'Способы оплаты'),
     group('ЮKassa', [toggleRow('Показывать клиентам', 'pay_yookassa_on', yk ? null : 'Сначала подключите ключи ЮKassa'),
       h('div', { style: 'padding:10px 12px' }, UI.segmented([['sbp', 'Только СБП'], ['bank_card', 'Только карта'], ['all', 'Все способы']].map(([v, l]) => ({ value: v, label: l })), S.settings.yk_method || 'all', v => setVal('yk_method', v))),
       label('pay_yookassa_label', 'Карта или СБП · ЮKassa')],
@@ -782,7 +824,7 @@ function ykView() {
   const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить');
   testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/yookassa/test', 'POST')); if (r) showStatus(status, r); });
   const wh = INT ? INT.webhook_url : '';
-  return h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'ЮKassa'),
+  return h('div', {}, UI.nav.backLink('Оплата и чеки'), h('h1', { class: 'large-title' }, 'ЮKassa'),
     h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Ключи API'),
       h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'shopId'), shop), h('label', { class: 'field' }, h('span', {}, 'Секретный ключ'), sec)),
       h('div', { class: 'group-f' }, 'Кабинет ЮKassa → Интеграция → Ключи API. После сохранения ключи сразу проверяются.'), status),
@@ -805,7 +847,7 @@ function nalogView() {
   });
   const testBtn = h('button', { class: 'btn tinted', type: 'button' }, 'Проверить вход');
   testBtn.onclick = UI.busy(testBtn, async () => { const r = await UI.run(() => api('integrations/nalog/test', 'POST')); if (r) showStatus(status, r); });
-  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Мой налог'),
+  const v = h('div', {}, UI.nav.backLink('Оплата и чеки'), h('h1', { class: 'large-title' }, 'Мой налог'),
     h('section', { class: 'group' }, h('div', { class: 'group-h' }, 'Данные входа'),
       h('div', { class: 'list' }, h('label', { class: 'field' }, h('span', {}, 'ИНН'), inn), h('label', { class: 'field' }, h('span', {}, 'Пароль'), pwd)),
       h('div', { class: 'group-f' }, 'ИНН и пароль от личного кабинета налогоплательщика (lkfl2.nalog.ru). После каждого пополнения бот создаст чек самозанятого и пришлёт его клиенту.'), status),
@@ -1033,7 +1075,7 @@ function moveSheet(c, x, reload) {
 
 // ───────── продление в минус ─────────
 function marginView() {
-  const v = h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Продление в минус'));
+  const v = h('div', {}, UI.nav.backLink('Цены и тарифы'), h('h1', { class: 'large-title' }, 'Продление в минус'));
   const list = h('div', {}, group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   v.append(list);
   api('margin').then(r => {
@@ -1191,7 +1233,7 @@ function themeView() {
     sub: k === 'auto' ? 'Новый год — 15.12–14.01, Хэллоуин — 24.10–01.11, 14 февраля, 8 марта, снег зимой, листопад осенью' : null, cls: 'wrap',
     right: t.theme_effect === k ? icon('check', 'check') : null, chevron: false,
     onClick: () => { setVal('theme_effect', k); previewTheme(); UI.haptic('select'); UI.nav.refresh(); } }));
-  const page = h('div', { class: 'theme-page' }, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, 'Оформление'),
+  const page = h('div', { class: 'theme-page' }, UI.nav.backLink('Кабинет клиента'), h('h1', { class: 'large-title' }, 'Оформление'),
     h('div', { class: 'group-h' }, 'Фон кабинета'), h('div', { class: 'tiles' }, tiles), file,
     t.theme_bg_image ? group(null, [row({ title: 'Заменить картинку', cls: 'accent', onClick: () => file.click() }), row({ title: 'Удалить картинку', cls: 'destructive', onClick: async () => {
       if (await UI.run(() => api('theme/background', 'DELETE'), 'Картинка удалена') === undefined) return;

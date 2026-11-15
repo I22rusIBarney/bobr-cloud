@@ -18,6 +18,8 @@
     tg,
     init() {
       try { tg && tg.ready(); tg && tg.expand(); } catch (e) {}
+      // у Apple и Android флаги-эмодзи свои; Windows и Linux получают шрифт с флагами (ui.css)
+      if (!/Mac|iPhone|iPad|Android/.test(navigator.userAgent)) document.documentElement.classList.add('flag-font');
       // запрет масштабирования щипком и двойным тапом (iOS игнорирует user-scalable=no)
       ['gesturestart', 'gesturechange', 'gestureend'].forEach(t => document.addEventListener(t, e => e.preventDefault(), { passive: false }));
       // щипок гасим только на iOS: Android не масштабирует и так, а «непассивный» touchmove замедляет прокрутку
@@ -100,7 +102,7 @@
         body, footer ? UI.h('div', { class: 'group-f' }, footer) : null);
     },
     /* Приглушённые цвета иконок: старые iOS-цвета → палитра дизайн-системы. */
-    TILE: { '#34C759': '#34D399', '#0A84FF': '#438CFF', '#007AFF': '#438CFF', '#5856D6': '#8B8CFF', '#FF9500': '#FBBF5B', '#FF3B30': '#FF6B6B',
+    TILE: { '#34C759': '#34D399', '#0A84FF': 'var(--accent)', '#007AFF': 'var(--accent)', '#438CFF': 'var(--accent)', '#5856D6': '#8B8CFF', '#FF9500': '#FBBF5B', '#FF3B30': '#FF6B6B',
       '#FF2D55': '#FF7A9A', '#AF52DE': '#C084FC', '#30B0C7': '#4CC9E0', '#34AADC': '#5BB8F0', '#8E8E93': '#A3A8B4' },
 
     // ── строки списков ──
