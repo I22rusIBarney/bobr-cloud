@@ -305,6 +305,10 @@
   .bar.bad i { background: var(--danger); box-shadow: 0 0 12px rgba(255, 107, 107, .75); }
   @keyframes grow { from { transform: scaleX(0); } }
 
+  /* идёт действие: колечко вместо точки */
+  .badge .spin { width: 10px; height: 10px; flex: none; border-radius: 50%; border: 1.5px solid currentColor; border-right-color: transparent; animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
   /* срок на экране сервера */
   .term-big { padding: 18px 16px 18px; }
   .term-big .tb { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
@@ -510,6 +514,43 @@ function root() {
   return profileView();
 }
 
+// ───────── статус сервера ─────────
+// после нажатия кнопки помним действие, пока Astra не покажет результат: «Перезагружается…», «Меняется IP…»
+const PENDING = {}; // id → { a: действие, at: время нажатия, ip }
+const PEND = {
+  start: { t: 'Включается', max: 3, done: (s, L) => L.power_status === 'running' },
+  stop: { t: 'Выключается', max: 3, done: (s, L) => L.power_status === 'stopped' },
+  reboot: { t: 'Перезагружается', max: 3, min: 20, done: (s, L, busy) => L.power_status === 'running' && !busy },
+  'change-ip': { t: 'Меняется IP', max: 10, done: (s, L, busy, p) => !!s.ip && s.ip !== p.ip },
+  password: { t: 'Сбрасывается пароль', max: 15, min: 60, done: (s, L, busy) => L.power_status === 'running' && !busy },
+};
+const BUSY_OPS = ['running', 'pending', 'queued', 'in_progress', 'processing'];
+const opBusy = L => !!L && BUSY_OPS.includes(String(L.operation_status || '').toLowerCase());
+function pendingOf(s) {
+  const p = PENDING[s.id], d = p && PEND[p.a];
+  if (!d) return null;
+  const L = LIVE[s.id], age = (Date.now() - p.at) / 1000;
+  // решаем только по свежим данным — полученным после нажатия и не раньше, чем действие могло завершиться
+  const fresh = L && L.at > p.at + Math.max(2, d.min || 0) * 1000;
+  if (age > d.max * 60 || (fresh && d.done(s, L, opBusy(L), p))) { delete PENDING[s.id]; return null; }
+  return d.t;
+}
+function serverStatus(s) {
+  const L = LIVE[s.id], power = s.status === 'active' && L ? L.power_status : null;
+  if (s.status === 'provisioning') return { t: 'Создаётся', c: 'warn', busy: true };
+  if (s.reinstalling) return { t: 'Переустанавливается', c: 'warn', busy: true };
+  const p = s.status === 'active' ? pendingOf(s) : null;
+  if (p) return { t: p, c: 'warn', busy: true };
+  if (s.status === 'active' && opBusy(L)) return { t: 'Выполняется операция', c: 'warn', busy: true };
+  if (s.status !== 'active') return ST[s.status] || { t: s.status, c: '' };
+  if (power === 'stopped') return { t: 'Выключен', c: '' };
+  if (s.down_since) return { t: 'Не отвечает', c: 'bad' };
+  if (power === 'running') return { t: 'Включён', c: 'ok', live: true };
+  return ST.active;
+}
+const statusBadge = st => h('span', { class: 'badge ' + st.c, role: 'status' },
+  st.busy ? h('i', { class: 'spin', 'aria-hidden': 'true' }) : h('i', { class: 'dot ' + st.c + (st.live ? ' live' : '') }), st.t + (st.busy ? '…' : ''));
+
 // ───────── Серверы ─────────
 function serversView() {
   const act = D.servers.filter(s => s.status === 'active' && s.role !== 'member');
@@ -535,7 +576,7 @@ function serversView() {
   const grid = h('div', { class: 'server-grid' });
   wrap.append(grid);
   bridgeOrder(D.servers).forEach(s => {
-    const st = s.reinstalling ? { t: 'Переустановка', c: 'warn' } : s.down_since && s.status === 'active' ? { t: 'Не отвечает', c: 'bad' } : (ST[s.status] || { t: s.status, c: '' });
+    const st = serverStatus(s);
     // остаток считаем от точной даты окончания: полные дни, а в последние сутки — часы
     const left = s.expires_at ? (new Date(s.expires_at) - Date.now()) / 864e5 : null;
     const days = left == null ? null : Math.max(0, Math.floor(left));
@@ -552,7 +593,7 @@ function serversView() {
           h('div', { class: 'ip' }, ok ? h('i', { class: 'dot ok live' }) : null, s.status === 'provisioning' ? 'Создаётся…' : (s.ip || '—')), bridgeLine(s)),
         // «всё хорошо» видно по зелёной точке у адреса, справа — цена; иначе справа статус
         ok && owner ? h('div', { class: 'price' }, h('b', {}, rub(s.price_rub)), h('span', {}, 'в месяц'))
-          : ok ? null : h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c }), st.t)),
+          : ok ? null : statusBadge(st)),
       h('div', { class: 'spec-line' }, spec),
       showTerm ? h('div', { class: 'term' },
         h('div', { class: 'term-row' }, h('span', { class: 'left ' + bar }, leftText(left)),
@@ -565,6 +606,7 @@ function serversView() {
 }
 
 let curServer = null;
+const POLL = {};
 async function fetchLive(id) {
   try { LIVE[id] = { ...(await api(`/servers/${id}/live`)), at: Date.now() }; } catch (e) { return; }
   if (curServer === id && UI.nav.stack.length) { await load().catch(() => {}); UI.nav.refresh(); }
@@ -576,7 +618,11 @@ function serverView(id) {
   const L = LIVE[id];
   if (s.status === 'active' && (!L || Date.now() - L.at > 15000)) setTimeout(() => fetchLive(id), 0);
   const power = s.status === 'active' && L ? L.power_status : null;
-  const st = s.reinstalling ? { t: 'Переустанавливается', c: 'warn' } : power === 'running' ? { t: 'Включён', c: 'ok' } : power === 'stopped' ? { t: 'Выключен', c: '' } : (ST[s.status] || { t: s.status, c: '' });
+  const st = serverStatus(s);
+  if (st.t === 'Переустанавливается' && s.reinstall_os_label) st.t += ' на ' + s.reinstall_os_label;
+  const pend = !!PENDING[s.id];
+  // идёт действие — опрашиваем Astra каждые 5 секунд, пока статус не сменится
+  if (s.status === 'active' && (pend || opBusy(L)) && !POLL[id]) POLL[id] = setTimeout(() => { delete POLL[id]; if (curServer === id && UI.nav.stack.length) fetchLive(id); }, 5000);
   const live = s.status === 'active' || s.status === 'suspended';
   // пока идёт переустановка — обновляем карточку, чтобы увидеть окончание и новый пароль
   if (s.reinstalling) setTimeout(async () => { if (curServer === id && UI.nav.stack.length) { await load().catch(() => {}); UI.nav.refresh(); } }, 15000);
@@ -585,14 +631,14 @@ function serverView(id) {
     const r = await UI.run(() => api(`/servers/${s.id}/action`, 'POST', { action, os: opts.os }));
     if (r === undefined) return;
     if (r.link) UI.openLink(r.link); else UI.toast(opts.done || 'Готово');
-    if (['start', 'stop', 'reboot'].includes(action)) { setTimeout(() => fetchLive(s.id), 4000); setTimeout(() => fetchLive(s.id), 12000); }
+    if (PEND[action]) PENDING[s.id] = { a: action, at: Date.now(), ip: s.ip };
     await refresh();
   };
   const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
   const v = h('div', { class: 'wide-cols' },
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
-      h('div', {}, h('h1', {}, s.name, s.bridge ? h('span', { class: 'bridge-mark' }, ' ⇄') : null), h('span', { class: 'badge ' + st.c }, h('i', { class: 'dot ' + st.c + (power === 'running' ? ' live' : '') }), st.t))));
+      h('div', {}, h('h1', {}, s.name, s.bridge ? h('span', { class: 'bridge-mark' }, ' ⇄') : null), statusBadge(st))));
   if (s.bridge && BRIDGE_T[s.bridge.role]) v.append(group(null, [row({ icon: 'globe', tile: '#5E5CE6', title: BRIDGE_T[s.bridge.role][1] + (s.bridge.peer ? ': ' + s.bridge.peer : ''), cls: 'wrap',
     sub: s.bridge.role === 'entry' ? 'Отмечен в Bobr Nodes: клиенты подключаются сюда, а в интернет выходят через ноду-выход.' : 'Отмечен в Bobr Nodes: через эту ноду мост выводит трафик в интернет.' })]));
 
@@ -617,9 +663,9 @@ function serverView(id) {
   ].filter(Boolean), s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
 
   v.append(h('div', { class: 'power' },
-    h('button', { type: 'button', disabled: !live || power === 'running', onclick: act('start', { done: 'Сервер включается' }) }, h('span', {}, icon('power')), 'Включить'),
-    h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('reboot', { done: 'Сервер перезагружается', ask: { title: 'Перезагрузить сервер?', message: 'Соединения на несколько секунд прервутся.', buttons: [{ id: 'y', text: 'Перезагрузить' }] } }) }, h('span', {}, icon('restart')), 'Перезагрузить'),
-    h('button', { type: 'button', disabled: !live || power === 'stopped', onclick: act('stop', { done: 'Сервер выключается', ask: { title: 'Выключить сервер?', message: 'Сайты и сервисы на нём станут недоступны, пока вы его не включите.', buttons: [{ id: 'y', text: 'Выключить', type: 'destructive' }] } }) }, h('span', {}, icon('stop')), 'Выключить')));
+    h('button', { type: 'button', disabled: !live || pend || power === 'running', onclick: act('start', { done: 'Сервер включается' }) }, h('span', {}, icon('power')), 'Включить'),
+    h('button', { type: 'button', disabled: !live || pend || power === 'stopped', onclick: act('reboot', { done: 'Сервер перезагружается', ask: { title: 'Перезагрузить сервер?', message: 'Соединения на несколько секунд прервутся.', buttons: [{ id: 'y', text: 'Перезагрузить' }] } }) }, h('span', {}, icon('restart')), 'Перезагрузить'),
+    h('button', { type: 'button', disabled: !live || pend || power === 'stopped', onclick: act('stop', { done: 'Сервер выключается', ask: { title: 'Выключить сервер?', message: 'Сайты и сервисы на нём станут недоступны, пока вы его не включите.', buttons: [{ id: 'y', text: 'Выключить', type: 'destructive' }] } }) }, h('span', {}, icon('stop')), 'Выключить')));
 
   if (s.role === 'member') return memberTail(v, s, live, act);
 
@@ -646,7 +692,8 @@ function serverView(id) {
     row({ icon: 'key', tile: '#FF9500', title: 'Сбросить пароль', onClick: async () => {
       const ok = await UI.ask({ title: 'Сбросить пароль?', message: 'Данные на диске будут стёрты, IP-адрес сохранится.', buttons: [{ id: 'y', text: 'Сбросить и стереть', type: 'destructive' }] });
       if (!ok) return;
-      await withCode(s, 'password', 'сброс пароля', code => api(`/servers/${s.id}/action`, 'POST', { action: 'password', code }), 'Пароль сбрасывается');
+      const r = await withCode(s, 'password', 'сброс пароля', code => api(`/servers/${s.id}/action`, 'POST', { action: 'password', code }), 'Пароль сбрасывается');
+      if (r !== undefined) { PENDING[s.id] = { a: 'password', at: Date.now(), ip: s.ip }; UI.nav.refresh(); }
     } }),
     row({ icon: 'disc', tile: '#8E8E93', title: 'Переустановка', detail: s.os_label || osName(s.os), onClick: () => pickOS(s.os, 'Выберите систему', async os => {
       const ok = await UI.ask({ title: 'Переустановить систему?', message: `Установим ${osName(os)}. Все данные на сервере будут стёрты.`, buttons: [{ id: 'y', text: 'Переустановить', type: 'destructive' }] });
