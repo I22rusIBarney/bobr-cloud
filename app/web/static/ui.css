@@ -479,3 +479,12 @@ html.has-bg body::before { display: none; }
 .btn:not(.tinted, .secondary, .danger, .plain) { box-shadow: 0 12px 30px -14px rgba(240, 162, 59, .75); }
 .btn[disabled] { box-shadow: none; }
 .btn:active { transform: scale(.98); }
+
+/* ── Широкий экран (Telegram Desktop во весь экран, браузер): шире колонка, страницы-списки — в две колонки ── */
+@media (min-width: 900px) {
+  body > #root { max-width: 760px; }
+  body > #root:has(.wide-cols, .server-grid) { max-width: 1160px; }
+  .wide-cols { column-count: 2; column-gap: 8px; }
+  .wide-cols > * { break-inside: avoid; }
+  .wide-cols > :is(.nav, .topbar, .title-row, .large-title, .subtitle, .announce, .down-alert, .hero, .user-card) { column-span: all; }
+}

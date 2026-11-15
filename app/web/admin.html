@@ -110,7 +110,7 @@ function toggleRow(title, key, sub, invert) {
 function rootView() {
   if (!S) return h('div', {}, h('h1', { class: 'large-title' }, 'Управление'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   const st = S.stats, ab = S.astra || {};
-  const v = h('div', {},
+  const v = h('div', { class: 'wide-cols' },
     h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Управление'),
       h('button', { class: 'pill', type: 'button', style: 'margin-bottom:6px', onclick: () => location.href = '/app' }, 'Кабинет')));
 
@@ -177,7 +177,7 @@ function rootView() {
 }
 
 // ───────── настройки: экраны разделов ─────────
-const sectionPage = title => h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, title));
+const sectionPage = title => h('div', { class: 'wide-cols' }, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, title));
 
 function pricesView() {
   const v = sectionPage('Цены и тарифы');

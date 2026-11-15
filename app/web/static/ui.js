@@ -29,9 +29,10 @@
       applyTheme();
       try { tg && tg.onEvent('themeChanged', applyTheme); } catch (e) {}
       try { if (at('7.7')) tg.disableVerticalSwipes(); } catch (e) {}
-      // на телефонах — во весь экран; отступы под кнопки Telegram задают CSS-переменные --tg-*-safe-area-inset-*
+      // во весь экран — на телефонах и в Telegram для компьютера (там иначе маленькое окно); в веб-версии браузер требует нажатия, её не трогаем.
+      // Отступы под кнопки Telegram задают CSS-переменные --tg-*-safe-area-inset-*
       try {
-        if (tg && at('8.0') && ['ios', 'android'].includes(tg.platform) && !tg.isFullscreen) tg.requestFullscreen();
+        if (tg && at('8.0') && ['ios', 'android', 'tdesktop', 'macos'].includes(tg.platform) && !tg.isFullscreen) tg.requestFullscreen();
         if (tg) tg.onEvent('fullscreenChanged', () => document.documentElement.classList.toggle('tg-fullscreen', !!tg.isFullscreen));
         if (tg && tg.isFullscreen) document.documentElement.classList.add('tg-fullscreen');
       } catch (e) {}
