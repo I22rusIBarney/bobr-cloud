@@ -13,8 +13,8 @@ from sqlalchemy import func, select
 
 from .db import Payment, Promo, PromoUse, Server, Tx, User, session, utcnow
 
-SALE = {"purchase", "renew", "change_ip", "upgrade", "upgrade_settle"}
-REFUND = {"refund_renew", "refund_change_ip", "refund_upgrade", "refund_cancel", "refund_failed", "refund_purchase", "refund_create"}
+SALE = {"purchase", "renew", "change_ip", "upgrade", "upgrade_settle", "extra_ip", "ipv6"}
+REFUND = {"refund_renew", "refund_change_ip", "refund_upgrade", "refund_cancel", "refund_failed", "refund_purchase", "refund_create", "refund_extra_ip", "refund_ipv6"}
 LIVE = ("active", "suspended", "expired")
 MONTHS_RU = ["янв", "фев", "мар", "апр", "май", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"]
 

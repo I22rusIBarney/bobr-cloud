@@ -145,6 +145,21 @@ class Astra:
         kw = {"timeout": httpx.Timeout(120.0, connect=10.0)} if slow else {}
         return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True, **kw, **_idem(key))
 
+    # --- дополнительный IPv4 и IPv6 ---
+    async def add_ip(self, sid: int, key: str) -> dict:
+        """Купить дополнительный IPv4 (у Astra 100 ₽ разово). 202 — операция в очереди, итог — в add_ip_status."""
+        return await self._req("POST", f"/servers/{sid}/add-ip", json={}, mutating=True, **_idem(key))
+
+    async def add_ip_status(self, sid: int, op_id: str) -> dict:
+        return await self._req("GET", f"/servers/{sid}/add-ip/status", params={"operation_id": op_id})
+
+    async def ipv6(self, sid: int, op: str, key: str) -> dict:
+        """op: add (10 ₽) | change (10 ₽) | delete (бесплатно). Итог — в ipv6_status."""
+        return await self._req("POST", f"/servers/{sid}/ipv6/{op}", json={}, mutating=True, **_idem(key))
+
+    async def ipv6_status(self, sid: int, op_id: str) -> dict:
+        return await self._req("GET", f"/servers/{sid}/ipv6/status", params={"operation_id": op_id})
+
     # --- уведомления (вебхуки) ---
     async def webhook_get(self) -> dict:
         return await self._req("GET", "/webhook")
