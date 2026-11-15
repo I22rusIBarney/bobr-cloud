@@ -658,6 +658,7 @@ function serverView(id) {
     v.append(group(null, [row({ title: 'Сервер создаётся', sub: 'Обычно это 1–3 минуты. Адрес и пароль появятся здесь и придут в чат.' })]));
     return v;
   }
+  if (s.role !== 'member' && live) v.append(sniBox(s));
   if (s.fup) v.append(h('div', { class: 'down-alert fup', role: 'status' }, h('b', {}, 'Скорость ограничена провайдером'),
     ` до ${UI.date(s.fup.until)}: канал ${s.fup.mbit || '—'} Мбит/с. Средняя загрузка за несколько часов была выше нормы (Fair Use) — ограничение снимется само.`));
   if (s.down_since) v.append(h('div', { class: 'down-alert', role: 'alert' }, h('b', {}, 'Сервер не отвечает'), ` с ${UI.date(s.down_since)}. Попробуйте перезагрузить его — если не поможет, откройте «Как подключиться» или напишите в поддержку.`));
@@ -844,6 +845,49 @@ function howtoRdpView(s) {
       h('li', {}, 'Откройте «Консоль VNC» — там видно, что происходит на экране.'),
       h('li', {}, 'Не помогло — напишите в поддержку и укажите IP.'))),
       row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', onClick: () => UI.nav.push(() => newTicketView(s.role === 'member' ? null : s.id)) })]));
+}
+
+// ограничение провайдера за чужой домен в SNI: что случилось, что делать, кнопки действий
+const SNI = {}; // id сервера → { at, list }: экран сервера перерисовывается часто, провайдера спрашиваем не чаще раза в минуту
+const SNI_TEXT = {
+  request_correction_access: 'VPN на сервере выдавал себя за чужой сайт (подставлял чужой домен в SNI). Получите 24 часа доступа, поменяйте в настройках VPN домен на свой и сообщите об этом здесь.',
+  report_correction: 'Доступ открыт{g}. Поменяйте в настройках VPN чужой домен на свой и укажите его здесь — провайдер проверит.',
+  wait_for_review: 'Провайдер проверяет исправление — обычно это недолго. Сообщение придёт в чат.',
+  contact_support: 'Здесь нужна помощь поддержки — напишите нам, разберёмся вместе с провайдером.',
+};
+function sniBox(s) {
+  const box = h('div');
+  const paint = list => box.replaceChildren(...list.map(x => {
+    const act = x.action_required, g = x.grace_until ? ' до ' + UI.date(x.grace_until) : '';
+    const go = (a, body, done) => async () => {
+      if (await UI.run(() => api(`/servers/${s.id}/sni/${encodeURIComponent(x.incident_id)}/${a}`, 'POST', body || {}), done) === undefined) return;
+      delete SNI[s.id]; UI.nav.refresh();
+    };
+    const btns = [
+      act === 'request_correction_access' ? h('button', { class: 'btn small', type: 'button', onclick: go('unlock', null, 'Запросили 24 часа — доступ откроется в течение нескольких минут') }, 'Получить 24 часа') : null,
+      act === 'report_correction' ? h('button', { class: 'btn small', type: 'button', onclick: () => sniDomainsSheet(go) }, 'Сообщить об исправлении') : null,
+      act === 'contact_support' ? h('button', { class: 'btn small', type: 'button', onclick: () => UI.nav.push(() => newTicketView(s.id)) }, 'Написать в поддержку') : null,
+      act !== 'wait_for_review' ? h('button', { class: 'btn small secondary', type: 'button', onclick: async () => {
+        if (await UI.ask({ title: 'Оспорить ограничение?', message: 'Если домен ваш или ограничение ошибочное — провайдер передаст вопрос в поддержку.', buttons: [{ id: 'y', text: 'Оспорить' }] }) !== 'y') return;
+        go('dispute', null, 'Передали провайдеру — ответ придёт в чат')();
+      } }, 'Оспорить') : null,
+    ].filter(Boolean);
+    return h('div', { class: 'down-alert', role: 'alert' }, h('b', { style: 'display:block;margin-bottom:4px' }, 'Ограничение провайдера'), (SNI_TEXT[act] || 'Провайдер зафиксировал на сервере чужой домен в SNI.').replace('{g}', g),
+      btns.length ? h('div', { style: 'display:flex;flex-wrap:wrap;gap:8px;margin-top:12px' }, btns) : null);
+  }));
+  const c = SNI[s.id];
+  if (c && Date.now() - c.at < 60000) paint(c.list);
+  else api(`/servers/${s.id}/sni`).then(r => { SNI[s.id] = { at: Date.now(), list: r.incidents || [] }; paint(SNI[s.id].list); }).catch(() => {});
+  return box;
+}
+function sniDomainsSheet(go) {
+  UI.sheet('Свои домены', close => {
+    const inp = h('input', { type: 'text', placeholder: 'vpn.example.com', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', 'aria-label': 'Домены' });
+    return h('div', { style: 'padding:0 var(--gutter)' },
+      h('label', { class: 'input' }, inp),
+      h('div', { class: 'group-f' }, 'От 1 до 5 доменов, которыми вы владеете, через запятую — только имена, без https://, путей и паролей.'),
+      h('button', { class: 'btn', type: 'button', style: 'margin-top:16px', onclick: () => { const d = inp.value.split(/[\s,]+/).filter(Boolean); close(); go('correction', { domains: d }, 'Отправили провайдеру на проверку')(); } }, 'Отправить'));
+  });
 }
 
 function ipv6Sheet(s, net) {

@@ -160,6 +160,19 @@ class Astra:
     async def ipv6_status(self, sid: int, op_id: str) -> dict:
         return await self._req("GET", f"/servers/{sid}/ipv6/status", params={"operation_id": op_id})
 
+    # --- ограничения за чужой SNI ---
+    async def sni_incidents(self, service_id: int, status: str = "open") -> list[dict]:
+        r = await self._req("GET", "/sni-incidents", params={"service_id": service_id, "status": status, "limit": 20})
+        return (r or {}).get("incidents") or []
+
+    async def sni_act(self, incident_id: str, act: str, body: dict | None = None) -> dict:
+        """act: unlock (24 часа на исправление) | correction ({"domains": [...]}) | dispute (оспорить)."""
+        return await self._req("POST", f"/sni-incidents/{incident_id}/{act}", json=body or {}, mutating=True)
+
+    async def os_available(self) -> list[str]:
+        """Системы, доступные для заказа прямо сейчас (недоступный Windows Astra не подменяет другим)."""
+        return ((await self._req("GET", "/os")) or {}).get("os") or []
+
     # --- уведомления (вебхуки) ---
     async def webhook_get(self) -> dict:
         return await self._req("GET", "/webhook")
