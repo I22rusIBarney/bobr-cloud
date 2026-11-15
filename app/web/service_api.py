@@ -30,6 +30,7 @@ class SvcBuyIn(BaseModel):
     disk: int | None = None
     period: str = "1m"
     password: str | None = None
+    ref: str | None = None  # ключ покупки: повтор с тем же ref вернёт уже купленный сервер, а не купит второй
 
 
 class SvcChargeIn(BaseModel):
@@ -69,6 +70,11 @@ class SvcTopupIn(BaseModel):
 
 # shortcut: замок внутри процесса — bcloud работает одной копией (SQLite); для нескольких копий нужен уникальный индекс в базе
 _charge_lock = asyncio.Lock()
+# shortcut: замок на каждую покупку с ref живёт до перезапуска (байты на покупку); чистить, если покупок станут миллионы
+_buy_locks: dict[str, asyncio.Lock] = {}
+
+# версия служебного API: 2 — покупка с ключом ref
+API_VERSION = 2
 
 
 def build_service_router(ctx: svc.Ctx) -> APIRouter:
@@ -96,7 +102,7 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
 
     @r.get("/ping")
     async def ping(_: None = Depends(auth)):
-        return {"ok": True}
+        return {"ok": True, "api": API_VERSION}
 
     @r.get("/catalog")
     async def catalog(tg_id: int, _: None = Depends(auth)):
@@ -203,14 +209,26 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
     @r.post("/servers")
     async def buy(p: SvcBuyIn, _: None = Depends(auth)):
         await client(p.tg_id)
+        ref = (p.ref or "").strip()[:64] or None
+        if ref is None:
+            return await _buy(p, None)
+        # повтор по таймауту может прийти, пока первая покупка ещё ждёт провайдера, — ждём её, а не покупаем вторую
+        async with _buy_locks.setdefault(f"{p.tg_id}:{ref}", asyncio.Lock()):
+            async with session() as s:
+                done = (await s.execute(select(Server).where(Server.tg_id == p.tg_id, Server.svc_ref == ref))).scalars().first()
+            if done is not None:
+                return {**_view(done), "repeat": True}
+            return await _buy(p, ref)
+
+    async def _buy(p: SvcBuyIn, ref: str | None) -> dict:
         try:
             if p.idx is None and not (p.cpu and p.ram and p.disk):
                 raise UserError("Не указана конфигурация.")
             spec = None if p.idx is not None else {"cpu": p.cpu, "ram": p.ram, "disk": p.disk}
-            srv = await svc.buy_server(ctx, p.tg_id, p.idx, p.location, p.os, p.password, p.period, spec=spec)
+            srv = await svc.buy_server(ctx, p.tg_id, p.idx, p.location, p.os, p.password, p.period, spec=spec, svc_ref=ref)
         except UserError as ex:
             raise bad(ex)
-        return _view(srv)
+        return {**_view(srv), "repeat": False}
 
     @r.get("/servers")
     async def servers(tg_id: int, _: None = Depends(auth)):
@@ -312,6 +330,7 @@ def build_service_router(ctx: svc.Ctx) -> APIRouter:
 
     @r.post("/servers/{server_id}/rename")
     async def rename(server_id: int, p: SvcRenameIn, _: None = Depends(auth)):
+        await client(p.tg_id)
         try:
             return {"name": await svc.rename_server(ctx, p.tg_id, server_id, p.name)}
         except UserError as ex:
