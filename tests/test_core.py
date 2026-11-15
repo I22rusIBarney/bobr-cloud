@@ -224,3 +224,29 @@ def test_once_more_repeats_uncertain_with_same_call():
         assert asyncio.run(svc.once_more(call)) == {"ok": True} and len(calls) == 2
     finally:
         asyncio.sleep = orig
+
+
+def test_catalog_stale_while_revalidate():
+    import asyncio, time
+    from app import services as svc
+
+    class A:
+        n = 0
+        async def catalog(s):
+            s.n += 1
+            return {"locations": [], "presets": [], "os": [f"v{s.n}"]}
+
+    async def run():
+        a = A()
+        ctx = svc.Ctx(astra=a, yk=None, nalog=None, notify=None, alert_admin=None)
+        first = await ctx.catalog()
+        ok_fresh = (await ctx.catalog())["os"] == first["os"] and a.n == 1          # моложе минуты — из памяти
+        ctx._catalog = (time.time() - 120, ctx._catalog[1])                           # две минуты: отдаём сразу, обновляем в фоне
+        stale = await ctx.catalog()
+        await asyncio.sleep(0)
+        await ctx._catalog_task
+        ok_swr = stale["os"] == ["v1"] and a.n == 2 and (await ctx.catalog())["os"] == ["v2"]
+        ok_buy = (await ctx.catalog(fresh=True))["os"] == ["v3"]                      # покупка — всегда свежий
+        return ok_fresh, ok_swr, ok_buy
+
+    assert asyncio.run(run()) == (True, True, True)
