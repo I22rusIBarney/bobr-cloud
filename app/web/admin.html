@@ -110,7 +110,7 @@ function toggleRow(title, key, sub, invert) {
 function rootView() {
   if (!S) return h('div', {}, h('h1', { class: 'large-title' }, 'Управление'), group(null, [h('div', { class: 'skeleton' }), h('div', { class: 'skeleton' })]));
   const st = S.stats, ab = S.astra || {};
-  const v = h('div', { class: 'wide-cols' },
+  const v = h('div', {},
     h('div', { class: 'title-row' }, h('h1', { class: 'large-title' }, 'Управление'),
       h('button', { class: 'pill', type: 'button', style: 'margin-bottom:6px', onclick: () => location.href = '/app' }, 'Кабинет')));
 
@@ -173,11 +173,11 @@ function rootView() {
     row({ icon: 'chat', tile: '#5856D6', title: 'Уведомления и бэкапы', detail: S.settings.backup_hours ? 'бэкап ' + (BK_LABEL[S.settings.backup_hours] || S.settings.backup_hours + ' ч') : '', onClick: () => UI.nav.push(eventsView) }),
     row({ icon: 'receipt', tile: '#8E8E93', title: 'Журнал действий', sub: 'кто и что менял в админке', onClick: () => UI.nav.push(auditView) }),
     row({ icon: 'sparkle', tile: '#0A84FF', title: 'Версия и обновления', detail: ver.number ? 'v' + ver.number : '', onClick: () => UI.nav.push(updateView) })]));
-  return v;
+  return UI.twoCols(v, UI.byTitle(v, 'Настройки'));
 }
 
 // ───────── настройки: экраны разделов ─────────
-const sectionPage = title => h('div', { class: 'wide-cols' }, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, title));
+const sectionPage = title => h('div', {}, UI.nav.backLink('Управление'), h('h1', { class: 'large-title' }, title));
 
 function pricesView() {
   const v = sectionPage('Цены и тарифы');
@@ -216,7 +216,7 @@ function pricesView() {
     numField('Порог баланса Astra', 'low_balance_rub', '₽'),
   ], 'При балансе Astra ниже порога придёт предупреждение. Смена IP стоит вам 100 ₽ — клиенты без наценки платят «Смену IP без наценки». Возврат клиенту считается от неиспользованных дней, Astra возвращает вам остаток минус 10%.'));
 
-  return v;
+  return UI.twoCols(v, UI.byTitle(v, 'Покупка на срок'));
 }
 
 function featuresView() {
@@ -257,7 +257,7 @@ function bonusView() {
     numField('Срок скидки', 'winback_promo_days', 'дн.'),
   ], 'Серверов больше нет, последний закончился N дней назад (но не больше 90): клиент с согласием на рекламу получает персональную скидку на новый сервер — не чаще раза в 90 дней. Скидка не должна быть больше наценки.'));
 
-  return v;
+  return UI.twoCols(v, UI.byTitle(v, 'Незавершённая оплата'));
 }
 
 function paySetupView() {
