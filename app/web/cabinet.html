@@ -1756,7 +1756,10 @@ function documentsView() {
       const ok = await UI.ask({ title: 'Отозвать согласие?', message: 'Доступ к сервису закроется, автоплатежи выключатся. Мы удалим ваши данные в течение 30 дней, кроме тех, что нужно хранить по закону. Действующие серверы лучше сначала удалить.', buttons: [{ id: 'y', text: 'Отозвать', type: 'destructive' }] });
       if (!ok) return;
       if (await UI.run(() => api('/consent/revoke', 'POST'), 'Согласие отозвано') !== undefined) { await load(); UI.nav.reset(); }
-    } })]));
+    } })]),
+    // атрибуция по лицензии CC-BY 4.0 шрифта с флагами
+    h('p', { class: 'group-f', style: 'margin:0 var(--gutter) 24px' }, 'Флаги стран — Twemoji, © Twitter, Inc. и другие авторы, лицензия ',
+      h('a', { href: 'https://creativecommons.org/licenses/by/4.0/', onclick: e => { e.preventDefault(); UI.openLink(e.currentTarget.href); } }, 'CC-BY 4.0'), '.'));
 }
 
 function historyView() {
