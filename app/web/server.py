@@ -320,6 +320,79 @@ def build_app(ctx: svc.Ctx) -> FastAPI:
             await save_settings(s, {"theme_bg_image": "", **({"theme_bg": "none"} if cfg["theme_bg"] == "image" else {})})
         return {"ok": True}
 
+    # ───── уведомления Astra: смена IP, срока, статуса, Fair Use, ограничения за SNI ─────
+
+    def _astra_hook_url() -> str:
+        return f"{env().public_url.rstrip('/')}/astra/webhook"
+
+    @app.post("/astra/webhook")
+    async def astra_webhook(request: Request):
+        raw = await request.body()
+        async with session() as s:
+            secret = (await get_secrets(s))["astra_wh_secret"]
+        if not secret:
+            raise HTTPException(404)
+        import time as _t
+        if not svc.astra_signature_ok(secret, request.headers.get("X-Astra-Timestamp", ""), raw,
+                                      request.headers.get("X-Astra-Signature", ""), _t.time()):
+            raise HTTPException(401)
+        try:
+            ev = __import__("json").loads(raw)
+        except ValueError:
+            raise HTTPException(400)
+        # Astra ждёт ответ за 10 секунд — обрабатываем в фоне
+        import asyncio as _a
+
+        async def run():
+            try:
+                await svc.astra_event(ctx, ev)
+            except Exception:
+                log.exception("astra webhook %s failed", ev.get("type"))
+        _a.get_running_loop().create_task(run())
+        return {"ok": True}
+
+    async def _astra_hook_state() -> dict:
+        async with session() as s:
+            on = bool((await get_secrets(s))["astra_wh_secret"])
+        out: dict[str, Any] = {"connected": on, "url": _astra_hook_url(), "remote": None, "events": []}
+        try:
+            out["remote"] = await ctx.astra.webhook_get()
+            ev = await ctx.astra.webhook_events()
+            out["events"] = (ev.get("events") if isinstance(ev, dict) else ev or [])[:20]
+        except Exception as ex:
+            out["error"] = str(ex)[:200]
+        return out
+
+    @app.get("/api/admin/astra-webhook")
+    async def astra_hook_get(_: dict = Depends(admin)):
+        return await _astra_hook_state()
+
+    @app.post("/api/admin/astra-webhook")
+    async def astra_hook_on(_: dict = Depends(admin)):
+        url = _astra_hook_url()
+        if not url.startswith("https://"):
+            raise HTTPException(400, "Нужен публичный адрес бота с https (PUBLIC_URL).")
+        try:
+            resp = await ctx.astra.webhook_put(url)
+        except Exception as ex:
+            raise HTTPException(502, f"Astra не приняла адрес: {ex}") from ex
+        secret = svc.find_secret(resp)
+        if not secret:
+            raise HTTPException(502, "Astra не вернула ключ подписи — уведомления не включены.")
+        async with session() as s:
+            await set_secrets(s, {"astra_wh_secret": secret})
+        return await _astra_hook_state()
+
+    @app.delete("/api/admin/astra-webhook")
+    async def astra_hook_off(_: dict = Depends(admin)):
+        try:
+            await ctx.astra.webhook_delete()
+        except Exception as ex:
+            log.warning("astra webhook delete: %s", ex)
+        async with session() as s:
+            await set_secrets(s, {"astra_wh_secret": ""})
+        return await _astra_hook_state()
+
     # ───── интеграции: ЮKassa и «Мой налог» ─────
 
     def _webhook_url() -> str:

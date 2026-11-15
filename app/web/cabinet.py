@@ -47,6 +47,11 @@ def server_dict(srv: Server, refund_pct: float, speed: str = "") -> dict:
         "os": srv.os,
         "os_label": svc.os_label(srv.os),
         "access": svc.access_of(srv.os),
+        # Fair Use: скорость урезана провайдером до fup.mbit до fup.until
+        "fup": {"until": srv.fup_until.astimezone(timezone.utc).isoformat(), "mbit": srv.fup_mbit}
+               if srv.fup_until and srv.fup_until > utcnow() else None,
+        "extra_ips": svc.ip_list(srv.extra_ips or "[]"),
+        "ipv6": srv.ipv6 or "",
         "reinstalling": svc.reinstalling(srv),
         "reinstall_os_label": svc.os_label(srv.reinstall_os) if svc.reinstalling(srv) and srv.reinstall_os else None,
         "flag": svc.flag(srv.location),

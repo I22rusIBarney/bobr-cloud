@@ -223,7 +223,8 @@ def fmt_rub(kop: int) -> str:
 # ───────── секреты интеграций (ЮKassa, Мой налог) ─────────
 # Хранятся в той же таблице под префиксом "secret:", наружу через load_settings не попадают.
 
-SECRET_KEYS = ("yk_shop_id", "yk_secret", "nalog_inn", "nalog_password", "platega_merchant_id", "platega_secret")
+SECRET_KEYS = ("yk_shop_id", "yk_secret", "nalog_inn", "nalog_password", "platega_merchant_id", "platega_secret",
+               "astra_wh_secret")  # ключ подписи уведомлений Astra
 
 
 async def get_secrets(s: AsyncSession) -> dict[str, str]:
