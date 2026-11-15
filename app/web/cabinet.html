@@ -482,7 +482,7 @@ function termBig(s) {
     h('div', { class: 'tb' }, left >= 1
       ? h('span', {}, h('span', { class: 'n' }, String(d)), h('span', { class: 'u' }, UI.plural(d, 'день остался', 'дня осталось', 'дней осталось')))
       : h('span', { class: 'u', style: 'margin:0;font-size:18px;color:var(--danger)' }, leftText(left)),
-      h('span', { class: 'd' }, 'до ' + UI.date(s.expires_at))),
+      h('span', { class: 'd' }, 'до ' + new Date(s.expires_at).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' }))),
     h('div', { class: 'bar ' + tone }, h('i', { style: `width:${Math.max(3, Math.min(100, left / 30 * 100))}%` })));
 }
 // мост из Bobr Nodes: вход (клиенты подключаются к нему) или выход (через него трафик идёт в интернет)
@@ -638,6 +638,11 @@ function serverView(id) {
     await refresh();
   };
   const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
+  // доп. IPv4 и IPv6: подтверждение → запрос → итог придёт сообщением (Astra выполняет в фоне)
+  const net = (what, o) => async () => {
+    if (o.title && await UI.ask({ title: o.title, message: o.message, buttons: [{ id: 'y', text: o.yes, type: o.danger ? 'destructive' : 'default' }] }) !== 'y') return;
+    if (await UI.run(() => api(`/servers/${s.id}/net/${what}`, 'POST'), o.done) !== undefined) await refresh();
+  };
   const acc = s.access || { protocol: 'ssh', port: 22, login: 'root' }, rdp = acc.protocol === 'rdp';
   const v = h('div', {},
     UI.nav.backLink('Серверы'),
@@ -697,6 +702,11 @@ function serverView(id) {
     row({ icon: 'stack', tile: '#34C759', title: 'Мощность', sub: s.speed ? 'Канал до ' + s.speed : null, detail: `${s.cpu} vCPU, ${s.ram} ГБ`, onClick: () => upgradeSheet(s) }),
     row({ icon: 'text', tile: '#8E8E93', title: 'Переименовать', onClick: () => renameSheet(s) }),
     row({ icon: 'terminal', tile: '#5856D6', title: 'Консоль VNC', onClick: act('vnc') }),
+    row({ icon: 'plus', tile: '#34AADC', title: 'Дополнительный IPv4', sub: (s.extra_ips || []).length ? 'Уже есть: ' + s.extra_ips.length : 'Ещё один адрес, разово',
+      detail: rub(D.cfg.extra_ip_price_rub), onClick: net('add-ip', { title: 'Купить дополнительный IPv4?', message: `Сервер получит ещё один IPv4-адрес. Спишем ${rub(D.cfg.extra_ip_price_rub)} разово.`, yes: 'Купить', done: 'Подключаем адрес — пришлём сообщение' }) }),
+    s.ipv6 ? row({ icon: 'globe', tile: '#30B0C7', title: 'IPv6', sub: s.ipv6, cls: 'wrap', onClick: () => ipv6Sheet(s, net) })
+      : row({ icon: 'globe', tile: '#30B0C7', title: 'Подключить IPv6', sub: 'Подсеть /64', detail: rub(D.cfg.ipv6_price_rub),
+        onClick: net('ipv6-add', { title: 'Подключить IPv6?', message: `Сервер получит подсеть IPv6 /64. Спишем ${rub(D.cfg.ipv6_price_rub)}.`, yes: 'Подключить', done: 'Подключаем IPv6 — пришлём сообщение' }) }),
     row({ icon: 'globe', tile: '#34AADC', title: 'Сменить IP', detail: rub(D.cfg.change_ip_price_rub), onClick: act('change-ip', { done: 'IP-адрес меняется', ask: { title: 'Сменить IP?', message: `Сервер получит новый адрес, старый перестанет работать. Спишем ${rub(D.cfg.change_ip_price_rub)}.`, buttons: [{ id: 'y', text: 'Сменить' }] } }) }),
     row({ icon: 'key', tile: '#FF9500', title: 'Сбросить пароль', onClick: async () => {
       const ok = await UI.ask({ title: 'Сбросить пароль?', message: 'Данные на диске будут стёрты, IP-адрес сохранится.', buttons: [{ id: 'y', text: 'Сбросить и стереть', type: 'destructive' }] });
@@ -834,6 +844,14 @@ function howtoRdpView(s) {
       h('li', {}, 'Откройте «Консоль VNC» — там видно, что происходит на экране.'),
       h('li', {}, 'Не помогло — напишите в поддержку и укажите IP.'))),
       row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', onClick: () => UI.nav.push(() => newTicketView(s.role === 'member' ? null : s.id)) })]));
+}
+
+function ipv6Sheet(s, net) {
+  UI.sheet('IPv6', close => group(null, [
+    row({ title: 'Скопировать', sub: s.ipv6, cls: 'wrap', onClick: () => { close(); UI.copy(s.ipv6, 'IPv6'); } }),
+    row({ title: 'Сменить подсеть', detail: rub(D.cfg.ipv6_price_rub), onClick: () => { close(); net('ipv6-change', { title: 'Сменить подсеть IPv6?', message: `Адреса переедут в новую подсеть /64, старые перестанут работать. Спишем ${rub(D.cfg.ipv6_price_rub)}.`, yes: 'Сменить', done: 'Меняем подсеть — пришлём сообщение' })(); } }),
+    row({ title: 'Удалить IPv6', cls: 'destructive', onClick: () => { close(); net('ipv6-delete', { title: 'Удалить IPv6?', message: 'Сервер останется только с IPv4. Деньги за IPv6 не возвращаются.', yes: 'Удалить', danger: true, done: 'Удаляем IPv6' })(); } }),
+  ]));
 }
 
 const LOGS = {};

@@ -1090,6 +1090,108 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
     return resp
 
 
+# ───────────────────────── доп. IPv4 и IPv6 ─────────────────────────
+
+NET_ERRORS = {
+    "unsupported_guest": "Для системы на этом сервере эта услуга недоступна.",
+    "network_reconciliation_required": "У провайдера сейчас сверяется сеть сервера. Попробуйте через полчаса.",
+    "ipv6_already_assigned": "IPv6 у сервера уже есть.",
+    "ipv6_not_assigned": "У сервера нет IPv6.",
+    "ipv6_disabled_in_guest": "IPv6 выключен в системе сервера — включите его в настройках сети и повторите.",
+    "ipv6_unavailable": "В этой локации IPv6 недоступен.",
+    "operation_in_progress": "На сервере ещё идёт предыдущая операция. Подождите пару минут.",
+}
+NET_DONE = ("completed", "done", "succeeded", "success")
+NET_FAILED = ("cancelled", "canceled", "failed", "error", "refunded", "rejected")
+
+
+def net_price_kop(cfg: dict, user: User | None, what: str) -> int:
+    """what: extra_ip | ipv6. Клиентам без наценки — по цене Astra, остальным — из настроек."""
+    key = f"{what}_cost_rub" if user is not None and user.no_markup else f"{what}_price_rub"
+    return int(cfg[key]) * 100
+
+
+def _op_status(r) -> str:
+    r = r if isinstance(r, dict) else {}
+    op = r.get("operation") if isinstance(r.get("operation"), dict) else r
+    return str(op.get("status") or r.get("status") or "").lower()
+
+
+async def net_order(ctx: Ctx, tg_id: int, server_id: int, what: str) -> dict:
+    """what: add-ip | ipv6-add | ipv6-change | ipv6-delete. Платные списываются сразу и возвращаются при отказе Astra.
+    Astra выполняет в фоне — итог ловит watch_net (и уведомление server.extra_ips_changed)."""
+    if what not in ("add-ip", "ipv6-add", "ipv6-change", "ipv6-delete"):
+        raise UserError("Неизвестное действие.")
+    async with session() as s:
+        srv = await get_user_server(s, tg_id, server_id)
+        if srv.status != "active":
+            raise UserError("Сервер сейчас недоступен для этого действия.")
+        cfg = await load_settings(s)
+        user = await s.get(User, tg_id)
+        charge = 0 if what == "ipv6-delete" else net_price_kop(cfg, user, "extra_ip" if what == "add-ip" else "ipv6")
+        kind = {"add-ip": "extra_ip", "ipv6-add": "ipv6", "ipv6-change": "ipv6"}.get(what)
+        if charge and not await change_balance(s, tg_id, -charge, kind, str(srv.astra_id)):
+            raise UserError(f"Нужно {fmt_rub(charge)} на балансе.")
+    key = new_key(what)
+    call = (lambda: ctx.astra.add_ip(srv.astra_id, key)) if what == "add-ip" else (lambda: ctx.astra.ipv6(srv.astra_id, what[5:], key))
+    try:
+        resp = await once_more(call)
+    except AstraError as ex:
+        if charge:
+            await _refund(tg_id, charge, "refund_" + kind, str(srv.astra_id))
+        if ex.status == 402:
+            await ctx.alert_once("astra_balance", "⚠️ Баланс Astra закончился — услуги не проходят.")
+            raise UserError("Сервис временно не может подключить услугу. Деньги возвращены на баланс.") from ex
+        raise UserError(NET_ERRORS.get(ex.code, f"Провайдер отклонил запрос ({ex.code or ex.status}).")
+                        + (" Деньги возвращены на баланс." if charge else "")) from ex
+    except AstraUncertain as ex:
+        await ctx.alert_admin(f"⚠️ {what} #{srv.astra_id}: ответ Astra не получен, у клиента {tg_id} удержано {fmt_rub(charge)}. Проверьте вручную.")
+        raise UserError("Ответ провайдера не получен — проверим и напишем.") from ex
+    from . import serverlog
+    await serverlog.add(server_id, tg_id, what)
+    op_id = str((resp or {}).get("operation_id") or "")
+    if op_id:
+        asyncio.get_running_loop().create_task(watch_net(ctx, server_id, srv.astra_id, what, op_id, charge, tg_id))
+    else:
+        await refresh_server(ctx, srv.astra_id)
+    return {"ok": True, "pending": bool(op_id)}
+
+
+async def watch_net(ctx: Ctx, server_id: int, astra_id: int, what: str, op_id: str, charge: int, tg_id: int,
+                    tries: int = 45, delay: float = 20.0) -> str:
+    """Ждём итог операции Astra (до 15 минут): готово — обновляем сервер и пишем клиенту, отказ — возвращаем деньги."""
+    status_fn = (lambda: ctx.astra.add_ip_status(astra_id, op_id)) if what == "add-ip" else (lambda: ctx.astra.ipv6_status(astra_id, op_id))
+    title = {"add-ip": "Дополнительный IPv4", "ipv6-add": "IPv6", "ipv6-change": "Новая подсеть IPv6", "ipv6-delete": "IPv6 удалён"}[what]
+    for _ in range(tries):
+        await asyncio.sleep(delay)
+        try:
+            r = await status_fn()
+        except Exception:
+            log.warning("%s status #%s failed", what, astra_id, exc_info=True)
+            continue
+        st = _op_status(r)
+        if st in NET_DONE:
+            await refresh_server(ctx, astra_id)
+            async with session() as s:
+                srv = await s.get(Server, server_id)
+            if what == "add-ip":
+                ips = (r.get("new_ip") if isinstance(r, dict) else None) or ", ".join(ip_list(srv.extra_ips or "[]"))
+                await ctx.notify(tg_id, f"✅ <b>{title} подключён</b>\n\n<code>{html.escape(str(ips))}</code>")
+            elif what == "ipv6-delete":
+                await ctx.notify(tg_id, f"✅ <b>{title}</b>\n\nСервер {html.escape(srv.name)} работает только по IPv4.")
+            else:
+                await ctx.notify(tg_id, f"✅ <b>{title} подключён</b>\n\n<code>{html.escape(srv.ipv6 or '—')}</code>")
+            return "done"
+        if st in NET_FAILED:
+            if charge:
+                await _refund(tg_id, charge, "refund_" + ("extra_ip" if what == "add-ip" else "ipv6"), str(astra_id))
+            await ctx.notify(tg_id, f"❌ <b>{title}: не получилось</b>\n\nПровайдер отменил операцию"
+                                    + (f", {fmt_rub(charge)} вернули на баланс." if charge else "."))
+            return "refunded"
+    await ctx.alert_admin(f"⚠️ {what} #{astra_id} (клиент {tg_id}) не завершилась за 15 минут. Списано {fmt_rub(charge)} — проверьте вручную.")
+    return "unknown"
+
+
 async def set_no_markup(tg_id: int, enabled: bool) -> dict:
     """Включает/выключает клиенту цены без наценки (совместимость со старым переключателем)."""
     return await set_markup(tg_id, "none" if enabled else "default")

@@ -21,6 +21,7 @@ LABEL = {
     "reinstall": "Переустановка системы",
     "password": "Сброс пароля",
     "change-ip": "Смена IP",
+    "add-ip": "Дополнительный IPv4", "ipv6-add": "Подключён IPv6", "ipv6-change": "Сменена подсеть IPv6", "ipv6-delete": "Удалён IPv6",
     "renew": "Продление на 30 дней",
     "autorenew": "Автопродление на 30 дней",
     "autorenew_on": "Автопродление включено",
@@ -40,7 +41,7 @@ LABEL = {
     "renew_free": "Продление на 30 дней за счёт сервиса",
     "reprice": "Новая цена продления",
 }
-ICON = {"purchase": "🛒", "start": "▶️", "stop": "⏹", "reboot": "🔄", "vnc": "🖥", "reinstall": "⚙️", "password": "🛡", "change-ip": "🌍",
+ICON = {"purchase": "🛒", "start": "▶️", "stop": "⏹", "reboot": "🔄", "vnc": "🖥", "reinstall": "⚙️", "password": "🛡", "change-ip": "🌍", "add-ip": "🌐", "ipv6-add": "🌐", "ipv6-change": "🌐", "ipv6-delete": "🌐",
         "renew": "💳", "autorenew": "💳", "rename": "✏️", "upgrade": "⚡", "transfer": "🔁", "monitor_down": "🔴", "monitor_up": "🟢", "delete": "❌",
         "autorenew_on": "🔄", "autorenew_off": "🔄", "share_invite": "👥", "share_join": "👥", "share_remove": "🔒", "share_leave": "🚪",
         "monitor_on": "🔔", "monitor_off": "🔕", "renew_free": "🎁", "reprice": "💲"}

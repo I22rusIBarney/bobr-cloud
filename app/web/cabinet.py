@@ -209,6 +209,8 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
                 "min_topup_rub": cfg["min_topup_rub"],
                 "max_topup_rub": cfg["max_topup_rub"],
                 "change_ip_price_rub": svc.change_ip_price_kop(cfg, user) / 100,
+                "extra_ip_price_rub": svc.net_price_kop(cfg, user, "extra_ip") / 100,
+                "ipv6_price_rub": svc.net_price_kop(cfg, user, "ipv6") / 100,
                 "maintenance": cfg["maintenance"],
                 "welcome_text": cfg["welcome_text"],
                 "support": None,  # поддержка — через обращения в кабинете
@@ -504,6 +506,14 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     async def server_monitor(sid: int, p: AutoIn, m: dict = Depends(me_ok)):
         try:
             return {"monitor": await mon.set_monitor(m["id"], sid, p.value)}
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.post("/servers/{sid}/net/{what}")
+    async def net(sid: int, what: str, m: dict = Depends(me_ok)):
+        """Дополнительный IPv4 и IPv6: add-ip | ipv6-add | ipv6-change | ipv6-delete."""
+        try:
+            return await svc.net_order(ctx, m["id"], sid, what)
         except UserError as ex:
             raise wrap(ex)
 

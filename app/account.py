@@ -172,6 +172,7 @@ TX_LABEL = {
     "refund_renew": "Возврат: продление не прошло", "refund_change_ip": "Возврат: смена IP", "refund_upgrade": "Возврат: апгрейд",
     "ref_bonus": "Бонус за друга", "ref_welcome": "Бонус за приглашение",
     "svc_charge": "Оплата услуги",
+    "extra_ip": "Дополнительный IPv4", "ipv6": "IPv6", "refund_extra_ip": "Возврат: доп. IPv4", "refund_ipv6": "Возврат: IPv6",
 }
 
 
