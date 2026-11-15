@@ -28,7 +28,7 @@ class FakeAstra:
         if not s.ready:
             return {"id": sid, "status": "provisioning"}
         return {"id": sid, "status": "active", "ip": s.ip, "root_password": s.pw, "name": "🇳🇱 @provider-label"}
-    async def action(s, sid, a, body=None):
+    async def action(s, sid, a, body=None, **kw):
         s.renamed.append((sid, a, body))
         if a == "change-ip":
             s.ip = "198.51.100.66"

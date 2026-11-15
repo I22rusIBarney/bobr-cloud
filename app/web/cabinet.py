@@ -46,6 +46,7 @@ def server_dict(srv: Server, refund_pct: float, speed: str = "") -> dict:
         "down_since": srv.mon_down_at.isoformat() if srv.mon_down_at else None,
         "os": srv.os,
         "os_label": svc.os_label(srv.os),
+        "access": svc.access_of(srv.os),
         "reinstalling": svc.reinstalling(srv),
         "reinstall_os_label": svc.os_label(srv.reinstall_os) if svc.reinstalling(srv) and srv.reinstall_os else None,
         "flag": svc.flag(srv.location),

@@ -30,7 +30,7 @@ class FakeAstra:
         return {"id": s.n, "spec": {"cpu": p["cpu"], "ram": p["ram"], "disk": p["disk"], "os": kw["os"]}, "charged_rub": 188, "expires_in_days": 30}
     async def servers(s): return []
     async def server(s, sid): return {"id": sid, "status": "active", "renew_month_rub": s.renew_price, **({"ip": s.ips[sid]} if sid in getattr(s, "ips", {}) else {})}
-    async def action(s, sid, a, body=None):
+    async def action(s, sid, a, body=None, **kw):
         s.actions.append((sid, a, body))
         if a == "change-ip":
             s.ips = {**getattr(s, "ips", {}), sid: f"203.0.113.{sid % 250}"}

@@ -635,6 +635,7 @@ function serverView(id) {
     await refresh();
   };
   const pw = s.password ? (revealed.has(s.id) ? s.password : '•'.repeat(12)) : '—';
+  const acc = s.access || { protocol: 'ssh', port: 22, login: 'root' }, rdp = acc.protocol === 'rdp';
   const v = h('div', {},
     UI.nav.backLink('Серверы'),
     h('div', { class: 'hero' }, h('span', { class: 'flag-tile', 'aria-hidden': 'true' }, s.flag),
@@ -652,15 +653,16 @@ function serverView(id) {
   if (s.down_since) v.append(h('div', { class: 'down-alert', role: 'alert' }, h('b', {}, 'Сервер не отвечает'), ` с ${UI.date(s.down_since)}. Попробуйте перезагрузить его — если не поможет, откройте «Как подключиться» или напишите в поддержку.`));
   v.append(group('Подключение', [
     row({ title: 'IP-адрес', detail: h('span', { class: 'mono' }, s.ip || '—'), right: s.ip ? h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать IP', onclick: () => UI.copy(s.ip, 'IP') }, icon('copy')) : null }),
-    row({ title: 'Пользователь', detail: h('span', { class: 'mono' }, 'root') }),
+    row({ title: 'Пользователь', detail: h('span', { class: 'mono' }, acc.login) }),
     row({ title: 'Пароль', detail: h('span', { class: 'mono' }, pw), right: s.password ? h('span', { style: 'display:flex;gap:10px' },
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': revealed.has(s.id) ? 'Скрыть пароль' : 'Показать пароль', onclick: () => { revealed.has(s.id) ? revealed.delete(s.id) : revealed.add(s.id); UI.nav.refresh(); } }, icon(revealed.has(s.id) ? 'eyeOff' : 'eye')),
       h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать пароль', onclick: () => UI.copy(s.password, 'Пароль') }, icon('copy'))) : null }),
-    row({ title: 'Скопировать всё', cls: 'accent', onClick: () => UI.copy((L && L.conn_info) || `IP: ${s.ip || '—'}\nОС: ${s.os_label || s.os}\nЛогин: root\nПароль: ${s.password || '—'}`, 'Доступ') }),
+    row({ title: 'Скопировать всё', cls: 'accent', onClick: () => UI.copy((L && L.conn_info) || `IP: ${s.ip || '—'}\nОС: ${s.os_label || s.os}\n` + (rdp ? `Вход: удалённый рабочий стол (RDP), порт ${acc.port}\n` : '') + `Логин: ${acc.login}\nПароль: ${s.password || '—'}`, 'Доступ') }),
     row({ icon: 'info', tile: '#34AADC', title: 'Как подключиться', sub: 'Windows, Mac, Linux, телефон', onClick: () => UI.nav.push(() => howtoView(s)) }),
     s.astra_id ? row({ title: 'ID у Astra', sub: 'Видите только вы как админ', detail: h('span', { class: 'mono' }, '#' + s.astra_id),
       right: h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Скопировать ID', onclick: () => UI.copy(String(s.astra_id), 'ID') }, icon('copy')) }) : null,
-  ].filter(Boolean), s.ip ? h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, 'ssh root@' + s.ip)) : null));
+  ].filter(Boolean), !s.ip ? null : rdp ? 'Вход через «Подключение к удалённому рабочему столу» (RDP): адрес ' + s.ip + ', пользователь ' + acc.login + '.'
+    : h('span', {}, 'Подключение: ', h('span', { class: 'mono', style: 'font-size:13px' }, `ssh ${acc.login}@` + s.ip))));
 
   v.append(h('div', { class: 'power' },
     h('button', { type: 'button', disabled: !live || pend || power === 'running', onclick: act('start', { done: 'Сервер включается' }) }, h('span', {}, icon('power')), 'Включить'),
@@ -786,6 +788,7 @@ async function withCode(s, action, what, fn, okText) {
 }
 
 function howtoView(s) {
+  if (s.access && s.access.protocol === 'rdp') return howtoRdpView(s);
   const ip = s.ip || 'IP-адрес';
   const cmd = 'ssh root@' + ip;
   const pre = t => h('pre', {}, t);
@@ -802,6 +805,25 @@ function howtoView(s) {
     group('Сервер не отвечает?', [step('Что проверить', h('ol', {},
       h('li', {}, 'Сервер оплачен и включён — статус наверху карточки.'),
       h('li', {}, 'Перезагрузите его кнопкой «Перезагрузить».'),
+      h('li', {}, 'Откройте «Консоль VNC» — там видно, что происходит на экране.'),
+      h('li', {}, 'Не помогло — напишите в поддержку и укажите IP.'))),
+      row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', onClick: () => UI.nav.push(() => newTicketView(s.role === 'member' ? null : s.id)) })]));
+}
+
+// Windows-сервер: вход через удалённый рабочий стол (RDP), а не SSH
+function howtoRdpView(s) {
+  const ip = s.ip || 'IP-адрес', login = s.access.login;
+  const step = (title, ...body) => h('div', { class: 'step' }, h('b', {}, title), ...body);
+  return h('div', { class: 'howto' }, UI.nav.backLink(s.name), h('h1', { class: 'large-title' }, 'Как подключиться'),
+    group('Компьютер', [
+      step('Windows', h('div', {}, `Нажмите Win + R, введите mstsc и Enter. В поле «Компьютер» — ${ip}, пользователь ${login}, пароль из карточки сервера.`)),
+      step('macOS', h('div', {}, `Установите Windows App из App Store → «Добавить ПК» → адрес ${ip}, пользователь ${login}.`)),
+      row({ title: 'Скопировать адрес', cls: 'accent', onClick: () => UI.copy(ip, 'Адрес') }),
+    ]),
+    group('Телефон', [step('Windows App (iOS, Android)', h('div', {}, `«Добавить ПК» → адрес ${ip}, пользователь ${login}, пароль из карточки сервера.`))]),
+    group('Сервер не отвечает?', [step('Что проверить', h('ol', {},
+      h('li', {}, 'Сервер оплачен и включён — статус наверху карточки.'),
+      h('li', {}, 'Windows загружается дольше Linux: после включения подождите 2–3 минуты.'),
       h('li', {}, 'Откройте «Консоль VNC» — там видно, что происходит на экране.'),
       h('li', {}, 'Не помогло — напишите в поддержку и укажите IP.'))),
       row({ icon: 'lifebuoy', tile: '#34C759', title: 'Написать в поддержку', onClick: () => UI.nav.push(() => newTicketView(s.role === 'member' ? null : s.id)) })]));

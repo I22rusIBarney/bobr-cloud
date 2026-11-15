@@ -110,6 +110,29 @@ _OS = {
 }
 
 
+def access_of(os_code: str | None) -> dict:
+    """Как входить на сервер. По документации Astra: Windows — RDP на 3389 под Administrator, Linux — SSH на 22 под root.
+    shortcut: выводим из кода ОС, а не храним поле access из карточки Astra — если порты станут разными, сохранять его в Server."""
+    if "win" in (os_code or "").lower():
+        return {"protocol": "rdp", "port": 3389, "login": "Administrator"}
+    return {"protocol": "ssh", "port": 22, "login": "root"}
+
+
+def new_key(kind: str) -> str:
+    """Ключ идемпотентности одного платного действия: повторы запроса с ним Astra не выполняет второй раз."""
+    return f"bc-{kind}-{secrets.token_hex(12)}"
+
+
+async def once_more(call):
+    """Платный запрос с ключом идемпотентности: при неизвестном итоге (таймаут) повторяем один раз с тем же ключом —
+    Astra вернёт результат первой попытки, а не выполнит действие дважды."""
+    try:
+        return await call()
+    except AstraUncertain:
+        await asyncio.sleep(3)
+        return await call()
+
+
 def os_label(code: str) -> str:
     """ubuntu2404 → Ubuntu 24.04, debian12 → Debian 12; неизвестное — как есть, с заглавной."""
     import re
@@ -415,18 +438,21 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
     name = f"vps-{secrets.token_hex(3)}"  # название для клиента; у провайдера — флаг и кто купил
     label = astra_label(location, user)
 
-    async def create(lbl: str) -> dict:
+    async def create(lbl: str, key: str) -> dict:
         if idx is not None:
-            return await ctx.astra.create(idx=idx, location=location, os=os_, name=lbl, period=period, password=password or None)
+            return await ctx.astra.create(idx=idx, location=location, os=os_, name=lbl, period=period, password=password or None, key=key)
         return await ctx.astra.create(cpu=preset["cpu"], ram=preset["ram"], disk=preset["disk"], location=location, os=os_,
-                                      name=lbl, period=period, password=password or None)
+                                      name=lbl, period=period, password=password or None, key=key)
+    key = new_key("create")
     try:
         try:
-            resp = await create(label)
+            resp = await once_more(lambda: create(label, key))
         except AstraError as ex:
             if ex.status not in (400, 422) or "name" not in str(ex.payload).lower():
                 raise
-            resp = await create(astra_label_plain(location, user))  # флаг в названии не приняли — без него
+            # флаг в названии не приняли — без него; тело другое, поэтому и ключ новый
+            key2 = new_key("create")
+            resp = await once_more(lambda: create(astra_label_plain(location, user), key2))
     except AstraError as ex:
         await _refund(tg_id, charge, "refund_create", name)
         if discount_pct:  # сервер не создан — скидка возвращается клиенту
@@ -502,8 +528,9 @@ async def renew_server(ctx: Ctx, server_id: int, payer: int | None = None, free:
             price = 0
         elif not await change_balance(s, payer, -price, "renew", str(srv.astra_id)):
             raise UserError("Недостаточно средств для продления.")
+    key = new_key("renew")
     try:
-        await ctx.astra.action(srv.astra_id, "renew")
+        await once_more(lambda: ctx.astra.action(srv.astra_id, "renew", key=key))
     except AstraError as ex:
         if price:
             await _refund(payer, price, "refund_renew", str(srv.astra_id))
@@ -883,7 +910,11 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
             srv.reinstalled_at = srv.reinstall_at
             await s.commit()
     try:
-        resp = await ctx.astra.action(srv.astra_id, action, body)
+        if action == "change-ip":  # платное: с ключом, при таймауте — один безопасный повтор
+            key = new_key("ip")
+            resp = await once_more(lambda: ctx.astra.action(srv.astra_id, action, body, key=key))
+        else:
+            resp = await ctx.astra.action(srv.astra_id, action, body)
     except AstraError as ex:
         if charge:
             await _refund(tg_id, charge, "refund_change_ip", str(srv.astra_id))
@@ -1075,7 +1106,8 @@ async def upgrade_server(ctx: Ctx, tg_id: int, server_id: int, cpu: int, ram: in
         if not await change_balance(s, tg_id, -hold, "upgrade", str(srv.astra_id)):
             raise UserError(f"Для апгрейда нужно около {fmt_rub(hold)} на балансе.")
     try:
-        resp = await ctx.astra.action(srv.astra_id, "upgrade", {"cpu": cpu, "ram": ram})
+        key = new_key("upgrade")
+        resp = await once_more(lambda: ctx.astra.action(srv.astra_id, "upgrade", {"cpu": cpu, "ram": ram}, key=key))
     except AstraError as ex:
         await _refund(tg_id, hold, "refund_upgrade", str(srv.astra_id))
         if ex.status == 402:
