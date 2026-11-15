@@ -353,8 +353,9 @@ def apply_discount(price_kop: int, pct: int) -> int:
 
 
 async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: str, password: str | None = None, period: str = "1m",
-                     spec: dict | None = None) -> Server:
-    """Покупка: готовый тариф (idx) или своя конфигурация (idx=None, spec={cpu, ram, disk})."""
+                     spec: dict | None = None, svc_ref: str | None = None) -> Server:
+    """Покупка: готовый тариф (idx) или своя конфигурация (idx=None, spec={cpu, ram, disk}).
+    svc_ref — ключ покупки из служебного API (см. service_api.buy)."""
     if password:
         password = check_password(password)
     async with session() as s:
@@ -464,6 +465,7 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
         status="provisioning",
         expires_at=utcnow() + timedelta(days=int(resp.get("expires_in_days", 30 * months))),
         auto_renew=cfg["auto_renew_default"],
+        svc_ref=svc_ref,
     )
     async with session() as s:
         s.add(srv)

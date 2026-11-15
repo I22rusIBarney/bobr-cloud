@@ -64,7 +64,7 @@ async def main():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="https://bot.test") as c:
         ok((await c.get("/api/svc/ping")).status_code == 401, "без токена — 401")
         ok((await c.get("/api/svc/ping", headers={"Authorization": "Bearer wrong"})).status_code == 401, "чужой токен — 401")
-        ok((await c.get("/api/svc/ping", headers=T)).json() == {"ok": True}, "с токеном — ok")
+        ok((await c.get("/api/svc/ping", headers=T)).json() == {"ok": True, "api": 2}, "с токеном — ok и версия API")
         ok((await c.get("/api/svc/catalog?tg_id=77", headers=T)).status_code == 404, "неизвестный клиент — 404")
 
         ok((await c.get("/api/svc/balance?tg_id=1", headers=T)).status_code == 404, "аккаунта админа ещё нет — понятный 404")

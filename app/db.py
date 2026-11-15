@@ -154,6 +154,8 @@ class Server(Base):
     # сколько месяцев покрывает period_paid_kop (1 — помесячно; 3/6/12 — покупка на срок; дробное после досрочного продления)
     period_months: Mapped[float] = mapped_column(Float, default=1.0)
     deleted_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    # ключ покупки от служебного API: повтор запроса с тем же ключом вернёт этот сервер, а не купит второй
+    svc_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # мониторинг доступности: следить ли, сколько проверок подряд неудачны, с какого момента не отвечает,
     # до какого времени не проверять (после перезагрузки/переустановки)
     monitor: Mapped[bool] = mapped_column(Boolean, default=True)
