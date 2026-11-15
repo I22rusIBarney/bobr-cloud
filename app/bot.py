@@ -707,7 +707,7 @@ def card_text(srv: Server, speed: str = "") -> str:
         f"{srv.cpu} vCPU · {srv.ram} ГБ RAM · {srv.disk} ГБ · {e(svc.os_label(srv.os))}\n"
         + (f"🌐 Канал: до {e(speed)}\n" if speed else "") + "\n"
         f"🛡 <b>Доступ</b>\n"
-        f"IP: <code>{e(srv.ip or '—')}</code>\nЛогин: <code>root</code>\nПароль: <code>{e(srv.root_password or '—')}</code>\n\n"
+        f"IP: <code>{e(srv.ip or '—')}</code>\nЛогин: <code>{svc.access_of(srv.os)['login']}</code>\nПароль: <code>{e(srv.root_password or '—')}</code>\n\n"
         f"💳 <b>Оплата</b>\n"
         f"Оплачен до: {_left(srv)}\n"
         f"Продление: {rub(srv.price_kop)} за 30 дней\n"
@@ -900,6 +900,16 @@ async def transfer_answer(c: CallbackQuery):
 
 def howto_text(srv: Server) -> str:
     ip = e(srv.ip or "IP-адрес")
+    acc = svc.access_of(srv.os)
+    if acc["protocol"] == "rdp":  # Windows — удалённый рабочий стол, не SSH
+        return (f"📖 <b>Как подключиться к {e(srv.name)}</b>\n\n"
+                f"<b>Windows</b> — Win + R → <code>mstsc</code> → компьютер <code>{ip}</code>, пользователь <code>{acc['login']}</code>, пароль из карточки сервера.\n\n"
+                f"<b>macOS и телефон</b> — приложение Windows App → «Добавить ПК» → адрес <code>{ip}</code>, пользователь <code>{acc['login']}</code>.\n\n"
+                "🆘 <b>Сервер не отвечает?</b>\n"
+                "1. Проверьте, что он оплачен и включён — статус в карточке.\n"
+                "2. Windows загружается дольше: после включения подождите 2–3 минуты.\n"
+                "3. Откройте «Консоль VNC» — там видно, что происходит на экране.\n"
+                "4. Не помогло — напишите в поддержку, укажите IP.")
     return (f"📖 <b>Как подключиться к {e(srv.name)}</b>\n\n"
             f"<b>Windows 10/11</b> — откройте «Терминал» (или PowerShell) и введите:\n<code>ssh root@{ip}</code>\n"
             "На вопрос о ключе ответьте <code>yes</code>, затем вставьте пароль — при вводе он не отображается, это нормально.\n\n"

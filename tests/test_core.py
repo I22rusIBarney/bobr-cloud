@@ -195,3 +195,32 @@ def test_human_error_texts():
     assert "Проверка локаций Astra" in t and "Astra" in t and "не у вас" in t and "<html" not in t
     t = human("receipts", ZeroDivisionError("x"))
     assert "разработчику" in t and "🐞" in t
+
+
+def test_access_and_idempotency_key():
+    from app import services as svc
+    assert svc.access_of("windows2022") == {"protocol": "rdp", "port": 3389, "login": "Administrator"}
+    assert svc.access_of("ubuntu2404")["login"] == "root" and svc.access_of(None)["protocol"] == "ssh"
+    k1, k2 = svc.new_key("create"), svc.new_key("create")
+    assert k1 != k2 and k1.startswith("bc-create-") and len(k1) <= 128
+
+
+def test_once_more_repeats_uncertain_with_same_call():
+    import asyncio
+    from app import services as svc
+    from app.astra import AstraUncertain
+    calls = []
+
+    async def call():
+        calls.append(1)
+        if len(calls) == 1:
+            raise AstraUncertain("timeout")
+        return {"ok": True}
+
+    orig = asyncio.sleep
+    async def fast(_): pass
+    asyncio.sleep = fast
+    try:
+        assert asyncio.run(svc.once_more(call)) == {"ok": True} and len(calls) == 2
+    finally:
+        asyncio.sleep = orig

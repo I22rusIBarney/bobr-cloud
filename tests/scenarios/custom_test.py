@@ -47,7 +47,7 @@ class FakeAstra:
         return {"id": s.n, "spec": spec, "charged_rub": charged, "expires_in_days": 30 * months}
     async def servers(s): return []
     async def server(s, sid): return {"id": sid, "status": "active"}
-    async def action(s, sid, a, body=None):
+    async def action(s, sid, a, body=None, **kw):
         if s.action_exc: raise s.action_exc
         return {"ok": True}
     async def change_ip_status(s, sid): return s.ip_status.pop(0) if s.ip_status else {}

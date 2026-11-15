@@ -32,6 +32,11 @@ class AstraError(Exception):
 
 
 TRANSIENT_STATUSES = {429, 500, 502, 503, 504}
+
+
+def _idem(key: str | None) -> dict:
+    """Заголовок Idempotency-Key (1–128 символов): Astra выполняет запрос с одним ключом только один раз."""
+    return {"headers": {"Idempotency-Key": key[:128]}} if key else {}
 _RETRY_DELAYS = (1.0, 3.0)   # повторы только для чтения: GET безопасно переспросить
 
 
@@ -121,8 +126,10 @@ class Astra:
         return await self._req("GET", f"/servers/{sid}/change-ip/status")
 
     async def create(self, *, location: str, os: str, name: str, period: str = "1m", password: str | None = None,
-                     idx: int | None = None, cpu: int | None = None, ram: int | None = None, disk: int | None = None) -> dict:
-        """Готовый тариф (idx) или своя конфигурация (cpu, ram, disk)."""
+                     idx: int | None = None, cpu: int | None = None, ram: int | None = None, disk: int | None = None,
+                     key: str | None = None) -> dict:
+        """Готовый тариф (idx) или своя конфигурация (cpu, ram, disk).
+        key — Idempotency-Key: повтор с тем же ключом не создаёт второй сервер и не списывает деньги ещё раз."""
         body = {"location": location, "os": os, "period": period, "name": name[:60]}
         if idx is not None:
             body["idx"] = idx
@@ -130,13 +137,13 @@ class Astra:
             body.update(cpu=cpu, ram=ram, disk=disk)
         if password:
             body["password"] = password
-        return await self._req("POST", "/servers", json=body, mutating=True)
+        return await self._req("POST", "/servers", json=body, mutating=True, **_idem(key))
 
-    async def action(self, sid: int, action: str, body: dict | None = None) -> dict:
+    async def action(self, sid: int, action: str, body: dict | None = None, key: str | None = None) -> dict:
         # переустановка и сброс пароля у Astra отвечают долго — 30 с бывает мало, ответ теряется, хотя операция идёт
         slow = action in ("reinstall", "password")
         kw = {"timeout": httpx.Timeout(120.0, connect=10.0)} if slow else {}
-        return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True, **kw)
+        return await self._req("POST", f"/servers/{sid}/{action}", json=body or {}, mutating=True, **kw, **_idem(key))
 
     async def delete(self, sid: int) -> dict:
         return await self._req("DELETE", f"/servers/{sid}", mutating=True)

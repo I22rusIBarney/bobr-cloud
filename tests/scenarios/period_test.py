@@ -23,7 +23,7 @@ class FakeAstra:
     async def create(s, **kw): s.n += 1; s.last = kw; return {"id": s.n, "spec": {"cpu": 1, "ram": 1, "disk": 10, "os": kw["os"]}, "charged_rub": 188, "expires_in_days": 30}
     async def servers(s): return []
     async def server(s, sid): return {"id": sid, "status": "active", "price_month_rub": 188}
-    async def action(s, sid, a, body=None): s.last_action = (a, body); return {"ok": True}
+    async def action(s, sid, a, body=None, **kw): s.last_action = (a, body); return {"ok": True}
     async def delete(s, sid): return {"ok": True}
     async def close(s): pass
 class FakeYK:
