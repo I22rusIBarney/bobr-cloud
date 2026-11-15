@@ -413,6 +413,12 @@ async def buy_server(ctx: Ctx, tg_id: int, idx: int | None, location: str, os_: 
             raise UserError("Эта локация сейчас недоступна.")
         if os_ not in cat.get("os", []):
             raise UserError("Эта ОС недоступна.")
+        try:  # каталог кэшируется, а образ может закончиться — сверяемся с Astra до списания
+            avail = await ctx.astra.os_available()
+        except Exception:
+            avail = []  # проверка не ответила — не мешаем покупке, Astra сама откажет и деньги вернутся
+        if avail and os_ not in avail:
+            raise UserError("Эта система сейчас недоступна у провайдера. Выберите другую.")
         if not os_fits(cfg, os_, preset["cpu"], preset["ram"], preset["disk"]):
             raise UserError(os_req_text(os_, os_requirement(cfg, os_)) + " Выберите конфигурацию мощнее или другую систему.")
 
@@ -1088,6 +1094,47 @@ async def server_action(ctx: Ctx, tg_id: int, server_id: int, action: str, body:
     if action in ("reinstall", "password", "change-ip"):
         await refresh_server(ctx, srv.astra_id)
     return resp
+
+
+# ───────────────────────── ограничения за чужой SNI ─────────────────────────
+
+_DOMAIN = re.compile(r"^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+SNI_KEEP = ("incident_id", "state", "is_closed", "action_required", "grace_until", "grace_active", "reason", "updated_at", "binding_current")
+
+
+async def sni_list(ctx: Ctx, tg_id: int, server_id: int) -> list[dict]:
+    """Открытые ограничения провайдера по серверу клиента (только для владельца)."""
+    async with session() as s:
+        srv = await get_user_server(s, tg_id, server_id)
+    try:
+        items = await ctx.astra.sni_incidents(srv.astra_id)
+    except Exception as ex:
+        raise UserError("Не удалось получить данные провайдера. Попробуйте через минуту.") from ex
+    # инцидент по старой привязке (сервер пересоздан, IP сменился) к текущему серверу не относится
+    return [{k: x.get(k) for k in SNI_KEEP} for x in items if x.get("binding_current") is not False and not x.get("is_closed")]
+
+
+async def sni_act(ctx: Ctx, tg_id: int, server_id: int, incident_id: str, act: str, domains: list[str] | None = None) -> dict:
+    if act not in ("unlock", "correction", "dispute"):
+        raise UserError("Неизвестное действие.")
+    open_ids = {x["incident_id"] for x in await sni_list(ctx, tg_id, server_id)}
+    if incident_id not in open_ids:  # чужой или закрытый инцидент — не пропускаем к Astra
+        raise UserError("Ограничение не найдено или уже снято.")
+    body = None
+    if act == "correction":
+        ds = [d.strip().lower().rstrip(".") for d in (domains or []) if d and d.strip()]
+        if not 1 <= len(ds) <= 5 or not all(_DOMAIN.match(d) for d in ds):
+            raise UserError("Укажите от 1 до 5 своих доменов, например vpn.example.com — без https:// и путей.")
+        body = {"domains": ds}
+    try:
+        r = await ctx.astra.sni_act(incident_id, act, body)
+    except AstraError as ex:
+        raise UserError(f"Провайдер не принял запрос ({ex.code or ex.status}).") from ex
+    from . import serverlog
+    await serverlog.add(server_id, tg_id, "sni-" + act, ", ".join(body["domains"]) if body else "")
+    if act == "dispute":
+        await ctx.alert_admin(f"🛡 Клиент {tg_id} оспорил ограничение SNI {html.escape(incident_id)} (сервер #{server_id}).")
+    return {"ok": True, "status": (r or {}).get("status")}
 
 
 # ───────────────────────── доп. IPv4 и IPv6 ─────────────────────────

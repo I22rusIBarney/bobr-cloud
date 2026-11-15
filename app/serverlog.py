@@ -21,6 +21,7 @@ LABEL = {
     "reinstall": "Переустановка системы",
     "password": "Сброс пароля",
     "change-ip": "Смена IP",
+    "sni-unlock": "Запрошено время на исправление SNI", "sni-correction": "Сообщено об исправлении SNI", "sni-dispute": "Ограничение SNI оспорено",
     "add-ip": "Дополнительный IPv4", "ipv6-add": "Подключён IPv6", "ipv6-change": "Сменена подсеть IPv6", "ipv6-delete": "Удалён IPv6",
     "renew": "Продление на 30 дней",
     "autorenew": "Автопродление на 30 дней",

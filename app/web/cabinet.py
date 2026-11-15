@@ -115,6 +115,10 @@ class NewsIn(BaseModel):
     enabled: bool
 
 
+class SniIn(BaseModel):
+    domains: list[str] = []
+
+
 class RenameIn(BaseModel):
     name: str
 
@@ -506,6 +510,20 @@ def build_cabinet(ctx: svc.Ctx) -> APIRouter:
     async def server_monitor(sid: int, p: AutoIn, m: dict = Depends(me_ok)):
         try:
             return {"monitor": await mon.set_monitor(m["id"], sid, p.value)}
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.get("/servers/{sid}/sni")
+    async def sni(sid: int, m: dict = Depends(me_ok)):
+        try:
+            return {"incidents": await svc.sni_list(ctx, m["id"], sid)}
+        except UserError as ex:
+            raise wrap(ex)
+
+    @r.post("/servers/{sid}/sni/{iid}/{act}")
+    async def sni_act(sid: int, iid: str, act: str, p: SniIn, m: dict = Depends(me_ok)):
+        try:
+            return await svc.sni_act(ctx, m["id"], sid, iid, act, p.domains)
         except UserError as ex:
             raise wrap(ex)
 
